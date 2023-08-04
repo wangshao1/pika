@@ -17,7 +17,6 @@
 #include "net/src/holy_thread.h"
 #include "net/src/net_multiplexer.h"
 #include "pstd/include/env.h"
-#include "pstd_hash.h"
 #include "rsync_service.pb.h"
 
 namespace rsync {
@@ -158,7 +157,6 @@ private:
     start_offset_ = 0xFFFFFFFF;
     end_offset_ = 0xFFFFFFFF;
     memset(block_data_, 0, kBlockSize);
-    md5_.reset(new pstd::MD5());
     filepath_ = "";
     close(fd_);
     fd_ = -1;
@@ -175,7 +173,6 @@ private:
 
   int fd_ = -1;
   std::string filepath_;
-  std::unique_ptr<pstd::MD5> md5_;
 };
 
 } //end namespace rsync

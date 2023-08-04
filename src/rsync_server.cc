@@ -8,7 +8,6 @@
 #include <glog/logging.h>
 #include <google/protobuf/map.h>
 
-#include "pstd_hash.h"
 #include "include/pika_server.h"
 #include "include/rsync_server.h"
 #include "pstd/include/pstd_defer.h"

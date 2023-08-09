@@ -156,7 +156,7 @@ Status RsyncClient::CopyRemoteFile(const std::string& filename, int index) {
       }
     };
 
-    while (retries < max_retries_) {
+    while (retries < max_retries_ && state_.load() == RUNNING) {
       size_t copy_file_begin_time = pstd::NowMicros();
       size_t count = throttle_->ThrottledByThroughput(kBytesPerRequest);
       if (count == 0) {
@@ -333,7 +333,7 @@ Status RsyncClient::CopyRemoteMeta(std::string* snapshot_uuid, std::set<std::str
   request.set_type(kRsyncMeta);
   std::string to_send;
   request.SerializeToString(&to_send);
-  while (retries < max_retries_) {
+  while (retries < max_retries_ && state_.load() == RUNNING) {
     WaitObject* wo = wo_mgr_->UpdateWaitObject(0, "", kRsyncMeta, 0xFFFFFFFF);
     s = client_thread_->Write(master_ip_, master_port_, to_send);
     if (!s.ok()) {

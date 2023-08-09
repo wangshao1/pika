@@ -546,6 +546,7 @@ void SyncSlaveSlot::SetReplState(const ReplState& repl_state) {
   if (repl_state == ReplState::kNoConnect) {
     // deactivate
     Deactivate();
+    StopRsync();
     return;
   }
   std::lock_guard l(slot_mu_);
@@ -600,7 +601,7 @@ void SyncSlaveSlot::Deactivate() {
   std::lock_guard l(slot_mu_);
   m_info_ = RmNode();
   repl_state_ = ReplState::kNoConnect;
-  rsync_cli_->Stop();
+  rsync_cli_->SetStopState();
 }
 
 std::string SyncSlaveSlot::ToStringStatus() {
@@ -864,6 +865,13 @@ Status PikaReplicaManager::LostConnection(const std::string& ip, int port) {
     std::shared_ptr<SyncSlaveSlot> slot = iter.second;
     if (slot->MasterIp() == ip && slot->MasterPort() == port) {
       slot->Deactivate();
+    }
+  }
+
+  for (auto& iter : sync_slave_slots_) {
+    std::shared_ptr<SyncSlaveSlot> slot = iter.second;
+    if (slot->MasterIp() == ip && slot->MasterPort() == port) {
+      slot->StopRsync();
     }
   }
   return Status::OK();

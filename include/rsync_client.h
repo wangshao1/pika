@@ -52,6 +52,7 @@ public:
   bool Init();
   Status Start();
   Status Stop();
+  void SetStopState() {state_.store(STOP);}
   bool IsRunning() {
     return state_.load() == RUNNING;
   }
@@ -155,7 +156,7 @@ public:
     pstd::Status s = Status::Timeout("rsync timeout", "timeout");
     {
       std::unique_lock<std::mutex> lock(mu_);
-      auto cv_s = cond_.wait_for(lock, std::chrono::seconds(3), [this] {
+      auto cv_s = cond_.wait_for(lock, std::chrono::seconds(1), [this] {
           return resp_ != nullptr;
       });
       if (!cv_s) {

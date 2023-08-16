@@ -36,7 +36,7 @@ Status RedisStrings::Open(const StorageOptions& storage_options, const std::stri
   ops.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_ops));
 
   const std::string persistent_cache = "";
-  return DBCloud::Open(ops, db_path, persistent_cache, 0, &db_);
+  return rocksdb::DBCloud::Open(ops, db_path, persistent_cache, 0, &db_);
   //return rocksdb::DB::Open(ops, db_path, &db_);
 }
 

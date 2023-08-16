@@ -32,29 +32,27 @@ Status RedisZSets::Open(const StorageOptions& storage_options, const std::string
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
-#ifdef 0
-  rocksdb::Options ops(storage_options.options);
-  Status s = rocksdb::DB::Open(ops, db_path, &db_);
-  if (s.ok()) {
-    rocksdb::ColumnFamilyHandle *dcf = nullptr;
-    rocksdb::ColumnFamilyHandle *scf = nullptr;
-    s = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "data_cf", &dcf);
-    if (!s.ok()) {
-      return s;
-    }
-    rocksdb::ColumnFamilyOptions score_cf_ops;
-    score_cf_ops.comparator = ZSetsScoreKeyComparator();
-    s = db_->CreateColumnFamily(score_cf_ops, "score_cf", &scf);
-    if (!s.ok()) {
-      return s;
-    }
-    delete scf;
-    delete dcf;
-    delete db_;
-  }
-#endif
+//  rocksdb::Options ops(storage_options.options);
+//  Status s = rocksdb::DB::Open(ops, db_path, &db_);
+//  if (s.ok()) {
+//    rocksdb::ColumnFamilyHandle *dcf = nullptr;
+//    rocksdb::ColumnFamilyHandle *scf = nullptr;
+//    s = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), "data_cf", &dcf);
+//    if (!s.ok()) {
+//      return s;
+//    }
+//    rocksdb::ColumnFamilyOptions score_cf_ops;
+//    score_cf_ops.comparator = ZSetsScoreKeyComparator();
+//    s = db_->CreateColumnFamily(score_cf_ops, "score_cf", &scf);
+//    if (!s.ok()) {
+//      return s;
+//    }
+//    delete scf;
+//    delete dcf;
+//    delete db_;
+//  }
 
-  rocksdb::DBOptions db_ops(storage_options.options);
+  rocksdb::Options db_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions data_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions score_cf_ops(storage_options.options);
@@ -83,7 +81,7 @@ Status RedisZSets::Open(const StorageOptions& storage_options, const std::string
   column_families.emplace_back("data_cf", data_cf_ops);
   column_families.emplace_back("score_cf", score_cf_ops);
   const std::string persistent_cache = "";
-  return DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
+  return rocksdb::DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
   //return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 

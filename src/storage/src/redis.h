@@ -11,7 +11,7 @@
 #include <vector>
 
 //#include "rocksdb/db.h"
-#include "rocksdb/cloud/DBCloud.h"
+#include "rocksdb/cloud/db_cloud.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 

@@ -27,26 +27,24 @@ Status RedisLists::Open(const StorageOptions& storage_options, const std::string
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
-#ifdef 0
-  rocksdb::Options ops(storage_options.options);
-  Status s = rocksdb::DB::Open(ops, db_path, &db_);
-  if (s.ok()) {
-    // Create column family
-    rocksdb::ColumnFamilyHandle* cf;
-    rocksdb::ColumnFamilyOptions cfo;
-    cfo.comparator = ListsDataKeyComparator();
-    s = db_->CreateColumnFamily(cfo, "data_cf", &cf);
-    if (!s.ok()) {
-      return s;
-    }
-    // Close DB
-    delete cf;
-    delete db_;
-  }
-#endif
+//  rocksdb::Options ops(storage_options.options);
+//  Status s = rocksdb::DB::Open(ops, db_path, &db_);
+//  if (s.ok()) {
+//    // Create column family
+//    rocksdb::ColumnFamilyHandle* cf;
+//    rocksdb::ColumnFamilyOptions cfo;
+//    cfo.comparator = ListsDataKeyComparator();
+//    s = db_->CreateColumnFamily(cfo, "data_cf", &cf);
+//    if (!s.ok()) {
+//      return s;
+//    }
+//    // Close DB
+//    delete cf;
+//    delete db_;
+//  }
 
   // Open
-  rocksdb::DBOptions db_ops(storage_options.options);
+  rocksdb::Options db_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions data_cf_ops(storage_options.options);
   meta_cf_ops.compaction_filter_factory = std::make_shared<ListsMetaFilterFactory>();
@@ -71,7 +69,7 @@ Status RedisLists::Open(const StorageOptions& storage_options, const std::string
   // Data CF
   column_families.emplace_back("data_cf", data_cf_ops);
   const std::string persistent_cache = "";
-  return DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
+  return rocksdb::DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
   //return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 

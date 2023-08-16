@@ -32,6 +32,7 @@ Status RedisZSets::Open(const StorageOptions& storage_options, const std::string
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
+#ifdef 0
   rocksdb::Options ops(storage_options.options);
   Status s = rocksdb::DB::Open(ops, db_path, &db_);
   if (s.ok()) {
@@ -51,6 +52,7 @@ Status RedisZSets::Open(const StorageOptions& storage_options, const std::string
     delete dcf;
     delete db_;
   }
+#endif
 
   rocksdb::DBOptions db_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions meta_cf_ops(storage_options.options);
@@ -80,7 +82,9 @@ Status RedisZSets::Open(const StorageOptions& storage_options, const std::string
   column_families.emplace_back(rocksdb::kDefaultColumnFamilyName, meta_cf_ops);
   column_families.emplace_back("data_cf", data_cf_ops);
   column_families.emplace_back("score_cf", score_cf_ops);
-  return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
+  const std::string persistent_cache = "";
+  return DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
+  //return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 
 Status RedisZSets::CompactRange(const rocksdb::Slice* begin, const rocksdb::Slice* end, const ColumnFamilyType& type) {
@@ -1782,7 +1786,7 @@ void RedisZSets::ScanDatabase() {
   auto score_iter = db_->NewIterator(iterator_options, handles_[2]);
   for (score_iter->SeekToFirst(); score_iter->Valid(); score_iter->Next()) {
     ParsedZSetsScoreKey parsed_zsets_score_key(score_iter->key());
-    
+
     LOG(INFO) << fmt::format("[key : {:<30}] [score : {:<20}] [member : {:<20}] [version : {}]",
                              parsed_zsets_score_key.key().ToString(), parsed_zsets_score_key.score(),
                               parsed_zsets_score_key.member().ToString(), parsed_zsets_score_key.version());

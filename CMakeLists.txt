@@ -584,6 +584,67 @@ ExternalProject_Add(rocksdb
   zlib
   ${LIBGPERF_NAME}
   ${LIBJEMALLOC_NAME}
+  curl
+  aws-cpp-sdk-core
+  aws-cpp-sdk-transfer
+  aws-cpp-sdk-kinesis
+  aws-cpp-sdk-s3
+  URL
+  https://github.com/rockset/rocksdb-cloud/archive/refs/tags/v6.7.3.tar.gz
+  URL_HASH
+  7b4a375d16bad144ae3d60623e90e2cd
+  DOWNLOAD_NO_PROGRESS
+  1
+  UPDATE_COMMAND
+  ""
+  LOG_CONFIGURE
+  1
+  LOG_BUILD
+  1
+  LOG_INSTALL
+  1
+  BUILD_ALWAYS
+  1
+  CMAKE_ARGS
+  -DCMAKE_INSTALL_PREFIX=${STAGED_INSTALL_PREFIX}
+  -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+  -DCMAKE_BUILD_TYPE=${LIB_BUILD_TYPE}
+  -DUSE_RTTI=1
+  -DWITH_BENCHMARK=OFF
+  -DWITH_BENCHMARK_TOOLS=OFF
+  -DWITH_TOOLS=OFF
+  -DWITH_CORE_TOOLS=OFF
+  -DWITH_TESTS=OFF
+  -DWITH_TRACE_TOOLS=OFF
+  -DWITH_EXAMPLES=OFF
+  -DROCKSDB_BUILD_SHARED=OFF
+  -DWITH_JEMALLOC=${JEMALLOC_ON}
+  -DWITH_LZ4=ON
+  -DWITH_SNAPPY=ON
+  -DWITH_ZLIB=ON
+  -DWITH_ZSTD=ON
+  -DWITH_GFLAGS=ON
+  -DFAIL_ON_WARNINGS=OFF
+  -DWITH_LIBURING=OFF
+  -DPORTABLE=1
+  -DWITH_AWS=1
+  BUILD_COMMAND
+  make -j${CPU_CORE}
+)
+
+
+
+#[[
+ExternalProject_Add(rocksdb
+  DEPENDS
+  gflags
+  gtest
+  snappy
+  zstd
+  lz4
+  zlib
+  ${LIBGPERF_NAME}
+  ${LIBJEMALLOC_NAME}
   URL
   https://github.com/facebook/rocksdb/archive/refs/tags/v8.1.1.tar.gz
   URL_HASH
@@ -625,6 +686,7 @@ ExternalProject_Add(rocksdb
   BUILD_COMMAND
   make -j${CPU_CORE}
 )
+]]
 
 option(USE_PIKA_TOOLS "compile pika-tools" OFF)
 if (USE_PIKA_TOOLS)

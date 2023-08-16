@@ -35,7 +35,9 @@ Status RedisStrings::Open(const StorageOptions& storage_options, const std::stri
   table_ops.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, true));
   ops.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_ops));
 
-  return rocksdb::DB::Open(ops, db_path, &db_);
+  const std::string persistent_cache = "";
+  return DBCloud::Open(ops, db_path, persistent_cache, 0, &db_);
+  //return rocksdb::DB::Open(ops, db_path, &db_);
 }
 
 Status RedisStrings::CompactRange(const rocksdb::Slice* begin, const rocksdb::Slice* end,
@@ -1343,8 +1345,8 @@ void RedisStrings::ScanDatabase() {
       survival_time =
           parsed_strings_value.timestamp() - current_time > 0 ? parsed_strings_value.timestamp() - current_time : -1;
     }
-    LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", iter->key().ToString(), 
-                             parsed_strings_value.value().ToString(), parsed_strings_value.timestamp(), parsed_strings_value.version(),  
+    LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", iter->key().ToString(),
+                             parsed_strings_value.value().ToString(), parsed_strings_value.timestamp(), parsed_strings_value.version(),
                              survival_time);
 
   }

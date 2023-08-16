@@ -23,7 +23,10 @@ Status RedisHashes::Open(const StorageOptions& storage_options, const std::strin
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
+#ifdef 0
   rocksdb::Options ops(storage_options.options);
+  const std::string persistent_cache = "";
+  Status s = DBCloud::Open(ops, db_path, persistent_cache, 0, &db_);
   Status s = rocksdb::DB::Open(ops, db_path, &db_);
   if (s.ok()) {
     // create column family
@@ -36,6 +39,7 @@ Status RedisHashes::Open(const StorageOptions& storage_options, const std::strin
     delete cf;
     delete db_;
   }
+#endif
 
   // Open
   rocksdb::DBOptions db_ops(storage_options.options);
@@ -61,7 +65,9 @@ Status RedisHashes::Open(const StorageOptions& storage_options, const std::strin
   column_families.emplace_back(rocksdb::kDefaultColumnFamilyName, meta_cf_ops);
   // Data CF
   column_families.emplace_back("data_cf", data_cf_ops);
-  return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
+  const std::string persistent_cache = "";
+  return DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
+  //return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 
 Status RedisHashes::CompactRange(const rocksdb::Slice* begin, const rocksdb::Slice* end, const ColumnFamilyType& type) {

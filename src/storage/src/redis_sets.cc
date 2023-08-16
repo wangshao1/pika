@@ -31,6 +31,7 @@ rocksdb::Status RedisSets::Open(const StorageOptions& storage_options, const std
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
+#ifdef 0
   rocksdb::Options ops(storage_options.options);
   rocksdb::Status s = rocksdb::DB::Open(ops, db_path, &db_);
   if (s.ok()) {
@@ -45,6 +46,7 @@ rocksdb::Status RedisSets::Open(const StorageOptions& storage_options, const std
     delete cf;
     delete db_;
   }
+#endif
 
   // Open
   rocksdb::DBOptions db_ops(storage_options.options);
@@ -70,7 +72,9 @@ rocksdb::Status RedisSets::Open(const StorageOptions& storage_options, const std
   column_families.emplace_back(rocksdb::kDefaultColumnFamilyName, meta_cf_ops);
   // Member CF
   column_families.emplace_back("member_cf", member_cf_ops);
-  return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
+  const std::string persistent_cache = "";
+  return DBCloud::Open(db_ops, db_path, column_families, persistent_cache, 0, &handles_, &db_);
+  //return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 
 rocksdb::Status RedisSets::CompactRange(const rocksdb::Slice* begin, const rocksdb::Slice* end, const ColumnFamilyType& type) {
@@ -806,7 +810,7 @@ rocksdb::Status RedisSets::SPop(const Slice& key, std::vector<std::string>* memb
         //parsed_sets_meta_value.ModifyCount(-cnt);
         //batch.Put(handles_[0], key, meta_value);
         batch.Delete(handles_[0], key);
-        delete iter;   
+        delete iter;
 
       } else {
         engine.seed(time(nullptr));
@@ -848,7 +852,7 @@ rocksdb::Status RedisSets::SPop(const Slice& key, std::vector<std::string>* memb
         delete iter;
 
       }
-      
+
     }
   } else {
     return s;

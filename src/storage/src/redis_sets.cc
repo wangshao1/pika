@@ -17,8 +17,10 @@
 #include "src/scope_record_lock.h"
 #include "src/scope_snapshot.h"
 #include "storage/util.h"
+#include "rocksdb/cloud/cloud_file_system.h"
 
 namespace storage {
+using namespace rocksdb;
 
 RedisSets::RedisSets(Storage* const s, const DataType& type) : Redis(s, type) {
   spop_counts_store_ = std::make_unique<LRUCache<std::string, size_t>>();
@@ -31,20 +33,6 @@ rocksdb::Status RedisSets::Open(const StorageOptions& storage_options, const std
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
-//  rocksdb::Options ops(storage_options.options);
-//  rocksdb::Status s = rocksdb::DB::Open(ops, db_path, &db_);
-//  if (s.ok()) {
-//    // create column family
-//    rocksdb::ColumnFamilyHandle* cf;
-//    rocksdb::ColumnFamilyOptions cfo;
-//    s = db_->CreateColumnFamily(cfo, "member_cf", &cf);
-//    if (!s.ok()) {
-//      return s;
-//    }
-//    // close DB
-//    delete cf;
-//    delete db_;
-//  }
 
   // Open
   //rocksdb::DBOptions db_ops(storage_options.options);
@@ -53,6 +41,59 @@ rocksdb::Status RedisSets::Open(const StorageOptions& storage_options, const std
   rocksdb::ColumnFamilyOptions member_cf_ops(storage_options.options);
   meta_cf_ops.compaction_filter_factory = std::make_shared<SetsMetaFilterFactory>();
   member_cf_ops.compaction_filter_factory = std::make_shared<SetsMemberFilterFactory>(&db_, &handles_);
+
+  //rocksdb-cloud staff
+  CloudFileSystemOptions cloud_fs_options;
+  std::shared_ptr<FileSystem> cloud_fs;
+  std::string access_key = "wangshaoyi";
+  std::string secret_key = "wangshaoyi";
+  std::string kRegion = "us-west-2";
+  cloud_fs_options.credentials.InitializeSimple(access_key, secret_key);
+  if (!cloud_fs_options.credentials.HasValid().ok()) {
+    fprintf(
+        stderr,
+        "Please set env variables "
+        "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY with cloud credentials");
+    abort();
+  }
+
+  std::string kBucketSuffix = "cloud.durable.example.set";
+  const std::string bucketPrefix = "pika.";
+  cloud_fs_options.src_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
+  cloud_fs_options.dest_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
+
+  CloudFileSystem* cfs;
+  Status s = CloudFileSystem::NewAwsFileSystem(
+      FileSystem::Default(), kBucketSuffix, db_path, kRegion, kBucketSuffix,
+      db_path, kRegion, cloud_fs_options, nullptr, &cfs);
+  if (!s.ok()) {
+    fprintf(stderr, "Unable to create cloud env in bucket \n");
+    abort();
+  }
+  cloud_fs.reset(cfs);
+
+  // Create options and use the AWS file system that we created earlier
+  env_ = std::move(NewCompositeEnv(cloud_fs));
+  db_ops.env = env_.get();
+
+  {
+     rocksdb::Options ops(storage_options.options);
+     ops.env = env_.get();
+     const std::string persistent_cache = "";
+     rocksdb::Status s = rocksdb::DBCloud::Open(ops, db_path, persistent_cache, 0, &db_);
+     if (s.ok()) {
+       // create column family
+       rocksdb::ColumnFamilyHandle* cf;
+       rocksdb::ColumnFamilyOptions cfo;
+       s = db_->CreateColumnFamily(cfo, "member_cf", &cf);
+       if (!s.ok()) {
+         return s;
+       }
+       // close DB
+       delete cf;
+       delete db_;
+     }
+  }
 
   // use the bloom filter policy to reduce disk reads
   rocksdb::BlockBasedTableOptions table_ops(storage_options.table_options);

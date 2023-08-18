@@ -56,7 +56,7 @@ elseif(${BUILD_TYPE} STREQUAL RELWITHDEBINFO)
   set(LIB_BUILD_TYPE RELWITHDEBINFO)
 else()
   set(LIB_BUILD_TYPE RELEASE)
-  set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELEASE "-g -DNDEBUG")
 endif()
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -590,9 +590,9 @@ ExternalProject_Add(rocksdb
   ${LIBGPERF_NAME}
   ${LIBJEMALLOC_NAME}
   URL
-  https://ghproxy.com/https://github.com/rockset/rocksdb-cloud/archive/refs/heads/master.zip
+  https://github.com/wangshao1/rocksdb-cloud/archive/refs/heads/pika.zip
   URL_HASH
-  MD5=a8fdd34143301be506319ccb125d40ce
+  MD5=81aace4a7b75c258b758313447bf7990
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND
@@ -627,7 +627,7 @@ ExternalProject_Add(rocksdb
   -DFAIL_ON_WARNINGS=OFF
   -DWITH_LIBURING=OFF
   -DPORTABLE=1
-  -DWITH_AWS=1
+  -DWITH_AWS=ON
   BUILD_COMMAND
   make -j${CPU_CORE}
 )

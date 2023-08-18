@@ -18,14 +18,49 @@
 #include "src/scope_snapshot.h"
 #include "src/strings_filter.h"
 #include "storage/util.h"
+#include "rocksdb/cloud/cloud_file_system.h"
 
 namespace storage {
+using namespace rocksdb;
 
 RedisStrings::RedisStrings(Storage* const s, const DataType& type) : Redis(s, type) {}
 
 Status RedisStrings::Open(const StorageOptions& storage_options, const std::string& db_path) {
   rocksdb::Options ops(storage_options.options);
   ops.compaction_filter_factory = std::make_shared<StringsFilterFactory>();
+
+  CloudFileSystemOptions cloud_fs_options;
+  std::shared_ptr<FileSystem> cloud_fs;
+  std::string access_key = "wangshaoyi";
+  std::string secret_key = "wangshaoyi";
+  std::string kRegion = "us-west-2";
+  cloud_fs_options.credentials.InitializeSimple(access_key, secret_key);
+  if (!cloud_fs_options.credentials.HasValid().ok()) {
+    fprintf(
+        stderr,
+        "Please set env variables "
+        "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY with cloud credentials");
+    abort();
+  }
+
+  std::string kBucketSuffix = "cloud.durable.example.strings";
+  const std::string bucketPrefix = "pika.";
+  cloud_fs_options.src_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
+  cloud_fs_options.dest_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
+
+  CloudFileSystem* cfs;
+  Status s = CloudFileSystem::NewAwsFileSystem(
+      FileSystem::Default(), kBucketSuffix, db_path, kRegion, kBucketSuffix,
+      db_path, kRegion, cloud_fs_options, nullptr, &cfs);
+  if (!s.ok()) {
+    fprintf(stderr, "Unable to create cloud env in bucket \n");
+    abort();
+  }
+  cloud_fs.reset(cfs);
+
+  // Create options and use the AWS file system that we created earlier
+  env_ = std::move(NewCompositeEnv(cloud_fs));
+  ops.env = env_.get();
 
   // use the bloom filter policy to reduce disk reads
   rocksdb::BlockBasedTableOptions table_ops(storage_options.table_options);

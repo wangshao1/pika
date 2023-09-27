@@ -40,6 +40,31 @@ inline const std::string LISTS_DB = "lists";
 inline const std::string ZSETS_DB = "zsets";
 inline const std::string SETS_DB = "sets";
 
+enum DataType { kAll, kStrings, kHashes, kLists, kZSets, kSets };
+static const std::map<std::string, DataType> mapCommand = {
+    {"HGETALL", DataType::kHashes},
+    {"ZREVRANGEBYSCORE", DataType::kZSets},
+    {"ZREVRANGEBYSCORE", DataType::kZSets},
+    {"ZREVRANGE", DataType::kZSets},
+    {"ZINCRBY", DataType::kZSets},
+    {"ZREM", DataType::kZSets},
+    {"ZREMRANGEBYRANK", DataType::kZSets},
+    {"ZADD", DataType::kZSets},
+    {"LPUSH", DataType::kLists},
+    {"RPUSH", DataType::kLists},
+    {"LRANGE", DataType::kLists},
+    {"LTRIM", DataType::kLists},
+    {"HMGET", DataType::kHashes},
+    {"HMSET", DataType::kHashes},
+    {"HGET", DataType::kHashes},
+    {"HSET", DataType::kHashes},
+    {"HDEL", DataType::kHashes},
+    {"HINCRBY", DataType::kHashes},
+    {"SMEMBERS", DataType::kSets},
+    {"SADD", DataType::kSets}
+};
+
+
 inline constexpr size_t BATCH_DELETE_LIMIT = 100;
 inline constexpr size_t COMPACT_THRESHOLD_COUNT = 2000;
 
@@ -109,8 +134,6 @@ struct ScoreMember {
 
 enum BeforeOrAfter { Before, After };
 
-enum DataType { kAll, kStrings, kHashes, kLists, kZSets, kSets };
-
 const char DataTypeTag[] = {'a', 'k', 'h', 'l', 'z', 's'};
 
 enum class OptionType {
@@ -141,6 +164,8 @@ class Storage {
   ~Storage();
 
   Status Open(const StorageOptions& storage_options, const std::string& db_path);
+
+  void DealSlowKey(const std::vector<std::string>& argv);
 
   Status GetStartKey(const DataType& dtype, int64_t cursor, std::string* start_key);
 

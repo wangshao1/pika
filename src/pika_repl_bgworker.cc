@@ -50,7 +50,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
   PikaReplBgWorker* worker = task_arg->worker;
   worker->ip_port_ = conn->ip_port();
 
-  DEFER { 
+  DEFER {
     delete index;
     delete task_arg;
   };
@@ -273,6 +273,9 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
       g_pika_server->SlowlogPushEntry(argv, start_time, duration);
       if (g_pika_conf->slowlog_write_errorlog()) {
         LOG(ERROR) << "command: " << argv[0] << ", start_time(s): " << start_time << ", duration(us): " << duration;
+      }
+      if (argv.size() > 1 && argv.size() < 10) {
+        g_pika_server->GetSlotByDBName(db_name)->db()->DealSlowKey(argv);
       }
     }
   }

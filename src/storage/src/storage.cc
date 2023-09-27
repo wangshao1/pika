@@ -121,6 +121,20 @@ Status Storage::Open(const StorageOptions& storage_options, const std::string& d
   return Status::OK();
 }
 
+void Storage::DealSlowKey(const std::vector<std::string>& argv) {
+  if (bg_tasks_queue_.size() > 0) {
+        return;
+  }
+  std::map<std::string, DataType>::const_iterator iter;
+  std::string cmd = argv[0];
+  std::transform(cmd.begin(), cmd.end(),cmd.begin(), ::toupper);
+  iter = mapCommand.find(cmd);
+  if(iter != mapCommand.end()){
+    LOG(WARNING) << "begin to deal slowlog : " << argv[0] << " " << argv[1];
+    AddBGTask({iter->second,Operation::kCompactKey,argv[1]});
+  }
+}
+
 Status Storage::GetStartKey(const DataType& dtype, int64_t cursor, std::string* start_key) {
   std::string index_key = DataTypeTag[dtype] + std::to_string(cursor);
   return cursors_store_->Lookup(index_key, start_key);

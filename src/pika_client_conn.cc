@@ -141,6 +141,9 @@ void PikaClientConn::ProcessSlowlog(const PikaCmdArgsType& argv, uint64_t do_dur
                  << ", process_time(ms): " << time_stat_->process_time() / 1000
                  << ", cmd_time(ms): " << do_duration / 1000;
     }
+    if (argv.size() > 1 && argv.size() < 10) {
+      g_pika_server->GetSlotByDBName(current_db_)->db()->DealSlowKey(argv);
+    }
   }
 }
 

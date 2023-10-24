@@ -52,7 +52,6 @@ elseif(${BUILD_TYPE} STREQUAL RELWITHDEBINFO)
 else()
   set(LIB_BUILD_TYPE RELEASE)
   set(CMAKE_CXX_FLAGS_RELEASE "-O2 -g -DNDEBUG")
-
 endif()
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -732,7 +731,7 @@ add_subdirectory(src/net)
 add_subdirectory(src/storage)
 add_subdirectory(src/cache)
 if (USE_PIKA_TOOLS)
-  add_subdirectory(tools)
+  #add_subdirectory(tools)
 endif()
 aux_source_directory(src DIR_SRCS)
 

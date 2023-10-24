@@ -9,10 +9,22 @@
 #include "pstd/include/pstd_coding.h"
 
 namespace storage {
+/*
+* used for Hash/Set/Zset data key. format:
+* | reserve1 | db_id | slot_id | key_size | key | version | data | reserve2 |
+* |    8B    |   2B  |    2B   |    4B    |     |    8B   |      |   16B    |
+*/
 class BaseDataKey {
  public:
-  BaseDataKey(const Slice& key, int32_t version, const Slice& data)
-      :  key_(key), version_(version), data_(data) {}
+  BaseDataKey(uint16_t db_id, uint16_t slot_id, const Slice& key,
+             uint64_t version, const Slice& data)
+      : key_(key), version_(version), slot_id_(slot_id),
+        db_id_(db_id), data_(data) {}
+  // for test
+  BaseDataKey(const Slice& key,
+             int32_t version, const Slice& data)
+      : key_(key), version_(version), slot_id_(0),
+        db_id_(0), data_(data) {}
 
   ~BaseDataKey() {
     if (start_ != space_) {
@@ -21,8 +33,9 @@ class BaseDataKey {
   }
 
   Slice Encode() {
-    size_t usize = key_.size() + data_.size();
-    size_t needed = usize + sizeof(int32_t) * 2;
+    size_t meta_size = 8 + 2 * sizeof(uint16_t) + sizeof(uint64_t) + 16;
+    size_t usize = key_.size() + data_.size() + sizeof(int32_t);
+    size_t needed = meta_size + usize;
     char* dst;
     if (needed <= sizeof(space_)) {
       dst = space_;
@@ -36,59 +49,103 @@ class BaseDataKey {
     }
 
     start_ = dst;
+    // reserve1: 8 byte
+    memcpy(dst, reserve1_, 8);
+    dst += 8;
+    // db_id: 2 byte
+    pstd::EncodeFixed16(dst, db_id_);
+    dst += sizeof(int16_t);
+    // slot_id: 2 byte
+    pstd::EncodeFixed16(dst, slot_id_);
+    dst += sizeof(int16_t);
+    // key_size: 4 byte
     pstd::EncodeFixed32(dst, key_.size());
     dst += sizeof(int32_t);
+    // key
     memcpy(dst, key_.data(), key_.size());
     dst += key_.size();
-    pstd::EncodeFixed32(dst, version_);
-    dst += sizeof(int32_t);
+    // version 8 byte
+    pstd::EncodeFixed64(dst, version_);
+    dst += sizeof(uint64_t);
+    // data
     memcpy(dst, data_.data(), data_.size());
+    dst += data_.size();
+    // TODO(wangshaoyi): too much for reserve
+    // reserve2: 16 byte
+    memcpy(dst, reserve2_, 16);
     return Slice(start_, needed);
   }
 
  private:
-  char space_[200];
   char* start_ = nullptr;
+  char space_[256];
+  char reserve1_[8];
+  uint16_t db_id_;
+  uint16_t slot_id_;
   Slice key_;
-  int32_t version_ = -1;
+  uint64_t version_ = 0;
   Slice data_;
+  char reserve2_[16];
 };
 
 class ParsedBaseDataKey {
  public:
   explicit ParsedBaseDataKey(const std::string* key) {
     const char* ptr = key->data();
-    int32_t key_len = pstd::DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
-    key_ = Slice(ptr, key_len);
-    ptr += key_len;
-    version_ = pstd::DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
-    data_ = Slice(ptr, key->size() - key_len - sizeof(int32_t) * 2);
+    const char* end_ptr = key->data() + key->size();
+    decode(ptr, end_ptr);
   }
 
   explicit ParsedBaseDataKey(const Slice& key) {
     const char* ptr = key.data();
+    const char* end_ptr = key.data() + key.size();
+    decode(ptr, end_ptr);
+  }
+
+  std::string EncodedMetaKey() {
+    return meta_key_prefix_.ToString();
+  }
+
+  void decode(const char* ptr, const char* end_ptr) {
+    const char* start = ptr;
+    // skip reserve1_
+    ptr += 8;
+
+    uint16_t db_id = pstd::DecodeFixed16(ptr);
+    ptr += sizeof(uint16_t);
+    uint16_t slot_id = pstd::DecodeFixed16(ptr);
+    ptr += sizeof(uint16_t);
     int32_t key_len = pstd::DecodeFixed32(ptr);
     ptr += sizeof(int32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
-    version_ = pstd::DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
-    data_ = Slice(ptr, key.size() - key_len - sizeof(int32_t) * 2);
+    meta_key_prefix_ = Slice(start, std::distance(start, ptr));
+
+    version_ = pstd::DecodeFixed64(ptr);
+    ptr += sizeof(int64_t);
+    // reserve2_
+    end_ptr -= 16;
+    data_ = Slice(ptr, std::distance(ptr, end_ptr));
   }
 
   virtual ~ParsedBaseDataKey() = default;
 
   Slice key() { return key_; }
 
-  int32_t version() { return version_; }
+  uint64_t version() { return version_; }
+
+  uint16_t slot_id() { return slot_id_; }
+
+  uint16_t db_id() { return db_id_; }
 
   Slice data() { return data_; }
 
  protected:
   Slice key_;
-  int32_t version_ = -1;
+  Slice meta_key_prefix_;
+  uint64_t version_ = -1;
+  uint16_t slot_id_ = -1;
+  uint16_t db_id_ = -1;
   Slice data_;
 };
 

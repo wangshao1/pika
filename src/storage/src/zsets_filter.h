@@ -27,12 +27,12 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
               bool* value_changed) const override {
     ParsedZSetsScoreKey parsed_zsets_score_key(key);
     TRACE("==========================START==========================");
-    TRACE("[ScoreFilter], key: %s, score = %lf, member = %s, version = %d",
+    TRACE("[ScoreFilter], key: %s, score = %lf, member = %s, version = %ld",
           parsed_zsets_score_key.key().ToString().c_str(), parsed_zsets_score_key.score(),
           parsed_zsets_score_key.member().ToString().c_str(), parsed_zsets_score_key.version());
 
-    if (parsed_zsets_score_key.key().ToString() != cur_key_) {
-      cur_key_ = parsed_zsets_score_key.key().ToString();
+    if (parsed_zsets_score_key.EncodedMetaKey() != cur_key_) {
+      cur_key_ = parsed_zsets_score_key.EncodedMetaKey();
       std::string meta_value;
       // destroyed when close the database, Reserve Current key value
       if (cf_handles_ptr_->empty()) {
@@ -43,7 +43,7 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
         meta_not_found_ = false;
         ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
         cur_meta_version_ = parsed_zsets_meta_value.version();
-        cur_meta_timestamp_ = parsed_zsets_meta_value.timestamp();
+        cur_meta_etime_ = parsed_zsets_meta_value.etime();
       } else if (s.IsNotFound()) {
         meta_not_found_ = true;
       } else {
@@ -60,7 +60,7 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
 
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    if (cur_meta_timestamp_ != 0 && cur_meta_timestamp_ < static_cast<int32_t>(unix_time)) {
+    if (cur_meta_etime_ != 0 && cur_meta_etime_ < static_cast<uint64_t>(unix_time)) {
       TRACE("Drop[Timeout]");
       return true;
     }
@@ -81,8 +81,8 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
   rocksdb::ReadOptions default_read_options_;
   mutable std::string cur_key_;
   mutable bool meta_not_found_ = false;
-  mutable int32_t cur_meta_version_ = 0;
-  mutable int32_t cur_meta_timestamp_ = 0;
+  mutable uint64_t cur_meta_version_ = 0;
+  mutable uint64_t cur_meta_etime_ = 0;
 };
 
 class ZSetsScoreFilterFactory : public rocksdb::CompactionFilterFactory {

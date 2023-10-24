@@ -31,7 +31,7 @@ class BaseMetaFilter : public rocksdb::CompactionFilter {
           parsed_base_meta_value.count(), parsed_base_meta_value.timestamp(), cur_time,
           parsed_base_meta_value.version());
 
-    if (parsed_base_meta_value.timestamp() != 0 && parsed_base_meta_value.timestamp() < cur_time &&
+    if (parsed_base_meta_value.etime() != 0 && parsed_base_meta_value.etime() < cur_time &&
         parsed_base_meta_value.version() < cur_time) {
       TRACE("Drop[Stale & version < cur_time]");
       return true;
@@ -71,8 +71,8 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
     TRACE("[DataFilter], key: %s, data = %s, version = %d", parsed_base_data_key.key().ToString().c_str(),
           parsed_base_data_key.data().ToString().c_str(), parsed_base_data_key.version());
 
-    if (parsed_base_data_key.key().ToString() != cur_key_) {
-      cur_key_ = parsed_base_data_key.key().ToString();
+    if (parsed_base_data_key.EncodedMetaKey() != cur_key_) {
+      cur_key_ = parsed_base_data_key.EncodedMetaKey();
       std::string meta_value;
       // destroyed when close the database, Reserve Current key value
       if (cf_handles_ptr_->empty()) {
@@ -83,7 +83,7 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
         meta_not_found_ = false;
         ParsedBaseMetaValue parsed_base_meta_value(&meta_value);
         cur_meta_version_ = parsed_base_meta_value.version();
-        cur_meta_timestamp_ = parsed_base_meta_value.timestamp();
+        cur_meta_etime_ = parsed_base_meta_value.etime();
       } else if (s.IsNotFound()) {
         meta_not_found_ = true;
       } else {
@@ -100,7 +100,7 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
 
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    if (cur_meta_timestamp_ != 0 && cur_meta_timestamp_ < static_cast<int32_t>(unix_time)) {
+    if (cur_meta_etime_ != 0 && cur_meta_etime_ < static_cast<int32_t>(unix_time)) {
       TRACE("Drop[Timeout]");
       return true;
     }
@@ -122,8 +122,8 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
   rocksdb::ReadOptions default_read_options_;
   mutable std::string cur_key_;
   mutable bool meta_not_found_ = false;
-  mutable int32_t cur_meta_version_ = 0;
-  mutable int32_t cur_meta_timestamp_ = 0;
+  mutable uint64_t cur_meta_version_ = 0;
+  mutable uint64_t cur_meta_etime_ = 0;
 };
 
 class BaseDataFilterFactory : public rocksdb::CompactionFilterFactory {

@@ -71,6 +71,9 @@ class PikaConf : public pstd::BaseConf {
     std::shared_lock l(rwlock_);
     return db_path_;
   }
+  int db_instance_num() {
+    return db_instance_num_;
+  }
   std::string db_sync_path() {
     std::shared_lock l(rwlock_);
     return db_sync_path_;
@@ -610,6 +613,7 @@ class PikaConf : public pstd::BaseConf {
   std::string log_path_;
   std::string log_level_;
   std::string db_path_;
+  int db_instance_num_ = 6;
   std::string db_sync_path_;
   int expire_dump_days_ = 3;
   int db_sync_speed_ = 0;

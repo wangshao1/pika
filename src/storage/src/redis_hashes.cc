@@ -107,7 +107,7 @@ Status RedisHashes::ScanKeyNum(KeyInfo* key_info) {
       keys++;
       if (!parsed_hashes_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_hashes_meta_value.timestamp() - curtime;
+        ttl_sum += parsed_hashes_meta_value.etime() - curtime;
       }
     }
   }
@@ -324,7 +324,7 @@ Status RedisHashes::HIncrby(const Slice& key, const Slice& field, int64_t value,
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
       version = parsed_hashes_meta_value.UpdateVersion();
       parsed_hashes_meta_value.set_count(1);
-      parsed_hashes_meta_value.set_timestamp(0);
+      parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[0], key, meta_value);
       HashesDataKey hashes_data_key(key, version, field);
       Int64ToStr(value_buf, 32, value);
@@ -396,7 +396,7 @@ Status RedisHashes::HIncrbyfloat(const Slice& key, const Slice& field, const Sli
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
       version = parsed_hashes_meta_value.UpdateVersion();
       parsed_hashes_meta_value.set_count(1);
-      parsed_hashes_meta_value.set_timestamp(0);
+      parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[0], key, meta_value);
       HashesDataKey hashes_data_key(key, version, field);
 
@@ -1185,8 +1185,8 @@ bool RedisHashes::PKExpireScan(const std::string& start_key, int32_t min_timesta
       it->Next();
       continue;
     } else {
-      if (min_timestamp < parsed_hashes_meta_value.timestamp() &&
-          parsed_hashes_meta_value.timestamp() < max_timestamp) {
+      if (min_timestamp < parsed_hashes_meta_value.etime() &&
+          parsed_hashes_meta_value.etime() < max_timestamp) {
         keys->push_back(it->key().ToString());
       }
       (*leftover_visits)--;
@@ -1204,6 +1204,7 @@ bool RedisHashes::PKExpireScan(const std::string& start_key, int32_t min_timesta
   return is_finish;
 }
 
+// TODO(wangshaoyi): timestamp uint64_t
 Status RedisHashes::Expireat(const Slice& key, int32_t timestamp) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
@@ -1216,7 +1217,7 @@ Status RedisHashes::Expireat(const Slice& key, int32_t timestamp) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
-        parsed_hashes_meta_value.set_timestamp(timestamp);
+        parsed_hashes_meta_value.SetEtime(uint64_t(timestamp));
       } else {
         parsed_hashes_meta_value.InitialMetaValue();
       }
@@ -1237,11 +1238,11 @@ Status RedisHashes::Persist(const Slice& key) {
     } else if (parsed_hashes_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_hashes_meta_value.timestamp();
+      int32_t timestamp = parsed_hashes_meta_value.etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
-        parsed_hashes_meta_value.set_timestamp(0);
+        parsed_hashes_meta_value.SetEtime(0);
         s = db_->Put(default_write_options_, handles_[0], key, meta_value);
       }
     }
@@ -1261,7 +1262,7 @@ Status RedisHashes::TTL(const Slice& key, int64_t* timestamp) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_hashes_meta_value.timestamp();
+      *timestamp = parsed_hashes_meta_value.etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1289,15 +1290,15 @@ void RedisHashes::ScanDatabase() {
   for (meta_iter->SeekToFirst(); meta_iter->Valid(); meta_iter->Next()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_hashes_meta_value.timestamp() != 0) {
-      survival_time = parsed_hashes_meta_value.timestamp() - current_time > 0
-                          ? parsed_hashes_meta_value.timestamp() - current_time
+    if (parsed_hashes_meta_value.etime() != 0) {
+      survival_time = parsed_hashes_meta_value.etime() - current_time > 0
+                          ? parsed_hashes_meta_value.etime() - current_time
                           : -1;
     }
 
     LOG(INFO) << fmt::format("[key : {:<30}] [count : {:<10}] [timestamp : {:<10}] [version : {}] [survival_time : {}]",
                              meta_iter->key().ToString(), parsed_hashes_meta_value.count(),
-                             parsed_hashes_meta_value.timestamp(), parsed_hashes_meta_value.version(), survival_time);
+                             parsed_hashes_meta_value.etime(), parsed_hashes_meta_value.version(), survival_time);
   }
   delete meta_iter;
 

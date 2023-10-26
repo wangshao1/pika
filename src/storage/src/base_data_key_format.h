@@ -33,8 +33,8 @@ class BaseDataKey {
   }
 
   Slice Encode() {
-    size_t meta_size = 8 + 2 * sizeof(uint16_t) + sizeof(uint64_t) + 16;
-    size_t usize = key_.size() + data_.size() + sizeof(int32_t);
+    size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(version_) + sizeof(reserve2_);
+    size_t usize = key_.size() + data_.size() + sizeof(uint32_t);
     size_t needed = meta_size + usize;
     char* dst;
     if (needed <= sizeof(space_)) {
@@ -50,42 +50,42 @@ class BaseDataKey {
 
     start_ = dst;
     // reserve1: 8 byte
-    memcpy(dst, reserve1_, 8);
-    dst += 8;
+    memcpy(dst, reserve1_, sizeof(reserve1_));
+    dst += sizeof(reserve1_);
     // db_id: 2 byte
     pstd::EncodeFixed16(dst, db_id_);
-    dst += sizeof(int16_t);
+    dst += sizeof(db_id_);
     // slot_id: 2 byte
     pstd::EncodeFixed16(dst, slot_id_);
-    dst += sizeof(int16_t);
+    dst += sizeof(slot_id_);
     // key_size: 4 byte
     pstd::EncodeFixed32(dst, key_.size());
-    dst += sizeof(int32_t);
+    dst += sizeof(uint32_t);
     // key
     memcpy(dst, key_.data(), key_.size());
     dst += key_.size();
     // version 8 byte
     pstd::EncodeFixed64(dst, version_);
-    dst += sizeof(uint64_t);
+    dst += sizeof(version_);
     // data
     memcpy(dst, data_.data(), data_.size());
     dst += data_.size();
     // TODO(wangshaoyi): too much for reserve
     // reserve2: 16 byte
-    memcpy(dst, reserve2_, 16);
+    memcpy(dst, reserve2_, sizeof(reserve2_));
     return Slice(start_, needed);
   }
 
  private:
   char* start_ = nullptr;
-  char space_[256];
-  char reserve1_[8];
-  uint16_t db_id_;
-  uint16_t slot_id_;
+  char space_[200];
+  char reserve1_[8] = {0};
+  uint16_t db_id_ = uint16_t(-1);
+  uint16_t slot_id_ = uint16_t(-1);
   Slice key_;
-  uint64_t version_ = 0;
+  uint64_t version_ = uint64_t(-1);
   Slice data_;
-  char reserve2_[16];
+  char reserve2_[16] = {0};
 };
 
 class ParsedBaseDataKey {
@@ -109,22 +109,22 @@ class ParsedBaseDataKey {
   void decode(const char* ptr, const char* end_ptr) {
     const char* start = ptr;
     // skip reserve1_
-    ptr += 8;
+    ptr += sizeof(reserve1_);
 
-    uint16_t db_id = pstd::DecodeFixed16(ptr);
-    ptr += sizeof(uint16_t);
-    uint16_t slot_id = pstd::DecodeFixed16(ptr);
-    ptr += sizeof(uint16_t);
+    db_id_ = pstd::DecodeFixed16(ptr);
+    ptr += sizeof(db_id_);
+    slot_id_ = pstd::DecodeFixed16(ptr);
+    ptr += sizeof(slot_id_);
     int32_t key_len = pstd::DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
+    ptr += sizeof(uint32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
     meta_key_prefix_ = Slice(start, std::distance(start, ptr));
 
     version_ = pstd::DecodeFixed64(ptr);
-    ptr += sizeof(int64_t);
+    ptr += sizeof(version_);
     // reserve2_
-    end_ptr -= 16;
+    end_ptr -= sizeof(reserve2_);
     data_ = Slice(ptr, std::distance(ptr, end_ptr));
   }
 
@@ -143,9 +143,9 @@ class ParsedBaseDataKey {
  protected:
   Slice key_;
   Slice meta_key_prefix_;
-  uint64_t version_ = -1;
-  uint16_t slot_id_ = -1;
-  uint16_t db_id_ = -1;
+  uint64_t version_ = (uint64_t)(-1);
+  uint16_t slot_id_ = (uint16_t)(-1);
+  uint16_t db_id_ = (uint16_t)(-1);
   Slice data_;
 };
 

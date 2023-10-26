@@ -26,11 +26,11 @@ class BaseMetaValue : public InternalValue {
     memcpy(dst, user_value_.data(), usize);
     dst += usize;
     EncodeFixed64(dst, version_);
-    dst += sizeof(int64_t);
-    memcpy(dst, reserve_, 2 * sizeof(uint64_t));
-    dst += 2 * sizeof(uint64_t);
+    dst += sizeof(version_);
+    memcpy(dst, reserve_, sizeof(reserve_));
+    dst += sizeof(reserve_);
     EncodeFixed64(dst, ctime_);
-    dst += sizeof(int64_t);
+    dst += sizeof(ctime);
     EncodeFixed64(dst, etime_);
     return usize + 5 * sizeof(int64_t);
   }
@@ -56,11 +56,11 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
       user_value_ = Slice(internal_value_str->data(), internal_value_str->size() - kBaseMetaValueSuffixLength);
       offset += user_value_.size();
       version_ = DecodeFixed64(internal_value_str->data() + offset);
-      offset += sizeof(uint64_t);
-      memcpy(reserve_, internal_value_str->data() + offset, 2 * sizeof(uint64_t));
-      offset += 2 * sizeof(uint64_t);
+      offset += sizeof(version_);
+      memcpy(reserve_, internal_value_str->data() + offset, sizeof(reserve_));
+      offset += sizeof(reserve_);
       ctime_ = DecodeFixed64(internal_value_str->data() + offset);
-      offset += sizeof(uint64_t);
+      offset += sizeof(ctime_);
       etime_ = DecodeFixed64(internal_value_str->data() + offset);
     }
     count_ = DecodeFixed32(internal_value_str->data());
@@ -74,10 +74,10 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
       offset += user_value_.size();
       version_ = DecodeFixed64(internal_value_slice.data() + offset);
       offset += sizeof(uint64_t);
-      memcpy(reserve_, internal_value_slice.data() + offset, 2 * sizeof(uint64_t));
-      offset += 2 * sizeof(uint64_t);
+      memcpy(reserve_, internal_value_slice.data() + offset, sizeof(reserve_));
+      offset += sizeof(reserve_);
       ctime_ = DecodeFixed64(internal_value_slice.data() + offset);
-      offset += sizeof(uint64_t);
+      offset += sizeof(ctime_);
       etime_ = DecodeFixed64(internal_value_slice.data() + offset);
     }
     count_ = DecodeFixed32(internal_value_slice.data());
@@ -101,7 +101,7 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   int32_t InitialMetaValue() {
     this->set_count(0);
     this->SetEtime(0);
-    this->set_ctime(0);
+    this->SetCtime(0);
     return this->UpdateVersion();
   }
 

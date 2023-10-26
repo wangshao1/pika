@@ -57,7 +57,7 @@ class InternalValue {
   virtual size_t AppendTimestampAndVersion() = 0;
 
  protected:
-  char space_[256];
+  char space_[200];
   char* start_ = nullptr;
   rocksdb::Slice user_value_;
   uint64_t version_ = 0;
@@ -97,7 +97,7 @@ class ParsedInternalValue {
     SetEtimeToValue();
   }
 
-  void set_ctime(uint64_t ctime) {
+  void SetCtime(uint64_t ctime) {
     ctime_ = ctime;
     SetCtimeToValue();
   }

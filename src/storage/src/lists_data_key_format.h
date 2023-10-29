@@ -80,7 +80,7 @@ public:
 
 private:
   char* start_ = nullptr;
-  char space_[256];
+  char space_[200];
   char reserve1_[8] = {0};
   uint16_t db_id_ = uint16_t(-1);
   uint16_t slot_id_ = uint16_t(-1);
@@ -142,9 +142,9 @@ class ParsedListsDataKey {
  private:
   Slice key_;
   Slice meta_key_prefix_;
-  uint16_t slot_id_ = uint16_t(-1);
-  uint16_t db_id_ = uint16_t(-1);
-  uint64_t version_ = uint64_t(-1);
+  uint16_t slot_id_ = (uint16_t)(-1);
+  uint16_t db_id_ = (uint16_t)(-1);
+  uint64_t version_ = (uint64_t)(-1);
   uint64_t index_ = 0;
 };
 

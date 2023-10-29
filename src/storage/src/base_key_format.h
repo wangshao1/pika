@@ -45,7 +45,7 @@ class BaseKey {
 
     start_ = dst;
     // reserve1: 8 byte
-    memcpy(dst, reserve1_, 8);
+    memcpy(dst, reserve1_, sizeof(reserve1_));
     dst += sizeof(reserve1_);
     // db_id: 2 byte
     pstd::EncodeFixed16(dst, db_id_);
@@ -88,7 +88,7 @@ class ParsedBaseKey {
 
   void decode(const char* ptr, const char* end_ptr) {
     // skip reserve1_
-    ptr += 8;
+    ptr += sizeof(reserve1_);
 
     db_id_ = pstd::DecodeFixed16(ptr);
     ptr += sizeof(db_id_);

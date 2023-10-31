@@ -142,8 +142,8 @@ class ZSetsScoreKeyComparatorImpl : public rocksdb::Comparator {
   void ParseAndPrintZSetsScoreKey(const std::string& from, const std::string& str) {
     const char* ptr = str.data();
 
-    int32_t key_len = DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
+    uint32_t key_len = DecodeFixed32(ptr);
+    ptr += sizeof(uint32_t);
 
     std::string key(ptr, key_len);
     ptr += key_len;

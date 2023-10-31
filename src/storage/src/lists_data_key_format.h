@@ -117,8 +117,8 @@ class ParsedListsDataKey {
     ptr += sizeof(db_id_);
     slot_id_ = pstd::DecodeFixed16(ptr);
     ptr += sizeof(slot_id_);
-    int32_t key_len = pstd::DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
+    uint32_t key_len = pstd::DecodeFixed32(ptr);
+    ptr += sizeof(uint32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
     meta_key_prefix_ = Slice(start, std::distance(start, ptr));

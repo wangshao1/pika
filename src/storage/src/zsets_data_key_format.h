@@ -81,7 +81,7 @@ class ZSetsScoreKey {
 
  private:
   char* start_ = nullptr;
-  char space_[256];
+  char space_[200];
   char reserve1_[8] = {0};
   uint16_t db_id_ = uin16_t(-1);
   uint16_t slot_id_ = uint16_t(-1);

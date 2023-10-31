@@ -613,7 +613,7 @@ class PikaConf : public pstd::BaseConf {
   std::string log_path_;
   std::string log_level_;
   std::string db_path_;
-  int db_instance_num_ = 6;
+  int db_instance_num_ = 0;
   std::string db_sync_path_;
   int expire_dump_days_ = 3;
   int db_sync_speed_ = 0;

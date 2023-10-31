@@ -12,6 +12,11 @@
 
 namespace storage {
 
+/*
+* | value | version | reserve | cdate | timestamp |
+* |       |    8B   |   16B   |   8B  |     8B    |
+*/
+// TODO(wangshaoyi): reformat encode, AppendTimestampAndVersion
 class BaseMetaValue : public InternalValue {
  public:
   explicit BaseMetaValue(const Slice& user_value) : InternalValue(user_value) {}
@@ -20,19 +25,23 @@ class BaseMetaValue : public InternalValue {
     char* dst = start_;
     memcpy(dst, user_value_.data(), usize);
     dst += usize;
-    EncodeFixed32(dst, version_);
-    dst += sizeof(int32_t);
-    EncodeFixed32(dst, timestamp_);
-    return usize + 2 * sizeof(int32_t);
+    EncodeFixed64(dst, version_);
+    dst += sizeof(version_);
+    memcpy(dst, reserve_, sizeof(reserve_));
+    dst += sizeof(reserve_);
+    EncodeFixed64(dst, ctime_);
+    dst += sizeof(ctime);
+    EncodeFixed64(dst, etime_);
+    return usize + 5 * sizeof(int64_t);
   }
 
-  int32_t UpdateVersion() {
+  uint64_t UpdateVersion() {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    if (version_ >= static_cast<int32_t>(unix_time)) {
+    if (version_ >= uint64_t(unix_time)) {
       version_++;
     } else {
-      version_ = static_cast<int32_t>(unix_time);
+      version_ = uint64_t(unix_time);
     }
     return version_;
   }
@@ -43,9 +52,16 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   // Use this constructor after rocksdb::DB::Get();
   explicit ParsedBaseMetaValue(std::string* internal_value_str) : ParsedInternalValue(internal_value_str) {
     if (internal_value_str->size() >= kBaseMetaValueSuffixLength) {
+      int offset = 0;
       user_value_ = Slice(internal_value_str->data(), internal_value_str->size() - kBaseMetaValueSuffixLength);
-      version_ = DecodeFixed32(internal_value_str->data() + internal_value_str->size() - sizeof(int32_t) * 2);
-      timestamp_ = DecodeFixed32(internal_value_str->data() + internal_value_str->size() - sizeof(int32_t));
+      offset += user_value_.size();
+      version_ = DecodeFixed64(internal_value_str->data() + offset);
+      offset += sizeof(version_);
+      memcpy(reserve_, internal_value_str->data() + offset, sizeof(reserve_));
+      offset += sizeof(reserve_);
+      ctime_ = DecodeFixed64(internal_value_str->data() + offset);
+      offset += sizeof(ctime_);
+      etime_ = DecodeFixed64(internal_value_str->data() + offset);
     }
     count_ = DecodeFixed32(internal_value_str->data());
   }
@@ -53,9 +69,16 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   // Use this constructor in rocksdb::CompactionFilter::Filter();
   explicit ParsedBaseMetaValue(const Slice& internal_value_slice) : ParsedInternalValue(internal_value_slice) {
     if (internal_value_slice.size() >= kBaseMetaValueSuffixLength) {
+      int offset = 0;
       user_value_ = Slice(internal_value_slice.data(), internal_value_slice.size() - kBaseMetaValueSuffixLength);
-      version_ = DecodeFixed32(internal_value_slice.data() + internal_value_slice.size() - sizeof(int32_t) * 2);
-      timestamp_ = DecodeFixed32(internal_value_slice.data() + internal_value_slice.size() - sizeof(int32_t));
+      offset += user_value_.size();
+      version_ = DecodeFixed64(internal_value_slice.data() + offset);
+      offset += sizeof(uint64_t);
+      memcpy(reserve_, internal_value_slice.data() + offset, sizeof(reserve_));
+      offset += sizeof(reserve_);
+      ctime_ = DecodeFixed64(internal_value_slice.data() + offset);
+      offset += sizeof(ctime_);
+      etime_ = DecodeFixed64(internal_value_slice.data() + offset);
     }
     count_ = DecodeFixed32(internal_value_slice.data());
   }
@@ -69,22 +92,21 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   void SetVersionToValue() override {
     if (value_) {
       char* dst = const_cast<char*>(value_->data()) + value_->size() - kBaseMetaValueSuffixLength;
-      EncodeFixed32(dst, version_);
+      EncodeFixed64(dst, version_);
     }
   }
 
-  void SetTimestampToValue() override {
-    if (value_) {
-      char* dst = const_cast<char*>(value_->data()) + value_->size() - sizeof(int32_t);
-      EncodeFixed32(dst, timestamp_);
-    }
-  }
-  static const size_t kBaseMetaValueSuffixLength = 2 * sizeof(int32_t);
+  static const size_t kBaseMetaValueSuffixLength = 5 * sizeof(uint64_t);
 
   int32_t InitialMetaValue() {
     this->set_count(0);
-    this->set_timestamp(0);
+    this->SetEtime(0);
+    this->SetCtime(0);
     return this->UpdateVersion();
+  }
+
+  bool IsValid() override {
+    return !IsStale() && count() != 0;
   }
 
   int32_t count() { return count_; }
@@ -108,10 +130,10 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   int32_t UpdateVersion() {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    if (version_ >= static_cast<int32_t>(unix_time)) {
+    if (version_ >= static_cast<uint64_t>(unix_time)) {
       version_++;
     } else {
-      version_ = static_cast<int32_t>(unix_time);
+      version_ = static_cast<uint64_t>(unix_time);
     }
     SetVersionToValue();
     return version_;

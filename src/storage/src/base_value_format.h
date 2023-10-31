@@ -11,10 +11,9 @@
 #include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 #include "src/coding.h"
-#include "src/redis.h"
+#include "src/mutex.h"
 
 namespace storage {
-
 class InternalValue {
  public:
   explicit InternalValue(const rocksdb::Slice& user_value)
@@ -24,18 +23,19 @@ class InternalValue {
       delete[] start_;
     }
   }
-  void set_timestamp(int32_t timestamp = 0) { timestamp_ = timestamp; }
-  Status SetRelativeTimestamp(int32_t ttl) {
+  void SetEtime(uint64_t etime = 0) { etime_ = etime; }
+  void setCtime(uint64_t ctime) { ctime_ = ctime; }
+  rocksdb::Status SetRelativeTimestamp(uint64_t ttl) {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    timestamp_ = static_cast<int32_t>(unix_time) + ttl;
-    if (timestamp_ != unix_time + static_cast<int64_t>(ttl)) {
-      return Status::InvalidArgument("invalid expire time");
+    etime_ = uint64_t(unix_time) + ttl;
+    if (etime_ != uint64_t(unix_time) + ttl) {
+      return rocksdb::Status::InvalidArgument("invalid expire time");
     }
-    return Status::OK();
+    return rocksdb::Status::OK();
   }
-  void set_version(int32_t version = 0) { version_ = version; }
-  static const size_t kDefaultValueSuffixLength = sizeof(int32_t) * 2;
+  void SetVersion(uint64_t version = 0) { version_ = version; }
+  static const size_t kDefaultValueSuffixLength = sizeof(uint64_t) * 4;
   virtual rocksdb::Slice Encode() {
     size_t usize = user_value_.size();
     size_t needed = usize + kDefaultValueSuffixLength;
@@ -60,8 +60,10 @@ class InternalValue {
   char space_[200];
   char* start_ = nullptr;
   rocksdb::Slice user_value_;
-  int32_t version_ = 0;
-  int32_t timestamp_ = 0;
+  uint64_t version_ = 0;
+  uint64_t etime_ = 0;
+  uint64_t ctime_ = 0;
+  char reserve_[16] = {0};
 };
 
 class ParsedInternalValue {
@@ -81,47 +83,78 @@ class ParsedInternalValue {
 
   rocksdb::Slice user_value() { return user_value_; }
 
-  int32_t version() { return version_; }
+  uint64_t version() { return version_; }
 
-  void set_version(int32_t version) {
+  void set_version(uint64_t version) {
     version_ = version;
     SetVersionToValue();
   }
 
-  int32_t timestamp() { return timestamp_; }
+  uint64_t etime() { return etime_; }
 
-  void set_timestamp(int32_t timestamp) {
-    timestamp_ = timestamp;
-    SetTimestampToValue();
+  void SetEtime(uint64_t etime) {
+    etime_ = etime;
+    SetEtimeToValue();
   }
 
-  void SetRelativeTimestamp(int32_t ttl) {
+  void SetCtime(uint64_t ctime) {
+    ctime_ = ctime;
+    SetCtimeToValue();
+  }
+
+  void SetRelativeTimestamp(uint64_t ttl) {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    timestamp_ = static_cast<int32_t>(unix_time) + ttl;
-    SetTimestampToValue();
+    etime_ = static_cast<uint64_t>(unix_time) + ttl;
+    SetEtimeToValue();
   }
 
-  bool IsPermanentSurvival() { return timestamp_ == 0; }
+  bool IsPermanentSurvival() { return etime_ == 0; }
 
   bool IsStale() {
-    if (timestamp_ == 0) {
+    if (etime_ == 0) {
       return false;
     }
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
-    return timestamp_ < unix_time;
+    return etime_ < unix_time;
+  }
+
+  virtual bool IsValid() {
+    return !IsStale();
+  }
+
+  void SetEtimeToValue() {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() - sizeof(uint64_t);
+      EncodeFixed64(dst, etime_);
+    }
+  }
+
+  void SetCtimeToValue() {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() - 2 * sizeof(uint64_t);
+      EncodeFixed64(dst, ctime_);
+    }
+  }
+
+  void SetReserveToValue() {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() - 4 * sizeof(uint64_t);
+      memcpy(dst, reserve_, 2 * sizeof(uint64_t));
+    }
   }
 
   virtual void StripSuffix() = 0;
 
  protected:
   virtual void SetVersionToValue() = 0;
-  virtual void SetTimestampToValue() = 0;
   std::string* value_ = nullptr;
   rocksdb::Slice user_value_;
-  int32_t version_ = 0 ;
-  int32_t timestamp_ = 0;
+  uint64_t version_ = 0 ;
+  uint64_t ctime_ = 0;
+  uint64_t etime_ = 0;
+  char reserve_[16] = {0}; //unused
 };
 
 }  //  namespace storage

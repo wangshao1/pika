@@ -114,7 +114,7 @@ Status RedisLists::ScanKeyNum(KeyInfo* key_info) {
       keys++;
       if (!parsed_lists_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_lists_meta_value.timestamp() - curtime;
+        ttl_sum += parsed_lists_meta_value.etime() - curtime;
       }
     }
   }
@@ -1151,7 +1151,7 @@ bool RedisLists::PKExpireScan(const std::string& start_key, int32_t min_timestam
       it->Next();
       continue;
     } else {
-      if (min_timestamp < parsed_lists_meta_value.timestamp() && parsed_lists_meta_value.timestamp() < max_timestamp) {
+      if (min_timestamp < parsed_lists_meta_value.etime() && parsed_lists_meta_value.etime() < max_timestamp) {
         keys->push_back(it->key().ToString());
       }
       (*leftover_visits)--;
@@ -1169,6 +1169,7 @@ bool RedisLists::PKExpireScan(const std::string& start_key, int32_t min_timestam
   return is_finish;
 }
 
+// TODO(wangshaoyi) : timestamp uint64_t
 Status RedisLists::Expireat(const Slice& key, int32_t timestamp) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
@@ -1181,7 +1182,7 @@ Status RedisLists::Expireat(const Slice& key, int32_t timestamp) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
-        parsed_lists_meta_value.set_timestamp(timestamp);
+        parsed_lists_meta_value.SetEtime(timestamp);
       } else {
         parsed_lists_meta_value.InitialMetaValue();
       }
@@ -1202,11 +1203,11 @@ Status RedisLists::Persist(const Slice& key) {
     } else if (parsed_lists_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_lists_meta_value.timestamp();
+      int32_t timestamp = parsed_lists_meta_value.etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
-        parsed_lists_meta_value.set_timestamp(0);
+        parsed_lists_meta_value.SetEtime(0);
         return db_->Put(default_write_options_, handles_[0], key, meta_value);
       }
     }
@@ -1226,7 +1227,7 @@ Status RedisLists::TTL(const Slice& key, int64_t* timestamp) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_lists_meta_value.timestamp();
+      *timestamp = parsed_lists_meta_value.etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1254,9 +1255,9 @@ void RedisLists::ScanDatabase() {
   for (meta_iter->SeekToFirst(); meta_iter->Valid(); meta_iter->Next()) {
     ParsedListsMetaValue parsed_lists_meta_value(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_lists_meta_value.timestamp() != 0) {
-      survival_time = parsed_lists_meta_value.timestamp() - current_time > 0
-                          ? parsed_lists_meta_value.timestamp() - current_time
+    if (parsed_lists_meta_value.etime() != 0) {
+      survival_time = parsed_lists_meta_value.etime() - current_time > 0
+                          ? parsed_lists_meta_value.etime() - current_time
                           : -1;
     }
 
@@ -1264,7 +1265,7 @@ void RedisLists::ScanDatabase() {
         "[key : {:<30}] [count : {:<10}] [left index : {:<10}] [right index : {:<10}] [timestamp : {:<10}] [version : "
         "{}] [survival_time : {}]",
         meta_iter->key().ToString(), parsed_lists_meta_value.count(), parsed_lists_meta_value.left_index(),
-        parsed_lists_meta_value.right_index(), parsed_lists_meta_value.timestamp(), parsed_lists_meta_value.version(),
+        parsed_lists_meta_value.right_index(), parsed_lists_meta_value.etime(), parsed_lists_meta_value.version(),
         survival_time);
   }
   delete meta_iter;

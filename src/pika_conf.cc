@@ -243,6 +243,7 @@ int PikaConf::Load() {
   }
   GetConfStr("loglevel", &log_level_);
   GetConfStr("db-path", &db_path_);
+  GetConfInt("db-instance-num", &db_instance_num_);
   db_path_ = db_path_.empty() ? "./db/" : db_path_;
   if (db_path_[db_path_.length() - 1] != '/') {
     db_path_ += "/";

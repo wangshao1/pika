@@ -76,7 +76,7 @@ Status RedisStrings::ScanKeyNum(KeyInfo* key_info) {
       keys++;
       if (!parsed_strings_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_strings_value.timestamp() - curtime;
+        ttl_sum += parsed_strings_value.etime() - curtime;
       }
     }
   }
@@ -171,11 +171,11 @@ Status RedisStrings::Append(const Slice& key, const Slice& value, int32_t* ret) 
       StringsValue strings_value(value);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     } else {
-      int32_t timestamp = parsed_strings_value.timestamp();
+      uint64_t timestamp = parsed_strings_value.etime();
       std::string old_user_value = parsed_strings_value.value().ToString();
       std::string new_value = old_user_value + value.ToString();
       StringsValue strings_value(new_value);
-      strings_value.set_timestamp(timestamp);
+      strings_value.SetEtime(timestamp);
       *ret = static_cast<int32_t>(new_value.size());
       return db_->Put(default_write_options_, key, strings_value.Encode());
     }
@@ -345,7 +345,7 @@ Status RedisStrings::Decrby(const Slice& key, int64_t value, int64_t* ret) {
       StringsValue strings_value(new_value);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     } else {
-      int32_t timestamp = parsed_strings_value.timestamp();
+      uint64_t timestamp = parsed_strings_value.etime();
       std::string old_user_value = parsed_strings_value.value().ToString();
       char* end = nullptr;
       int64_t ival = strtoll(old_user_value.c_str(), &end, 10);
@@ -358,7 +358,7 @@ Status RedisStrings::Decrby(const Slice& key, int64_t value, int64_t* ret) {
       *ret = ival - value;
       new_value = std::to_string(*ret);
       StringsValue strings_value(new_value);
-      strings_value.set_timestamp(timestamp);
+      strings_value.SetEtime(timestamp);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     }
   } else if (s.IsNotFound()) {
@@ -477,7 +477,7 @@ Status RedisStrings::Incrby(const Slice& key, int64_t value, int64_t* ret) {
       StringsValue strings_value(buf);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     } else {
-      int32_t timestamp = parsed_strings_value.timestamp();
+      uint64_t timestamp = parsed_strings_value.etime();
       std::string old_user_value = parsed_strings_value.value().ToString();
       char* end = nullptr;
       int64_t ival = strtoll(old_user_value.c_str(), &end, 10);
@@ -490,7 +490,7 @@ Status RedisStrings::Incrby(const Slice& key, int64_t value, int64_t* ret) {
       *ret = ival + value;
       new_value = std::to_string(*ret);
       StringsValue strings_value(new_value);
-      strings_value.set_timestamp(timestamp);
+      strings_value.SetEtime(timestamp);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     }
   } else if (s.IsNotFound()) {
@@ -520,7 +520,7 @@ Status RedisStrings::Incrbyfloat(const Slice& key, const Slice& value, std::stri
       StringsValue strings_value(new_value);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     } else {
-      int32_t timestamp = parsed_strings_value.timestamp();
+      uint64_t timestamp = parsed_strings_value.etime();
       std::string old_user_value = parsed_strings_value.value().ToString();
       long double total;
       long double old_number;
@@ -533,7 +533,7 @@ Status RedisStrings::Incrbyfloat(const Slice& key, const Slice& value, std::stri
       }
       *ret = new_value;
       StringsValue strings_value(new_value);
-      strings_value.set_timestamp(timestamp);
+      strings_value.SetEtime(timestamp);
       return db_->Put(default_write_options_, key, strings_value.Encode());
     }
   } else if (s.IsNotFound()) {
@@ -1031,10 +1031,11 @@ Status RedisStrings::BitPos(const Slice& key, int32_t bit, int64_t start_offset,
   return Status::OK();
 }
 
+//TODO(wangshaoyi): timestamp uint64_t
 Status RedisStrings::PKSetexAt(const Slice& key, const Slice& value, int32_t timestamp) {
   StringsValue strings_value(value);
   ScopeRecordLock l(lock_mgr_, key);
-  strings_value.set_timestamp(timestamp);
+  strings_value.SetEtime((uint64_t)timestamp);
   return db_->Put(default_write_options_, key, strings_value.Encode());
 }
 
@@ -1242,7 +1243,7 @@ bool RedisStrings::PKExpireScan(const std::string& start_key, int32_t min_timest
       it->Next();
       continue;
     } else {
-      if (min_timestamp < parsed_strings_value.timestamp() && parsed_strings_value.timestamp() < max_timestamp) {
+      if (min_timestamp < parsed_strings_value.etime() && parsed_strings_value.etime() < max_timestamp) {
         keys->push_back(it->key().ToString());
       }
       (*leftover_visits)--;
@@ -1260,6 +1261,7 @@ bool RedisStrings::PKExpireScan(const std::string& start_key, int32_t min_timest
   return is_finish;
 }
 
+// TODO(wangshaoyi): timestamp uint64_t
 Status RedisStrings::Expireat(const Slice& key, int32_t timestamp) {
   std::string value;
   ScopeRecordLock l(lock_mgr_, key);
@@ -1270,7 +1272,7 @@ Status RedisStrings::Expireat(const Slice& key, int32_t timestamp) {
       return Status::NotFound("Stale");
     } else {
       if (timestamp > 0) {
-        parsed_strings_value.set_timestamp(timestamp);
+        parsed_strings_value.SetEtime(uint64_t(timestamp));
         return db_->Put(default_write_options_, key, value);
       } else {
         return db_->Delete(default_write_options_, key);
@@ -1289,11 +1291,11 @@ Status RedisStrings::Persist(const Slice& key) {
     if (parsed_strings_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
-      int32_t timestamp = parsed_strings_value.timestamp();
+      int32_t timestamp = parsed_strings_value.etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
-        parsed_strings_value.set_timestamp(0);
+        parsed_strings_value.SetEtime(0);
         return db_->Put(default_write_options_, key, value);
       }
     }
@@ -1311,7 +1313,7 @@ Status RedisStrings::TTL(const Slice& key, int64_t* timestamp) {
       *timestamp = -2;
       return Status::NotFound("Stale");
     } else {
-      *timestamp = parsed_strings_value.timestamp();
+      *timestamp = parsed_strings_value.etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1339,12 +1341,12 @@ void RedisStrings::ScanDatabase() {
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
     ParsedStringsValue parsed_strings_value(iter->value());
     int32_t survival_time = 0;
-    if (parsed_strings_value.timestamp() != 0) {
+    if (parsed_strings_value.etime() != 0) {
       survival_time =
-          parsed_strings_value.timestamp() - current_time > 0 ? parsed_strings_value.timestamp() - current_time : -1;
+          parsed_strings_value.etime() - current_time > 0 ? parsed_strings_value.etime() - current_time : -1;
     }
     LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", iter->key().ToString(), 
-                             parsed_strings_value.value().ToString(), parsed_strings_value.timestamp(), parsed_strings_value.version(),  
+                             parsed_strings_value.value().ToString(), parsed_strings_value.etime(), parsed_strings_value.version(),  
                              survival_time);
 
   }

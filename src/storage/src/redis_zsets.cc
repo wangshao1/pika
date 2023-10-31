@@ -129,7 +129,7 @@ Status RedisZSets::ScanKeyNum(KeyInfo* key_info) {
       keys++;
       if (!parsed_zsets_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_zsets_meta_value.timestamp() - curtime;
+        ttl_sum += parsed_zsets_meta_value.etime() - curtime;
       }
     }
   }
@@ -1470,7 +1470,7 @@ bool RedisZSets::PKExpireScan(const std::string& start_key, int32_t min_timestam
       it->Next();
       continue;
     } else {
-      if (min_timestamp < parsed_zsets_meta_value.timestamp() && parsed_zsets_meta_value.timestamp() < max_timestamp) {
+      if (min_timestamp < parsed_zsets_meta_value.etime() && parsed_zsets_meta_value.etime() < max_timestamp) {
         keys->push_back(it->key().ToString());
       }
       (*leftover_visits)--;
@@ -1500,7 +1500,7 @@ Status RedisZSets::Expireat(const Slice& key, int32_t timestamp) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
-        parsed_zsets_meta_value.set_timestamp(timestamp);
+        parsed_zsets_meta_value.SetEtime(timestamp);
       } else {
         parsed_zsets_meta_value.InitialMetaValue();
       }
@@ -1699,11 +1699,11 @@ Status RedisZSets::Persist(const Slice& key) {
     } else if (parsed_zsets_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_zsets_meta_value.timestamp();
+      int32_t timestamp = parsed_zsets_meta_value.etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
-        parsed_zsets_meta_value.set_timestamp(0);
+        parsed_zsets_meta_value.SetEtime(0);
         return db_->Put(default_write_options_, handles_[0], key, meta_value);
       }
     }
@@ -1723,7 +1723,7 @@ Status RedisZSets::TTL(const Slice& key, int64_t* timestamp) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_zsets_meta_value.timestamp();
+      *timestamp = parsed_zsets_meta_value.etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1751,14 +1751,14 @@ void RedisZSets::ScanDatabase() {
   for (meta_iter->SeekToFirst(); meta_iter->Valid(); meta_iter->Next()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_zsets_meta_value.timestamp() != 0) {
-      survival_time = parsed_zsets_meta_value.timestamp() - current_time > 0
-                          ? parsed_zsets_meta_value.timestamp() - current_time
+    if (parsed_zsets_meta_value.etime() != 0) {
+      survival_time = parsed_zsets_meta_value.etime() - current_time > 0
+                          ? parsed_zsets_meta_value.etime() - current_time
                           : -1;
     }
 
     LOG(INFO) << fmt::format("[key : {:<30}] [count : {:<10}] [timestamp : {:<10}] [version : {}] [survival_time : {}]",
-                             meta_iter->key().ToString(), parsed_zsets_meta_value.count(), parsed_zsets_meta_value.timestamp(),
+                             meta_iter->key().ToString(), parsed_zsets_meta_value.count(), parsed_zsets_meta_value.etime(),
                              parsed_zsets_meta_value.version(), survival_time);
   }
   delete meta_iter;

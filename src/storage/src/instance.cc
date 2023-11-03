@@ -169,7 +169,6 @@ Status Instance::GetScanStartPoint(const DataType& type, const Slice& key, const
   index_key.append(pattern.ToString());
   index_key.append("_");
   index_key.append(std::to_string(cursor));
-  
   return scan_cursors_store_->Lookup(index_key, start_point);
 }
 
@@ -220,7 +219,6 @@ Status Instance::AddCompactKeyTaskIfNeeded(const std::string& key, size_t total)
   return Status::OK();
 }
 
-// OK
 Status Instance::SetOptions(const OptionType& option_type, const std::unordered_map<std::string, std::string>& options) {
   if (option_type == OptionType::kDB) {
     return db_->SetDBOptions(options);

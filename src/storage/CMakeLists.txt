@@ -4,9 +4,9 @@ set (CMAKE_CXX_STANDARD 17)
 project (storage)
 
 # Other CMake modules
-#add_subdirectory(tests)
-#add_subdirectory(examples)
-#add_subdirectory(benchmark)
+add_subdirectory(tests)
+add_subdirectory(examples)
+add_subdirectory(benchmark)
 
 add_definitions(-DROCKSDB_PLATFORM_POSIX -DROCKSDB_LIB_IO_POSIX)
 add_compile_options("-fno-builtin-memcmp")

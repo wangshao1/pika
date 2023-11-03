@@ -3,6 +3,8 @@
 #include <vector>
 
 namespace storage {
+// Manage slots to rocksdb indexes
+// TODO(wangshaoyi): temporarily mock return
 class SlotIndexer {
 public:
   SlotIndexer(uint32_t inst_num) : inst_num_(inst_num) {}

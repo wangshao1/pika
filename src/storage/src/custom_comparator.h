@@ -14,8 +14,8 @@
 
 namespace storage {
 /* list data key pattern
-* | reserve1 | slot_id | key size | key | version | index | reserve2 |
-* |    8B    |    4B   |    4B    |     |    8B   |  8B   |   16B    |
+* | reserve1 | db_id | slot_id | key size | key | version | index | reserve2 |
+* |    8B    |   2B  |    2B   |    4B    |     |    8B   |  8B   |   16B    |
 */
 class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
  public:
@@ -30,10 +30,10 @@ class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
     const char* ptr_b = b.data();
     auto a_size = static_cast<int32_t>(a.size());
     auto b_size = static_cast<int32_t>(b.size());
-    int32_t key_a_len = DecodeFixed32(ptr_a + sizeof(uint64_t) + sizeof(int32_t));
-    int32_t key_b_len = DecodeFixed32(ptr_b + sizeof(uint64_t) + sizeof(int32_t));
-    ptr_a += 2 * sizeof(int32_t) + sizeof(uint64_t);
-    ptr_b += 2 * sizeof(int32_t) + sizeof(uint64_t);
+    uint32_t key_a_len = DecodeFixed32(ptr_a + sizeof(uint64_t) + 2 * sizeof(uint16_t));
+    uint32_t key_b_len = DecodeFixed32(ptr_b + sizeof(uint64_t) + 2 * sizeof(uint16_t));
+    ptr_a += sizeof(uint64_t) + 2 * sizeof(uint16_t) + sizeof(uint32_t);
+    ptr_b += sizeof(uint64_t) + 2 * sizeof(uint16_t) + sizeof(uint32_t);
     rocksdb::Slice sets_key_a(ptr_a, key_a_len);
     rocksdb::Slice sets_key_b(ptr_b, key_b_len);
     ptr_a += key_a_len;
@@ -83,8 +83,8 @@ class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
 };
 
 /* zset score key pattern
- *  | <Reserve 1> | <SlotID> |  <Key Size>  |      <Key>      |  <Version>  |  <Score>  | <Member> | <Reserve2> |
- *  |   8 Bytes   | 4 Bytes  |   4 Bytes    |  Key Size Bytes |   8 Bytes   |  8 Bytes  |          |     16B    |
+ *  | <Reserve 1> |  <DBID>  | <SlotID> |  <Key Size>  |      <Key>      |  <Version>  |  <Score>  | <Member> | <Reserve2> |
+ *  |   8 Bytes   | 2 Bytes  | 2 Bytes  |   4 Bytes    |  Key Size Bytes |   8 Bytes   |  8 Bytes  |          |     16B    |
  */
 class ZSetsScoreKeyComparatorImpl : public rocksdb::Comparator {
  public:

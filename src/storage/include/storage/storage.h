@@ -116,7 +116,7 @@ enum class OptionType {
   kColumnFamily,
 };
 
-// TODO(wangshaoyi): manual compaction相关
+// TODO(wangshaoyi): about manual compaction
 enum ColumnFamilyType { kMeta, kData, kMetaAndData };
 
 enum AGGREGATE { SUM, MIN, MAX };
@@ -125,7 +125,7 @@ enum BitOpType { kBitOpAnd = 1, kBitOpOr, kBitOpXor, kBitOpNot, kBitOpDefault };
 
 enum Operation { kNone = 0, kCleanAll, kCleanStrings, kCleanHashes, kCleanZSets, kCleanSets, kCleanLists, kCompactKey };
 
-// TODO(wangshaoyi): manual compaction相关
+// TODO(wangshaoyi): about manual compaction
 struct BGTask {
   DataType type;
   Operation operation;

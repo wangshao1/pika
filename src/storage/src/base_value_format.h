@@ -57,7 +57,7 @@ class InternalValue {
   virtual size_t AppendTimestampAndVersion() = 0;
 
  protected:
-  char space_[256];
+  char space_[200];
   char* start_ = nullptr;
   rocksdb::Slice user_value_;
   uint64_t version_ = 0;

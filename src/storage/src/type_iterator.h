@@ -1,3 +1,7 @@
+//  Copyright (c) 2017-present, Qihoo, Inc.  All rights reserved.
+//  This source code is licensed under the BSD-style license found in the
+//  LICENSE file in the root directory of this source tree. An additional grant
+//  of patent rights can be found in the PATENTS file in the same directory.
 #ifndef TYPE_ITERATOR_H_
 #define TYPE_ITERATOR_H_
 
@@ -118,7 +122,6 @@ public:
   }
 private:
   std::string pattern_;
-
 };
 
 class HashesIterator : public TypeIterator {
@@ -229,10 +232,13 @@ private:
   std::string pattern_;
 };
 
+
+using IterSptr = std::shared_ptr<TypeIterator>;
+
 class MinMergeComparator {
 public:
   MinMergeComparator(const Comparator* cmp) : cmp_(cmp) {}
-  bool operator() (TypeIterator* a, TypeIterator* b) {
+  bool operator() (IterSptr a, IterSptr b) {
     return cmp_->Compare(a->Key(), b->Key()) > 0;
   }
 private:
@@ -242,19 +248,19 @@ private:
 class MaxMergeComparator {
 public:
   MaxMergeComparator(const Comparator* cmp) : cmp_(cmp) {}
-  bool operator() (TypeIterator* a, TypeIterator* b) {
+  bool operator() (IterSptr a, IterSptr b) {
     return cmp_->Compare(a->Key(), b->Key()) < 0;
   }
 private:
   const Comparator* cmp_;
 };
 
-using MergerMinIterHeap = pstd::BinaryHeap<TypeIterator*, MinMergeComparator>;
-using MergerMaxIterHeap = pstd::BinaryHeap<TypeIterator*, MaxMergeComparator>;
+using MergerMinIterHeap = pstd::BinaryHeap<IterSptr, MinMergeComparator>;
+using MergerMaxIterHeap = pstd::BinaryHeap<IterSptr, MaxMergeComparator>;
 
 class MergingIterator {
 public:
-  MergingIterator(std::vector<TypeIterator*> children)
+  MergingIterator(const std::vector<IterSptr>& children)
       :  current_(nullptr), min_heap_(children[0]->GetComparator()),
          max_heap_(children[0]->GetComparator()),
          direction_(kForward) {
@@ -267,13 +273,7 @@ public:
     current_ = min_heap_.empty() ? nullptr : min_heap_.top();
   }
 
-  ~MergingIterator() {
-    for (int i = 0; i < children_.size(); i++) {
-      auto iter = children_[i];
-      delete iter;
-    }
-    children_.clear();
-  }
+  ~MergingIterator() {}
 
   bool Valid() const { return current_ != nullptr; }
 
@@ -391,8 +391,8 @@ private:
 
   MergerMinIterHeap min_heap_;
   MergerMaxIterHeap max_heap_;
-  std::vector<TypeIterator*> children_;
-  TypeIterator* current_;
+  std::vector<IterSptr> children_;
+  IterSptr current_;
   Direction direction_;
 };
 

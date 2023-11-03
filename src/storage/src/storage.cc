@@ -1037,11 +1037,12 @@ int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& 
   }
 
   for (const auto& type : types) {
-    std::vector<TypeIterator*> inst_iters;
+    std::vector<IterSptr> inst_iters;
     for (const auto& inst : insts_) {
-      TypeIterator* iter = inst->CreateIterator(type,
-          pattern, nullptr/*lower_bound*/, nullptr/*upper_bound*/);
-      inst_iters.push_back(iter);
+      IterSptr iter_sptr;
+      iter_sptr.reset(inst->CreateIterator(type, pattern, nullptr/*lower_bound*/, nullptr/*upper_bound*/));
+
+      inst_iters.push_back(iter_sptr);
     }
     bool is_finish = true;
 
@@ -1094,11 +1095,12 @@ Status Storage::PKScanRange(const DataType& data_type, const Slice& key_start, c
     return Status::InvalidArgument("error in given range");
   }
 
-  std::vector<TypeIterator*> inst_iters;
+  std::vector<IterSptr> inst_iters;
   for (const auto& inst : insts_) {
-    TypeIterator* iter = inst->CreateIterator(data_type, pattern.ToString(),
-        nullptr/*lower_bound*/, &base_key_end_slice/*upper_bound*/);
-    inst_iters.push_back(iter);
+    IterSptr iter_sptr;
+    iter_sptr.reset(inst->CreateIterator(data_type, pattern.ToString(),
+        nullptr/*lower_bound*/, &base_key_end_slice/*upper_bound*/));
+    inst_iters.push_back(iter_sptr);
   }
   MergingIterator miter(inst_iters);
   if (start_no_limit) {
@@ -1136,11 +1138,12 @@ Status Storage::PKRScanRange(const DataType& data_type, const Slice& key_start, 
     return Status::InvalidArgument("error in given range");
   }
 
-  std::vector<TypeIterator*> inst_iters;
+  std::vector<IterSptr> inst_iters;
   for (const auto& inst : insts_) {
-    TypeIterator* iter = inst->CreateIterator(data_type, pattern.ToString(),
-        &base_key_start_slice/*lower_bound*/, nullptr/*upper_bound*/);
-    inst_iters.push_back(iter);
+    IterSptr iter_sptr;
+    iter_sptr.reset(inst->CreateIterator(data_type, pattern.ToString(),
+        &base_key_start_slice/*lower_bound*/, nullptr/*upper_bound*/));
+    inst_iters.push_back(iter_sptr);
   }
   MergingIterator miter(inst_iters);
   if (start_no_limit) {
@@ -1210,11 +1213,12 @@ Status Storage::Scanx(const DataType& data_type, const std::string& start_key, c
   keys->clear();
   next_key->clear();
 
-  std::vector<TypeIterator*> inst_iters;
+  std::vector<IterSptr> inst_iters;
   for (const auto& inst : insts_) {
-    TypeIterator* iter = inst->CreateIterator(data_type, pattern,
-        nullptr/*lower_bound*/, nullptr/*upper_bound*/);
-    inst_iters.push_back(iter);
+    IterSptr iter_sptr;
+    iter_sptr.reset(inst->CreateIterator(data_type, pattern,
+        nullptr/*lower_bound*/, nullptr/*upper_bound*/));
+    inst_iters.push_back(iter_sptr);
   }
 
 
@@ -1465,11 +1469,12 @@ Status Storage::Keys(const DataType& data_type, const std::string& pattern, std:
   }
 
   for (const auto& type : types) {
-    std::vector<TypeIterator*> inst_iters;
+    std::vector<IterSptr> inst_iters;
     for (const auto& inst : insts_) {
-      TypeIterator* iter = inst->CreateIterator(type, pattern,
-          nullptr/*lower_bound*/, nullptr/*upper_bound*/);
-      inst_iters.push_back(iter);
+      IterSptr inst_iter;
+      inst_iter.reset(inst->CreateIterator(type, pattern,
+          nullptr/*lower_bound*/, nullptr/*upper_bound*/));
+      inst_iters.push_back(inst_iter);
     }
 
     MergingIterator miter(inst_iters);

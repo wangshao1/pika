@@ -33,7 +33,7 @@ class ZSetsScoreKey {
   }
 
   Slice Encode() {
-    size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(version_) + sizoef(score_) + sizeof(reserve2_);
+    size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(version_) + sizeof(score_) + sizeof(reserve2_);
     size_t usize = key_.size() + sizeof(uint32_t) + member_.size();
     size_t needed = meta_size + usize;
     char* dst = nullptr;
@@ -75,7 +75,7 @@ class ZSetsScoreKey {
     memcpy(dst, member_.data(), member_.size());
     dst += member_.size();
     // reserve2 16 byte
-    memcpy(dst, reserve2_, sizoef(reserve2_));
+    memcpy(dst, reserve2_, sizeof(reserve2_));
     return Slice(start_, needed);
   }
 
@@ -83,7 +83,7 @@ class ZSetsScoreKey {
   char* start_ = nullptr;
   char space_[200];
   char reserve1_[8] = {0};
-  uint16_t db_id_ = uin16_t(-1);
+  uint16_t db_id_ = uint16_t(-1);
   uint16_t slot_id_ = uint16_t(-1);
   Slice key_;
   uint64_t version_ = uint64_t(-1);
@@ -144,9 +144,11 @@ class ParsedZSetsScoreKey {
  private:
   Slice key_;
   Slice meta_key_prefix_;
+  char reserve1_[8] = {0};
   uint64_t version_ = uint64_t(-1);
   uint16_t slot_id_ = uint16_t(-1);
   uint16_t db_id_ = uint16_t(-1);
+  char reserve2_[16] = {0};
   double score_ = 0.0;
   Slice member_;
 };

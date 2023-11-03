@@ -235,6 +235,10 @@ int CalculateDataStartAndEndKey(const std::string& key, std::string* data_start_
   return 0;
 }
 
+// requires:
+// 1. pattern's length >= 2
+// 2. tail character is '*'
+// 3. other position's charactor cannot be *, ?, [,]
 bool isTailWildcard(const std::string& pattern) {
   if (pattern.size() < 2) {
     return false;

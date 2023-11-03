@@ -57,7 +57,7 @@ class InternalValue {
   virtual size_t AppendTimestampAndVersion() = 0;
 
  protected:
-  char space_[200];
+  char space_[256];
   char* start_ = nullptr;
   rocksdb::Slice user_value_;
   uint64_t version_ = 0;
@@ -81,7 +81,7 @@ class ParsedInternalValue {
 
   virtual ~ParsedInternalValue() = default;
 
-  rocksdb::Slice user_value() { return user_value_; }
+  rocksdb::Slice UserValue() { return user_value_; }
 
   uint64_t version() { return version_; }
 

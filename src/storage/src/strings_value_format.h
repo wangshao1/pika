@@ -63,7 +63,7 @@ class ParsedStringsValue : public ParsedInternalValue {
   // Strings type do not have version field;
   void SetVersionToValue() override {}
 
-  rocksdb::Slice value() { return user_value_; }
+  rocksdb::Slice Value() { return user_value_; }
 
   static const size_t kStringsValueSuffixLength = 4 * sizeof(uint64_t);
 };

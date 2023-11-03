@@ -3,26 +3,26 @@
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 
-#include "storage/storage.h"
-#include "storage/util.h"
+#include <utility>
+#include <algorithm>
 
 #include <glog/logging.h>
 
-#include <utility>
-
+#include "storage/util.h"
+#include "storage/storage.h"
 #include "scope_snapshot.h"
 #include "src/lru_cache.h"
 #include "src/mutex_impl.h"
 #include "src/options_helper.h"
-#include "src/redis_hashes.h"
 #include "src/redis_hyperloglog.h"
-#include "src/redis_lists.h"
-#include "src/redis_sets.h"
-#include "src/redis_strings.h"
-#include "src/redis_zsets.h"
+#include "src/type_iterator.h"
+#include "include/pika_conf.h"
+#include "src/instance.h"
+
+extern std::unique_ptr<PikaConf> g_pika_conf;
 
 namespace storage {
-
+class Instance;
 Status StorageOptions::ResetOptions(const OptionType& option_type,
                                     const std::unordered_map<std::string, std::string>& options_map) {
   std::unordered_map<std::string, MemberTypeInfo>& options_member_type_info = mutable_cf_options_member_type_info;
@@ -52,11 +52,16 @@ Status StorageOptions::ResetOptions(const OptionType& option_type,
 Storage::Storage() {
   cursors_store_ = std::make_unique<LRUCache<std::string, std::string>>();
   cursors_store_->SetCapacity(5000);
+  slot_indexer_ = std::make_unique<SlotIndexer>(g_pika_conf->db_instance_num());
+  slot_num_ = g_pika_conf->default_slot_num();
 
+  /*
+  //TODO(wangshaoyi): start each bg thread in each instance
   Status s = StartBGThread();
   if (!s.ok()) {
     LOG(FATAL) << "start bg thread failed, " << s.ToString();
   }
+  */
 }
 
 Storage::~Storage() {
@@ -64,264 +69,424 @@ Storage::~Storage() {
   bg_tasks_cond_var_.notify_one();
 
   if (is_opened_) {
-    rocksdb::CancelAllBackgroundWork(strings_db_->GetDB(), true);
-    rocksdb::CancelAllBackgroundWork(hashes_db_->GetDB(), true);
-    rocksdb::CancelAllBackgroundWork(sets_db_->GetDB(), true);
-    rocksdb::CancelAllBackgroundWork(lists_db_->GetDB(), true);
-    rocksdb::CancelAllBackgroundWork(zsets_db_->GetDB(), true);
-  }
-
-  int ret = 0;
-  if ((ret = pthread_join(bg_tasks_thread_id_, nullptr)) != 0) {
-    LOG(ERROR) << "pthread_join failed with bgtask thread error " << ret;
+    for (const auto& inst : insts_) {
+      inst->Close();
+    }
   }
 }
 
-static std::string AppendSubDirectory(const std::string& db_path, const std::string& sub_db) {
+static std::string AppendSubDirectory(const std::string& db_path, int index) {
   if (db_path.back() == '/') {
-    return db_path + sub_db;
+    return db_path + std::to_string(index);
   } else {
-    return db_path + "/" + sub_db;
+    return db_path + "/" + std::to_string(index);
   }
 }
 
 Status Storage::Open(const StorageOptions& storage_options, const std::string& db_path) {
   mkpath(db_path.c_str(), 0755);
 
-  strings_db_ = std::make_unique<RedisStrings>(this, kStrings);
-  Status s = strings_db_->Open(storage_options, AppendSubDirectory(db_path, "strings"));
-  if (!s.ok()) {
-    LOG(FATAL) << "open kv db failed, " << s.ToString();
+  int inst_count = g_pika_conf->db_instance_num();
+  for (int index = 0; index < inst_count; index++) {
+    insts_.emplace_back(std::make_shared<Instance>(this, index));
+    Status s = insts_.back()->Open(storage_options, AppendSubDirectory(db_path, index));
+    if (!s.ok()) {
+      LOG(FATAL) << "open db failed" << s.ToString();
+    }
   }
 
-  hashes_db_ = std::make_unique<RedisHashes>(this, kHashes);
-  s = hashes_db_->Open(storage_options, AppendSubDirectory(db_path, "hashes"));
-  if (!s.ok()) {
-    LOG(FATAL) << "open hashes db failed, " << s.ToString();
-  }
-
-  sets_db_ = std::make_unique<RedisSets>(this, kSets);
-  s = sets_db_->Open(storage_options, AppendSubDirectory(db_path, "sets"));
-  if (!s.ok()) {
-    LOG(FATAL) << "open set db failed, " << s.ToString();
-  }
-
-  lists_db_ = std::make_unique<RedisLists>(this, kLists);
-  s = lists_db_->Open(storage_options, AppendSubDirectory(db_path, "lists"));
-  if (!s.ok()) {
-    LOG(FATAL) << "open list db failed, " << s.ToString();
-  }
-
-  zsets_db_ = std::make_unique<RedisZSets>(this, kZSets);
-  s = zsets_db_->Open(storage_options, AppendSubDirectory(db_path, "zsets"));
-  if (!s.ok()) {
-    LOG(FATAL) << "open zset db failed, " << s.ToString();
-  }
   is_opened_.store(true);
   return Status::OK();
 }
 
-Status Storage::GetStartKey(const DataType& dtype, int64_t cursor, std::string* start_key) {
+Status Storage::LoadCursorStartKey(const DataType& dtype, int64_t cursor, char* type, std::string* start_key) {
   std::string index_key = DataTypeTag[dtype] + std::to_string(cursor);
-  return cursors_store_->Lookup(index_key, start_key);
+  std::string index_value;
+  Status s = cursors_store_->Lookup(index_key, &index_value);
+  if (!s.ok() || index_value.size() < 3) {
+    return s;
+  }
+  *type = index_value[0];
+  *start_key = index_value.substr(1);
+  return s;
 }
 
-Status Storage::StoreCursorStartKey(const DataType& dtype, int64_t cursor, const std::string& next_key) {
+Status Storage::StoreCursorStartKey(const DataType& dtype, int64_t cursor, char type, const std::string& next_key) {
   std::string index_key = DataTypeTag[dtype] + std::to_string(cursor);
-  return cursors_store_->Insert(index_key, next_key);
+  // format: data_type tag(1B) | start_key
+  std::string index_value(1, type);
+  index_value.append(next_key);
+  return cursors_store_->Insert(index_key, index_value);
+}
+
+std::shared_ptr<Instance> Storage::GetDBInstance(const Slice& key) {
+  return GetDBInstance(key.ToString());
+}
+
+std::shared_ptr<Instance> Storage::GetDBInstance(const std::string& key) {
+  if (g_pika_conf->classic_mode()) {
+    return insts_[0];
+  }
+  auto inst_index = slot_indexer_->GetInstanceID(GetSlotID(key));
+  return insts_[inst_index];
 }
 
 // Strings Commands
-Status Storage::Set(const Slice& key, const Slice& value) { return strings_db_->Set(key, value); }
-
-Status Storage::Setxx(const Slice& key, const Slice& value, int32_t* ret, const int32_t ttl) {
-  return strings_db_->Setxx(key, value, ret, ttl);
+Status Storage::Set(const Slice& key, const Slice& value) {
+  auto inst = GetDBInstance(key);
+  return inst->Set(key, value);
 }
 
-Status Storage::Get(const Slice& key, std::string* value) { return strings_db_->Get(key, value); }
+Status Storage::Setxx(const Slice& key, const Slice& value, int32_t* ret, const int32_t ttl) {
+  auto inst = GetDBInstance(key);
+  return inst->Setxx(key, value, ret, ttl);
+}
+
+Status Storage::Get(const Slice& key, std::string* value) {
+  auto inst = GetDBInstance(key);
+  return inst->Get(key, value);
+}
 
 Status Storage::GetSet(const Slice& key, const Slice& value, std::string* old_value) {
-  return strings_db_->GetSet(key, value, old_value);
+  auto inst = GetDBInstance(key);
+  return inst->GetSet(key, value, old_value);
 }
 
 Status Storage::SetBit(const Slice& key, int64_t offset, int32_t value, int32_t* ret) {
-  return strings_db_->SetBit(key, offset, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->SetBit(key, offset, value, ret);
 }
 
-Status Storage::GetBit(const Slice& key, int64_t offset, int32_t* ret) { return strings_db_->GetBit(key, offset, ret); }
+Status Storage::GetBit(const Slice& key, int64_t offset, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->GetBit(key, offset, ret);
+}
 
-Status Storage::MSet(const std::vector<KeyValue>& kvs) { return strings_db_->MSet(kvs); }
+Status Storage::MSet(const std::vector<KeyValue>& kvs) {
+  Status s;
+  for (const auto& kv : kvs) {
+    auto inst = GetDBInstance(kv.key);
+    s = inst->Set(Slice(kv.key), Slice(kv.value));
+    if (!s.ok()) {
+      return s;
+    }
+  }
+  return s;
+}
 
 Status Storage::MGet(const std::vector<std::string>& keys, std::vector<ValueStatus>* vss) {
-  return strings_db_->MGet(keys, vss);
+  vss->clear();
+  Status s;
+  for(const auto& key : keys) {
+    auto inst = GetDBInstance(key);
+    std::string value;
+    s = inst->Get(key, &value);
+    if (s.ok()) {
+      vss->push_back({value, Status::OK()});
+    } else if(s.IsNotFound()) {
+      vss->push_back({std::string(), Status::NotFound()});
+    } else {
+      vss->clear();
+      return s;
+    }
+  }
+  return s;
 }
 
 Status Storage::Setnx(const Slice& key, const Slice& value, int32_t* ret, const int32_t ttl) {
-  return strings_db_->Setnx(key, value, ret, ttl);
+  auto inst = GetDBInstance(key);
+  return inst->Setnx(key, value, ret, ttl);
 }
 
-Status Storage::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) { return strings_db_->MSetnx(kvs, ret); }
+// disallowed in codis, only runs in pika classic mode
+Status Storage::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) {
+  assert(g_pika_conf->classic_mode());
+  Status s;
+  for (const auto& kv : kvs) {
+    auto inst = GetDBInstance(kv.key);
+    std::string value;
+    s = inst->Get(Slice(kv.key), &value);
+    if (s.ok()) {
+      return s;
+    }
+    if (!s.IsNotFound()) {
+      return s;
+    }
+  }
+
+  for (const auto& kv : kvs) {
+    auto inst = GetDBInstance(kv.key);
+    s = inst->Set(Slice(kv.key), Slice(kv.value));
+    if (!s.ok()) {
+      return s;
+    }
+  }
+  return s;
+}
 
 Status Storage::Setvx(const Slice& key, const Slice& value, const Slice& new_value, int32_t* ret, const int32_t ttl) {
-  return strings_db_->Setvx(key, value, new_value, ret, ttl);
+  auto inst = GetDBInstance(key);
+  return inst->Setvx(key, value, new_value, ret, ttl);
 }
 
 Status Storage::Delvx(const Slice& key, const Slice& value, int32_t* ret) {
-  return strings_db_->Delvx(key, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->Delvx(key, value, ret);
 }
 
 Status Storage::Setrange(const Slice& key, int64_t start_offset, const Slice& value, int32_t* ret) {
-  return strings_db_->Setrange(key, start_offset, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->Setrange(key, start_offset, value, ret);
 }
 
 Status Storage::Getrange(const Slice& key, int64_t start_offset, int64_t end_offset, std::string* ret) {
-  return strings_db_->Getrange(key, start_offset, end_offset, ret);
+  auto inst = GetDBInstance(key);
+  return inst->Getrange(key, start_offset, end_offset, ret);
 }
 
 Status Storage::Append(const Slice& key, const Slice& value, int32_t* ret) {
-  return strings_db_->Append(key, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->Append(key, value, ret);
 }
 
 Status Storage::BitCount(const Slice& key, int64_t start_offset, int64_t end_offset, int32_t* ret, bool have_range) {
-  return strings_db_->BitCount(key, start_offset, end_offset, ret, have_range);
+  auto inst = GetDBInstance(key);
+  return inst->BitCount(key, start_offset, end_offset, ret, have_range);
 }
 
+// TODO(wangshaoyi): class mode implementation
+// disallowed in codis proxy, only runs in classic mode
 Status Storage::BitOp(BitOpType op, const std::string& dest_key, const std::vector<std::string>& src_keys,
                       std::string &value_to_dest, int64_t* ret) {
-  return strings_db_->BitOp(op, dest_key, src_keys, value_to_dest, ret);
+  assert(g_pika_conf->classic_mode());
+  return insts_[0]->BitOp(op, dest_key, src_keys, value_to_dest, ret);
 }
 
-Status Storage::BitPos(const Slice& key, int32_t bit, int64_t* ret) { return strings_db_->BitPos(key, bit, ret); }
+Status Storage::BitPos(const Slice& key, int32_t bit, int64_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->BitPos(key, bit, ret);
+}
 
 Status Storage::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int64_t* ret) {
-  return strings_db_->BitPos(key, bit, start_offset, ret);
+  auto inst = GetDBInstance(key);
+  return inst->BitPos(key, bit, start_offset, ret);
 }
 
 Status Storage::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int64_t end_offset, int64_t* ret) {
-  return strings_db_->BitPos(key, bit, start_offset, end_offset, ret);
+  auto inst = GetDBInstance(key);
+  return inst->BitPos(key, bit, start_offset, end_offset, ret);
 }
 
-Status Storage::Decrby(const Slice& key, int64_t value, int64_t* ret) { return strings_db_->Decrby(key, value, ret); }
+Status Storage::Decrby(const Slice& key, int64_t value, int64_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->Decrby(key, value, ret);
+}
 
-Status Storage::Incrby(const Slice& key, int64_t value, int64_t* ret) { return strings_db_->Incrby(key, value, ret); }
+Status Storage::Incrby(const Slice& key, int64_t value, int64_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->Incrby(key, value, ret);
+}
 
 Status Storage::Incrbyfloat(const Slice& key, const Slice& value, std::string* ret) {
-  return strings_db_->Incrbyfloat(key, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->Incrbyfloat(key, value, ret);
 }
 
-Status Storage::Setex(const Slice& key, const Slice& value, int32_t ttl) { return strings_db_->Setex(key, value, ttl); }
+Status Storage::Setex(const Slice& key, const Slice& value, int32_t ttl) {
+  auto inst = GetDBInstance(key);
+  return inst->Setex(key, value, ttl);
+}
 
-Status Storage::Strlen(const Slice& key, int32_t* len) { return strings_db_->Strlen(key, len); }
+Status Storage::Strlen(const Slice& key, int32_t* len) {
+  auto inst = GetDBInstance(key);
+  return inst->Strlen(key, len);
+}
 
 Status Storage::PKSetexAt(const Slice& key, const Slice& value, int32_t timestamp) {
-  return strings_db_->PKSetexAt(key, value, timestamp);
+  auto inst = GetDBInstance(key);
+  return inst->PKSetexAt(key, value, timestamp);
 }
 
 // Hashes Commands
 Status Storage::HSet(const Slice& key, const Slice& field, const Slice& value, int32_t* res) {
-  return hashes_db_->HSet(key, field, value, res);
+  auto inst = GetDBInstance(key);
+  return inst->HSet(key, field, value, res);
 }
 
 Status Storage::HGet(const Slice& key, const Slice& field, std::string* value) {
-  return hashes_db_->HGet(key, field, value);
+  auto inst = GetDBInstance(key);
+  return inst->HGet(key, field, value);
 }
 
-Status Storage::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) { return hashes_db_->HMSet(key, fvs); }
+Status Storage::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
+  auto inst = GetDBInstance(key);
+  return inst->HMSet(key, fvs);
+}
 
 Status Storage::HMGet(const Slice& key, const std::vector<std::string>& fields, std::vector<ValueStatus>* vss) {
-  return hashes_db_->HMGet(key, fields, vss);
+  auto inst = GetDBInstance(key);
+  return inst->HMGet(key, fields, vss);
 }
 
-Status Storage::HGetall(const Slice& key, std::vector<FieldValue>* fvs) { return hashes_db_->HGetall(key, fvs); }
+Status Storage::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
+  auto inst = GetDBInstance(key);
+  return inst->HGetall(key, fvs);
+}
 
-Status Storage::HKeys(const Slice& key, std::vector<std::string>* fields) { return hashes_db_->HKeys(key, fields); }
+Status Storage::HKeys(const Slice& key, std::vector<std::string>* fields) {
+  auto inst = GetDBInstance(key);
+  return inst->HKeys(key, fields);
+}
 
-Status Storage::HVals(const Slice& key, std::vector<std::string>* values) { return hashes_db_->HVals(key, values); }
+Status Storage::HVals(const Slice& key, std::vector<std::string>* values) {
+  auto inst = GetDBInstance(key);
+  return inst->HVals(key, values);
+}
 
 Status Storage::HSetnx(const Slice& key, const Slice& field, const Slice& value, int32_t* ret) {
-  return hashes_db_->HSetnx(key, field, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->HSetnx(key, field, value, ret);
 }
 
-Status Storage::HLen(const Slice& key, int32_t* ret) { return hashes_db_->HLen(key, ret); }
+Status Storage::HLen(const Slice& key, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->HLen(key, ret);
+}
 
 Status Storage::HStrlen(const Slice& key, const Slice& field, int32_t* len) {
-  return hashes_db_->HStrlen(key, field, len);
+  auto inst = GetDBInstance(key);
+  return inst->HStrlen(key, field, len);
 }
 
-Status Storage::HExists(const Slice& key, const Slice& field) { return hashes_db_->HExists(key, field); }
+Status Storage::HExists(const Slice& key, const Slice& field) {
+  auto inst = GetDBInstance(key);
+  return inst->HExists(key, field);
+}
 
 Status Storage::HIncrby(const Slice& key, const Slice& field, int64_t value, int64_t* ret) {
-  return hashes_db_->HIncrby(key, field, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->HIncrby(key, field, value, ret);
 }
 
 Status Storage::HIncrbyfloat(const Slice& key, const Slice& field, const Slice& by, std::string* new_value) {
-  return hashes_db_->HIncrbyfloat(key, field, by, new_value);
+  auto inst = GetDBInstance(key);
+  return inst->HIncrbyfloat(key, field, by, new_value);
 }
 
 Status Storage::HDel(const Slice& key, const std::vector<std::string>& fields, int32_t* ret) {
-  return hashes_db_->HDel(key, fields, ret);
+  auto inst = GetDBInstance(key);
+  return inst->HDel(key, fields, ret);
 }
 
 Status Storage::HScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                       std::vector<FieldValue>* field_values, int64_t* next_cursor) {
-  return hashes_db_->HScan(key, cursor, pattern, count, field_values, next_cursor);
+  auto inst = GetDBInstance(key);
+  return inst->HScan(key, cursor, pattern, count, field_values, next_cursor);
 }
 
 Status Storage::HScanx(const Slice& key, const std::string& start_field, const std::string& pattern, int64_t count,
                        std::vector<FieldValue>* field_values, std::string* next_field) {
-  return hashes_db_->HScanx(key, start_field, pattern, count, field_values, next_field);
+  auto inst = GetDBInstance(key);
+  return inst->HScanx(key, start_field, pattern, count, field_values, next_field);
 }
 
 Status Storage::PKHScanRange(const Slice& key, const Slice& field_start, const std::string& field_end,
                              const Slice& pattern, int32_t limit, std::vector<FieldValue>* field_values,
                              std::string* next_field) {
-  return hashes_db_->PKHScanRange(key, field_start, field_end, pattern, limit, field_values, next_field);
+  auto inst = GetDBInstance(key);
+  return inst->PKHScanRange(key, field_start, field_end, pattern, limit, field_values, next_field);
 }
 
 Status Storage::PKHRScanRange(const Slice& key, const Slice& field_start, const std::string& field_end,
                               const Slice& pattern, int32_t limit, std::vector<FieldValue>* field_values,
                               std::string* next_field) {
-  return hashes_db_->PKHRScanRange(key, field_start, field_end, pattern, limit, field_values, next_field);
+  auto inst = GetDBInstance(key);
+  return inst->PKHRScanRange(key, field_start, field_end, pattern, limit, field_values, next_field);
 }
 
 // Sets Commands
 Status Storage::SAdd(const Slice& key, const std::vector<std::string>& members, int32_t* ret) {
-  return sets_db_->SAdd(key, members, ret);
+  auto inst = GetDBInstance(key);
+  return inst->SAdd(key, members, ret);
 }
 
-Status Storage::SCard(const Slice& key, int32_t* ret) { return sets_db_->SCard(key, ret); }
+Status Storage::SCard(const Slice& key, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->SCard(key, ret);
+}
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SDiff(const std::vector<std::string>& keys, std::vector<std::string>* members) {
-  return sets_db_->SDiff(keys, members);
+  Status s;
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    s = inst->SDiff(keys, members);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
+  return s;
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SDiffstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
-  return sets_db_->SDiffstore(destination, keys, value_to_dest, ret);
+  Status s;
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    s = inst->SDiffstore(destination, keys, value_to_dest, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
+  return s;
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SInter(const std::vector<std::string>& keys, std::vector<std::string>* members) {
-  return sets_db_->SInter(keys, members);
+  Status s;
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    s = inst->SInter(keys, members);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
+  return s;
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
-  return sets_db_->SInterstore(destination, keys, value_to_dest, ret);
+  Status s;
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    s = inst->SInterstore(destination, keys, value_to_dest, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
+  return s;
 }
 
 Status Storage::SIsmember(const Slice& key, const Slice& member, int32_t* ret) {
-  return sets_db_->SIsmember(key, member, ret);
+  auto inst = GetDBInstance(key);
+  return inst->SIsmember(key, member, ret);
 }
 
 Status Storage::SMembers(const Slice& key, std::vector<std::string>* members) {
-  return sets_db_->SMembers(key, members);
+  auto inst = GetDBInstance(key);
+  return inst->SMembers(key, members);
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SMove(const Slice& source, const Slice& destination, const Slice& member, int32_t* ret) {
-  return sets_db_->SMove(source, destination, member, ret);
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(source);
+    return inst->SMove(source, destination, member, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
 }
 
 Status Storage::SPop(const Slice& key, std::vector<std::string>* members, int64_t count) {
   bool need_compact = false;
-  Status status = sets_db_->SPop(key, members, &need_compact, count);
+  auto inst = GetDBInstance(key);
+  Status status = inst->SPop(key, members, &need_compact, count);
   if (need_compact) {
     AddBGTask({kSets, kCompactKey, key.ToString()});
   }
@@ -329,189 +494,269 @@ Status Storage::SPop(const Slice& key, std::vector<std::string>* members, int64_
 }
 
 Status Storage::SRandmember(const Slice& key, int32_t count, std::vector<std::string>* members) {
-  return sets_db_->SRandmember(key, count, members);
+  auto inst = GetDBInstance(key);
+  return inst->SRandmember(key, count, members);
 }
 
 Status Storage::SRem(const Slice& key, const std::vector<std::string>& members, int32_t* ret) {
-  return sets_db_->SRem(key, members, ret);
+  auto inst = GetDBInstance(key);
+  return inst->SRem(key, members, ret);
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SUnion(const std::vector<std::string>& keys, std::vector<std::string>* members) {
-  return sets_db_->SUnion(keys, members);
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    return inst->SUnion(keys, members);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SUnionstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
-  return sets_db_->SUnionstore(destination, keys, value_to_dest, ret);
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = SUnionstore(destination, keys, value_to_dest, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
 }
 
 Status Storage::SScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                       std::vector<std::string>* members, int64_t* next_cursor) {
-  return sets_db_->SScan(key, cursor, pattern, count, members, next_cursor);
+  auto inst = GetDBInstance(key);
+  return inst->SScan(key, cursor, pattern, count, members, next_cursor);
 }
 
 Status Storage::LPush(const Slice& key, const std::vector<std::string>& values, uint64_t* ret) {
-  return lists_db_->LPush(key, values, ret);
+  auto inst = GetDBInstance(key);
+  return inst->LPush(key, values, ret);
 }
 
 Status Storage::RPush(const Slice& key, const std::vector<std::string>& values, uint64_t* ret) {
-  return lists_db_->RPush(key, values, ret);
+  auto inst = GetDBInstance(key);
+  return inst->RPush(key, values, ret);
 }
 
 Status Storage::LRange(const Slice& key, int64_t start, int64_t stop, std::vector<std::string>* ret) {
-  return lists_db_->LRange(key, start, stop, ret);
+  auto inst = GetDBInstance(key);
+  return inst->LRange(key, start, stop, ret);
 }
 
-Status Storage::LTrim(const Slice& key, int64_t start, int64_t stop) { return lists_db_->LTrim(key, start, stop); }
+Status Storage::LTrim(const Slice& key, int64_t start, int64_t stop) {
+  auto inst = GetDBInstance(key);
+  return inst->LTrim(key, start, stop);
+}
 
-Status Storage::LLen(const Slice& key, uint64_t* len) { return lists_db_->LLen(key, len); }
+Status Storage::LLen(const Slice& key, uint64_t* len) {
+  auto inst = GetDBInstance(key);
+  return inst->LLen(key, len);
+}
 
-Status Storage::LPop(const Slice& key, int64_t count, std::vector<std::string>* elements) { return lists_db_->LPop(key, count, elements); }
+Status Storage::LPop(const Slice& key, int64_t count, std::vector<std::string>* elements) {
+  auto inst = GetDBInstance(key);
+  return inst->LPop(key, count, elements);
+}
 
-Status Storage::RPop(const Slice& key, int64_t count, std::vector<std::string>* elements) { return lists_db_->RPop(key, count, elements); }
+Status Storage::RPop(const Slice& key, int64_t count, std::vector<std::string>* elements) {
+  auto inst = GetDBInstance(key);
+  return inst->RPop(key, count, elements);
+}
 
 Status Storage::LIndex(const Slice& key, int64_t index, std::string* element) {
-  return lists_db_->LIndex(key, index, element);
+  auto inst = GetDBInstance(key);
+  return inst->LIndex(key, index, element);
 }
 
 Status Storage::LInsert(const Slice& key, const BeforeOrAfter& before_or_after, const std::string& pivot,
                         const std::string& value, int64_t* ret) {
-  return lists_db_->LInsert(key, before_or_after, pivot, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->LInsert(key, before_or_after, pivot, value, ret);
 }
 
 Status Storage::LPushx(const Slice& key, const std::vector<std::string>& values, uint64_t* len) {
-  return lists_db_->LPushx(key, values, len);
+  auto inst = GetDBInstance(key);
+  return inst->LPushx(key, values, len);
 }
 
 Status Storage::RPushx(const Slice& key, const std::vector<std::string>& values, uint64_t* len) {
-  return lists_db_->RPushx(key, values, len);
+  auto inst = GetDBInstance(key);
+  return inst->RPushx(key, values, len);
 }
 
 Status Storage::LRem(const Slice& key, int64_t count, const Slice& value, uint64_t* ret) {
-  return lists_db_->LRem(key, count, value, ret);
+  auto inst = GetDBInstance(key);
+  return inst->LRem(key, count, value, ret);
 }
 
-Status Storage::LSet(const Slice& key, int64_t index, const Slice& value) { return lists_db_->LSet(key, index, value); }
+Status Storage::LSet(const Slice& key, int64_t index, const Slice& value) {
+  auto inst = GetDBInstance(key);
+  return inst->LSet(key, index, value);
+}
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::RPoplpush(const Slice& source, const Slice& destination, std::string* element) {
-  return lists_db_->RPoplpush(source, destination, element);
+  if (!g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(source);
+  } else {
+    // TODO(wangshaoyi): implement classic mode
+  }
 }
 
 Status Storage::ZPopMax(const Slice& key, const int64_t count, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZPopMax(key, count, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZPopMax(key, count, score_members);
 }
 
 Status Storage::ZPopMin(const Slice& key, const int64_t count, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZPopMin(key, count, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZPopMin(key, count, score_members);
 }
 
 Status Storage::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_members, int32_t* ret) {
-  return zsets_db_->ZAdd(key, score_members, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZAdd(key, score_members, ret);
 }
 
-Status Storage::ZCard(const Slice& key, int32_t* ret) { return zsets_db_->ZCard(key, ret); }
+Status Storage::ZCard(const Slice& key, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->ZCard(key, ret);
+}
 
 Status Storage::ZCount(const Slice& key, double min, double max, bool left_close, bool right_close, int32_t* ret) {
-  return zsets_db_->ZCount(key, min, max, left_close, right_close, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZCount(key, min, max, left_close, right_close, ret);
 }
 
 Status Storage::ZIncrby(const Slice& key, const Slice& member, double increment, double* ret) {
-  return zsets_db_->ZIncrby(key, member, increment, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZIncrby(key, member, increment, ret);
 }
 
 Status Storage::ZRange(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZRange(key, start, stop, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZRange(key, start, stop, score_members);
 }
 
 Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                               std::vector<ScoreMember>* score_members) {
   // maximum number of zset is std::numeric_limits<int32_t>::max()
-  return zsets_db_->ZRangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(), 0,
+  auto inst = GetDBInstance(key);
+  return inst->ZRangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(), 0,
                                   score_members);
 }
 
 Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                               int64_t count, int64_t offset, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZRangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZRangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
 }
 
 Status Storage::ZRank(const Slice& key, const Slice& member, int32_t* rank) {
-  return zsets_db_->ZRank(key, member, rank);
+  auto inst = GetDBInstance(key);
+  return inst->ZRank(key, member, rank);
 }
 
 Status Storage::ZRem(const Slice& key, const std::vector<std::string>& members, int32_t* ret) {
-  return zsets_db_->ZRem(key, members, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZRem(key, members, ret);
 }
 
 Status Storage::ZRemrangebyrank(const Slice& key, int32_t start, int32_t stop, int32_t* ret) {
-  return zsets_db_->ZRemrangebyrank(key, start, stop, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZRemrangebyrank(key, start, stop, ret);
 }
 
 Status Storage::ZRemrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                                  int32_t* ret) {
-  return zsets_db_->ZRemrangebyscore(key, min, max, left_close, right_close, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZRemrangebyscore(key, min, max, left_close, right_close, ret);
 }
 
 Status Storage::ZRevrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                                  int64_t count, int64_t offset, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZRevrangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZRevrangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
 }
 
 Status Storage::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members) {
-  return zsets_db_->ZRevrange(key, start, stop, score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZRevrange(key, start, stop, score_members);
 }
 
 Status Storage::ZRevrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                                  std::vector<ScoreMember>* score_members) {
   // maximum number of zset is std::numeric_limits<int32_t>::max()
-  return zsets_db_->ZRevrangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(), 0,
-                                     score_members);
+  auto inst = GetDBInstance(key);
+  return inst->ZRevrangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(),
+                                              0, score_members);
 }
 
 Status Storage::ZRevrank(const Slice& key, const Slice& member, int32_t* rank) {
-  return zsets_db_->ZRevrank(key, member, rank);
+  auto inst = GetDBInstance(key);
+  return inst->ZRevrank(key, member, rank);
 }
 
 Status Storage::ZScore(const Slice& key, const Slice& member, double* ret) {
-  return zsets_db_->ZScore(key, member, ret);
+  auto inst = GetDBInstance(key);
+  return inst->ZScore(key, member, ret);
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::string>& keys,
-                            const std::vector<double>& weights, const AGGREGATE agg, std::map<std::string, double>& value_to_dest, int32_t* ret) {
-  return zsets_db_->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::map<std::string, double>& value_to_dest, int32_t* ret) {
+  if (g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    return inst->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
 }
 
+// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::ZInterstore(const Slice& destination, const std::vector<std::string>& keys,
-                            const std::vector<double>& weights, const AGGREGATE agg, std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
-  return zsets_db_->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
+  if (g_pika_conf->classic_mode()) {
+    auto inst = GetDBInstance(keys[0]);
+    return inst->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
+  } else {
+    // TODO(wangshaoyi): implements in classic mode
+  }
 }
 
-Status Storage::ZRangebylex(const Slice& key, const Slice& min, const Slice& max, bool left_close, bool right_close,
-                            std::vector<std::string>* members) {
-  return zsets_db_->ZRangebylex(key, min, max, left_close, right_close, members);
+Status Storage::ZRangebylex(const Slice& key, const Slice& min, const Slice& max, bool left_close,
+                            bool right_close, std::vector<std::string>* members) {
+  auto inst = GetDBInstance(key);
+  return inst->ZRangebylex(key, min, max, left_close, right_close, members);
 }
 
-Status Storage::ZLexcount(const Slice& key, const Slice& min, const Slice& max, bool left_close, bool right_close,
-                          int32_t* ret) {
-  return zsets_db_->ZLexcount(key, min, max, left_close, right_close, ret);
+Status Storage::ZLexcount(const Slice& key, const Slice& min, const Slice& max, bool left_close,
+                          bool right_close, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->ZLexcount(key, min, max, left_close, right_close, ret);
 }
 
-Status Storage::ZRemrangebylex(const Slice& key, const Slice& min, const Slice& max, bool left_close, bool right_close,
-                               int32_t* ret) {
-  return zsets_db_->ZRemrangebylex(key, min, max, left_close, right_close, ret);
+Status Storage::ZRemrangebylex(const Slice& key, const Slice& min, const Slice& max,
+                               bool left_close, bool right_close, int32_t* ret) {
+  auto inst = GetDBInstance(key);
+  return inst->ZRemrangebylex(key, min, max, left_close, right_close, ret);
 }
 
 Status Storage::ZScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                       std::vector<ScoreMember>* score_members, int64_t* next_cursor) {
-  return zsets_db_->ZScan(key, cursor, pattern, count, score_members, next_cursor);
+  auto inst = GetDBInstance(key);
+  return inst->ZScan(key, cursor, pattern, count, score_members, next_cursor);
 }
 
-// Keys Commands
 int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status>* type_status) {
   int32_t ret = 0;
   bool is_corruption = false;
 
+  auto inst = GetDBInstance(key);
   // Strings
-  Status s = strings_db_->Expire(key, ttl);
+  Status s = inst->StringsExpire(key, ttl);
   if (s.ok()) {
     ret++;
   } else if (!s.IsNotFound()) {
@@ -520,7 +765,7 @@ int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status
   }
 
   // Hash
-  s = hashes_db_->Expire(key, ttl);
+  s = inst->HashesExpire(key, ttl);
   if (s.ok()) {
     ret++;
   } else if (!s.IsNotFound()) {
@@ -529,7 +774,7 @@ int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status
   }
 
   // Sets
-  s = sets_db_->Expire(key, ttl);
+  s = inst->SetsExpire(key, ttl);
   if (s.ok()) {
     ret++;
   } else if (!s.IsNotFound()) {
@@ -538,7 +783,7 @@ int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status
   }
 
   // Lists
-  s = lists_db_->Expire(key, ttl);
+  s = inst->ListsExpire(key, ttl);
   if (s.ok()) {
     ret++;
   } else if (!s.IsNotFound()) {
@@ -547,7 +792,7 @@ int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status
   }
 
   // Zsets
-  s = zsets_db_->Expire(key, ttl);
+  s = inst->ZsetsExpire(key, ttl);
   if (s.ok()) {
     ret++;
   } else if (!s.IsNotFound()) {
@@ -568,8 +813,9 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
   bool is_corruption = false;
 
   for (const auto& key : keys) {
+    auto inst = GetDBInstance(key);
     // Strings
-    Status s = strings_db_->Del(key);
+    Status s = inst->StringsDel(key);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -578,7 +824,7 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
     }
 
     // Hashes
-    s = hashes_db_->Del(key);
+    s = inst->HashesDel(key);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -587,7 +833,7 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
     }
 
     // Sets
-    s = sets_db_->Del(key);
+    s = inst->SetsDel(key);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -596,7 +842,7 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
     }
 
     // Lists
-    s = lists_db_->Del(key);
+    s = inst->ListsDel(key);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -605,7 +851,7 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
     }
 
     // ZSets
-    s = zsets_db_->Del(key);
+    s = inst->ZsetsDel(key);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -627,10 +873,11 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
   bool is_corruption = false;
 
   for (const auto& key : keys) {
+    auto inst = GetDBInstance(key);
     switch (type) {
       // Strings
       case DataType::kStrings: {
-        s = strings_db_->Del(key);
+        s = inst->StringsDel(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -640,7 +887,7 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
       }
       // Hashes
       case DataType::kHashes: {
-        s = hashes_db_->Del(key);
+        s = inst->HashesDel(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -650,7 +897,7 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
       }
       // Sets
       case DataType::kSets: {
-        s = sets_db_->Del(key);
+        s = inst->SetsDel(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -660,7 +907,7 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
       }
       // Lists
       case DataType::kLists: {
-        s = lists_db_->Del(key);
+        s = inst->ListsDel(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -670,7 +917,7 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
       }
       // ZSets
       case DataType::kZSets: {
-        s = zsets_db_->Del(key);
+        s = inst->ZsetsDel(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -700,7 +947,8 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
   bool is_corruption = false;
 
   for (const auto& key : keys) {
-    s = strings_db_->Get(key, &value);
+    auto inst = GetDBInstance(key);
+    s = inst->Get(key, &value);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -708,7 +956,7 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
       (*type_status)[DataType::kStrings] = s;
     }
 
-    s = hashes_db_->HLen(key, &ret);
+    s = inst->HLen(key, &ret);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -716,7 +964,7 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
       (*type_status)[DataType::kHashes] = s;
     }
 
-    s = sets_db_->SCard(key, &ret);
+    s = inst->SCard(key, &ret);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -724,7 +972,7 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
       (*type_status)[DataType::kSets] = s;
     }
 
-    s = lists_db_->LLen(key, &llen);
+    s = inst->LLen(key, &llen);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -732,7 +980,7 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
       (*type_status)[DataType::kLists] = s;
     }
 
-    s = zsets_db_->ZCard(key, &ret);
+    s = inst->ZCard(key, &ret);
     if (s.ok()) {
       count++;
     } else if (!s.IsNotFound()) {
@@ -750,6 +998,7 @@ int64_t Storage::Exists(const std::vector<std::string>& keys, std::map<DataType,
 
 int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& pattern, int64_t count,
                       std::vector<std::string>* keys) {
+  assert(g_pika_conf->classic_mode());
   keys->clear();
   bool is_finish;
   int64_t leftover_visits = count;
@@ -758,215 +1007,72 @@ int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& 
   std::string start_key;
   std::string next_key;
   std::string prefix;
+  char key_type;
 
   prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
 
+  // invalid cursor
   if (cursor < 0) {
     return cursor_ret;
-  } else {
-    Status s = GetStartKey(dtype, cursor, &start_key);
-    if (s.IsNotFound()) {
-      // If want to scan all the databases, we start with the strings database
-      start_key = (dtype == DataType::kAll ? DataTypeTag[kStrings] : DataTypeTag[dtype]) + prefix;
-      cursor = 0;
+  }
+  Status s = LoadCursorStartKey(dtype, cursor, &key_type, &start_key);
+  if (!s.ok()) {
+    // If want to scan all the databases, we start with the strings database
+    key_type = dtype == DataType::kAll ? DataTypeTag[kStrings] : DataTypeTag[dtype];
+    start_key = prefix;
+    cursor = 0;
+  }
+
+  std::vector<DataType> types;
+  if (DataType::kAll == dtype) {
+    std::vector<DataType> temp = {DataType::kStrings, DataType::kHashes, DataType::kLists, DataType::kZSets, DataType::kSets};
+    for (int i = 0; i < temp.size(); i++) {
+      if (temp[i] == key_type) {
+        std::copy(temp.begin() + i, temp.end(), std::back_inserter(types));
+        break;
+      }
     }
-  }
-
-  char key_type = start_key.at(0);
-  start_key.erase(start_key.begin());
-  switch (key_type) {
-    case 'k':
-      is_finish = strings_db_->Scan(start_key, pattern, keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("k") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kStrings == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("h") + prefix);
-          break;
-        }
-      }
-      start_key = prefix;
-    case 'h':
-      is_finish = hashes_db_->Scan(start_key, pattern, keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("h") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kHashes == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("s") + prefix);
-          break;
-        }
-      }
-      start_key = prefix;
-    case 's':
-      is_finish = sets_db_->Scan(start_key, pattern, keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("s") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kSets == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("l") + prefix);
-          break;
-        }
-      }
-      start_key = prefix;
-    case 'l':
-      is_finish = lists_db_->Scan(start_key, pattern, keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("l") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kLists == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("z") + prefix);
-          break;
-        }
-      }
-      start_key = prefix;
-    case 'z':
-      is_finish = zsets_db_->Scan(start_key, pattern, keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("z") + next_key);
-        break;
-      } else if (is_finish) {
-        cursor_ret = 0;
-        break;
-      }
-  }
-  return cursor_ret;
-}
-
-int64_t Storage::PKExpireScan(const DataType& dtype, int64_t cursor, int32_t min_ttl, int32_t max_ttl, int64_t count,
-                              std::vector<std::string>* keys) {
-  keys->clear();
-  bool is_finish;
-  int64_t leftover_visits = count;
-  int64_t step_length = count;
-  int64_t cursor_ret = 0;
-  std::string start_key;
-  std::string next_key;
-
-  int64_t curtime;
-  rocksdb::Env::Default()->GetCurrentTime(&curtime);
-
-  if (cursor < 0) {
-    return cursor_ret;
   } else {
-    Status s = GetStartKey(dtype, cursor, &start_key);
-    if (s.IsNotFound()) {
-      // If want to scan all the databases, we start with the strings database
-      start_key = std::string(1, dtype == DataType::kAll ? DataTypeTag[kStrings] : DataTypeTag[dtype]);
-      cursor = 0;
-    }
+    types.push_back(dtype);
   }
 
-  char key_type = start_key.at(0);
-  start_key.erase(start_key.begin());
-  switch (key_type) {
-    case 'k':
-      is_finish = strings_db_->PKExpireScan(start_key, static_cast<int32_t>(curtime + min_ttl),
-                                            static_cast<int32_t>(curtime + max_ttl), keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("k") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kStrings == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("h"));
-          break;
-        }
-      }
-      start_key = "";
-    case 'h':
-      is_finish = hashes_db_->PKExpireScan(start_key, static_cast<int32_t>(curtime + min_ttl),
-                                           static_cast<int32_t>(curtime + max_ttl), keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("h") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kHashes == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("s"));
-          break;
-        }
-      }
-      start_key = "";
-    case 's':
-      is_finish = sets_db_->PKExpireScan(start_key, static_cast<int32_t>(curtime + min_ttl),
-                                         static_cast<int32_t>(curtime + max_ttl), keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("s") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kSets == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("l"));
-          break;
-        }
-      }
-      start_key = "";
-    case 'l':
-      is_finish = lists_db_->PKExpireScan(start_key, static_cast<int32_t>(curtime + min_ttl),
-                                          static_cast<int32_t>(curtime + max_ttl), keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("l") + next_key);
-        break;
-      } else if (is_finish) {
-        if (DataType::kLists == dtype) {
-          cursor_ret = 0;
-          break;
-        } else if (leftover_visits == 0) {
-          cursor_ret = cursor + step_length;
-          StoreCursorStartKey(dtype, cursor_ret, std::string("z"));
-          break;
-        }
-      }
-      start_key = "";
-    case 'z':
-      is_finish = zsets_db_->PKExpireScan(start_key, static_cast<int32_t>(curtime + min_ttl),
-                                          static_cast<int32_t>(curtime + max_ttl), keys, &leftover_visits, &next_key);
-      if ((leftover_visits == 0) && !is_finish) {
-        cursor_ret = cursor + step_length;
-        StoreCursorStartKey(dtype, cursor_ret, std::string("z") + next_key);
-        break;
-      } else if (is_finish) {
-        cursor_ret = 0;
-        break;
-      }
+  for (const auto& type : types) {
+    std::vector<TypeIterator*> inst_iters;
+    for (const auto& inst : insts_) {
+      TypeIterator* iter = inst->CreateIterator(type,
+          pattern, nullptr/*lower_bound*/, nullptr/*upper_bound*/);
+      inst_iters.push_back(iter);
+    }
+    bool is_finish = true;
+
+    BaseMetaKey base_start_key(0/*db_id*/, 0/*slot_id*/, start_key);
+    MergingIterator miter(inst_iters);
+    miter.Seek(base_start_key.Encode().ToString());
+    while (miter.Valid() && count > 0) {
+      keys->push_back(miter.Key());
+      miter.Next();
+      count--;
+    }
+
+    is_finish = true;
+    if (miter.Valid() && miter.Key().compare(prefix) <= 0 || miter.Key().substr(0, prefix.size()) == prefix) {
+      is_finish = false;
+    }
+
+    if (!is_finish) {
+      next_key = miter.Key();
+      cursor_ret += step_length;
+      StoreCursorStartKey(dtype, cursor_ret, type, next_key);
+      return cursor_ret;
+    }
+
+    // for specific type scan, now reaches the end, return cursor_ret to 0
+    if (dtype != DataType::kAll) {
+      cursor_ret = 0;
+      break;
+    }
+    // for all type scan, move to next type, reset start_key
+    start_key = prefix;
   }
   return cursor_ret;
 }
@@ -974,82 +1080,126 @@ int64_t Storage::PKExpireScan(const DataType& dtype, int64_t cursor, int32_t min
 Status Storage::PKScanRange(const DataType& data_type, const Slice& key_start, const Slice& key_end,
                             const Slice& pattern, int32_t limit, std::vector<std::string>* keys,
                             std::vector<KeyValue>* kvs, std::string* next_key) {
-  Status s;
-  keys->clear();
   next_key->clear();
-  switch (data_type) {
-    case DataType::kStrings:
-      s = strings_db_->PKScanRange(key_start, key_end, pattern, limit, kvs, next_key);
-      break;
-    case DataType::kHashes:
-      s = hashes_db_->PKScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kLists:
-      s = lists_db_->PKScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kZSets:
-      s = zsets_db_->PKScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kSets:
-      s = sets_db_->PKScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    default:
-      s = Status::Corruption("Unsupported data types");
-      break;
+  std::string key;
+  std::string value;
+
+  BaseMetaKey base_key_start(0, 0, key_start);
+  BaseMetaKey base_key_end(0, 0, key_end);
+  Slice base_key_end_slice(base_key_end.Encode());
+
+  bool start_no_limit = key_start.empty();
+  bool end_no_limit = key_end.empty();
+  if (!start_no_limit && !end_no_limit && key_start.compare(key_end) > 0) {
+    return Status::InvalidArgument("error in given range");
   }
-  return s;
+
+  std::vector<TypeIterator*> inst_iters;
+  for (const auto& inst : insts_) {
+    TypeIterator* iter = inst->CreateIterator(data_type, pattern.ToString(),
+        nullptr/*lower_bound*/, &base_key_end_slice/*upper_bound*/);
+    inst_iters.push_back(iter);
+  }
+  MergingIterator miter(inst_iters);
+  if (start_no_limit) {
+    miter.SeekToFirst();
+  } else {
+    miter.Seek(base_key_start.Encode().ToString());
+  }
+
+  while (miter.Valid() && limit > 0 && (end_no_limit || miter.Key().compare(key_end.ToString()) <= 0)) {
+    if (data_type == DataType::kStrings) {
+      kvs->push_back({miter.Key(), miter.Value()});
+    } else {
+      keys->push_back(miter.Key());
+    }
+    limit--;
+    miter.Next();
+  }
+  *next_key = miter.Key();
+  return Status::OK();
 }
 
 Status Storage::PKRScanRange(const DataType& data_type, const Slice& key_start, const Slice& key_end,
                              const Slice& pattern, int32_t limit, std::vector<std::string>* keys,
                              std::vector<KeyValue>* kvs, std::string* next_key) {
-  Status s;
-  keys->clear();
   next_key->clear();
-  switch (data_type) {
-    case DataType::kStrings:
-      s = strings_db_->PKRScanRange(key_start, key_end, pattern, limit, kvs, next_key);
-      break;
-    case DataType::kHashes:
-      s = hashes_db_->PKRScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kLists:
-      s = lists_db_->PKRScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kZSets:
-      s = zsets_db_->PKRScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    case DataType::kSets:
-      s = sets_db_->PKRScanRange(key_start, key_end, pattern, limit, keys, next_key);
-      break;
-    default:
-      s = Status::Corruption("Unsupported data types");
-      break;
+  std::string key, value;
+  BaseMetaKey base_key_start(0, 0, key_start);
+  BaseMetaKey base_key_end(0, 0, key_end);
+  Slice base_key_start_slice = Slice(base_key_start.Encode());
+
+  bool start_no_limit = key_start.empty();
+  bool end_no_limit = key_end.empty();
+
+  if (!start_no_limit && !end_no_limit && key_start.compare(key_end) < 0) {
+    return Status::InvalidArgument("error in given range");
   }
-  return s;
+
+  std::vector<TypeIterator*> inst_iters;
+  for (const auto& inst : insts_) {
+    TypeIterator* iter = inst->CreateIterator(data_type, pattern.ToString(),
+        &base_key_start_slice/*lower_bound*/, nullptr/*upper_bound*/);
+    inst_iters.push_back(iter);
+  }
+  MergingIterator miter(inst_iters);
+  if (start_no_limit) {
+    miter.SeekToLast();
+  } else {
+    miter.SeekForPrev(base_key_start.Encode().ToString());
+  }
+
+  while (miter.Valid() && limit > 0 &&
+         (end_no_limit || miter.Key().compare(key_end.ToString()) >= 0)) {
+    if (data_type == DataType::kStrings) {
+      kvs->push_back({miter.Key(), miter.Value()});
+    } else {
+      keys->push_back(miter.Key());
+    }
+    limit--;
+  }
+  *next_key = miter.Key();
+  return Status::OK();
 }
 
 Status Storage::PKPatternMatchDel(const DataType& data_type, const std::string& pattern, int32_t* ret) {
   Status s;
-  switch (data_type) {
-    case DataType::kStrings:
-      s = strings_db_->PKPatternMatchDel(pattern, ret);
-      break;
-    case DataType::kHashes:
-      s = hashes_db_->PKPatternMatchDel(pattern, ret);
-      break;
-    case DataType::kLists:
-      s = lists_db_->PKPatternMatchDel(pattern, ret);
-      break;
-    case DataType::kZSets:
-      s = zsets_db_->PKPatternMatchDel(pattern, ret);
-      break;
-    case DataType::kSets:
-      s = sets_db_->PKPatternMatchDel(pattern, ret);
-      break;
-    default:
-      s = Status::Corruption("Unsupported data type");
-      break;
+  for (const auto& inst : insts_) {
+    switch (data_type) {
+      case DataType::kStrings: {
+        s = inst->StringsPKPatternMatchDel(pattern, ret);
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      case DataType::kHashes: {
+        s = inst->HashesPKPatternMatchDel(pattern, ret);
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      case DataType::kLists: {
+        s = inst->ListsPKPatternMatchDel(pattern, ret);
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      case DataType::kZSets: {
+        s = inst->ZsetsPKPatternMatchDel(pattern, ret);
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      case DataType::kSets: {
+        s = inst->SetsPKPatternMatchDel(pattern, ret);
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      default:
+        s = Status::Corruption("Unsupported data types");
+        break;
+    }
   }
   return s;
 }
@@ -1059,27 +1209,31 @@ Status Storage::Scanx(const DataType& data_type, const std::string& start_key, c
   Status s;
   keys->clear();
   next_key->clear();
-  switch (data_type) {
-    case DataType::kStrings:
-      strings_db_->Scan(start_key, pattern, keys, &count, next_key);
-      break;
-    case DataType::kHashes:
-      hashes_db_->Scan(start_key, pattern, keys, &count, next_key);
-      break;
-    case DataType::kLists:
-      lists_db_->Scan(start_key, pattern, keys, &count, next_key);
-      break;
-    case DataType::kZSets:
-      zsets_db_->Scan(start_key, pattern, keys, &count, next_key);
-      break;
-    case DataType::kSets:
-      sets_db_->Scan(start_key, pattern, keys, &count, next_key);
-      break;
-    default:
-      Status::Corruption("Unsupported data types");
-      break;
+
+  std::vector<TypeIterator*> inst_iters;
+  for (const auto& inst : insts_) {
+    TypeIterator* iter = inst->CreateIterator(data_type, pattern,
+        nullptr/*lower_bound*/, nullptr/*upper_bound*/);
+    inst_iters.push_back(iter);
   }
-  return s;
+
+
+  BaseMetaKey base_start_key(0/*db_id*/, 0/*slot_id*/, start_key);
+  MergingIterator miter(inst_iters);
+  miter.Seek(base_start_key.Encode().ToString());
+  while (miter.Valid() && count > 0) {
+    keys->push_back(miter.Key());
+    miter.Next();
+    count--;
+  }
+
+  std::string prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
+  if (miter.Valid() && (miter.Key().compare(prefix) <= 0 || miter.Key().substr(0, prefix.size()) == prefix)) {
+    *next_key = miter.Key();
+  } else {
+    *next_key = "";
+  }
+  return Status::OK();
 }
 
 int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType, Status>* type_status) {
@@ -1087,7 +1241,8 @@ int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType
   int32_t count = 0;
   bool is_corruption = false;
 
-  s = strings_db_->Expireat(key, timestamp);
+  auto inst = GetDBInstance(key);
+  s = inst->StringsExpireat(key, timestamp);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1095,7 +1250,7 @@ int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType
     (*type_status)[DataType::kStrings] = s;
   }
 
-  s = hashes_db_->Expireat(key, timestamp);
+  s = inst->HashesExpireat(key, timestamp);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1103,7 +1258,7 @@ int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType
     (*type_status)[DataType::kHashes] = s;
   }
 
-  s = sets_db_->Expireat(key, timestamp);
+  s = inst->SetsExpireat(key, timestamp);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1111,7 +1266,7 @@ int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType
     (*type_status)[DataType::kSets] = s;
   }
 
-  s = lists_db_->Expireat(key, timestamp);
+  s = inst->ListsExpireat(key, timestamp);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1119,19 +1274,18 @@ int32_t Storage::Expireat(const Slice& key, int32_t timestamp, std::map<DataType
     (*type_status)[DataType::kLists] = s;
   }
 
-  s = zsets_db_->Expireat(key, timestamp);
+  s = inst->ZsetsExpireat(key, timestamp);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
     is_corruption = true;
-    (*type_status)[DataType::kLists] = s;
+    (*type_status)[DataType::kZSets] = s;
   }
 
   if (is_corruption) {
     return -1;
-  } else {
-    return count;
   }
+  return count;
 }
 
 int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_status) {
@@ -1139,7 +1293,8 @@ int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_stat
   int32_t count = 0;
   bool is_corruption = false;
 
-  s = strings_db_->Persist(key);
+  auto inst = GetDBInstance(key);
+  s = inst->StringsPersist(key);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1147,7 +1302,7 @@ int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_stat
     (*type_status)[DataType::kStrings] = s;
   }
 
-  s = hashes_db_->Persist(key);
+  s = inst->HashesPersist(key);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1155,7 +1310,7 @@ int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_stat
     (*type_status)[DataType::kHashes] = s;
   }
 
-  s = sets_db_->Persist(key);
+  s = inst->SetsPersist(key);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1163,7 +1318,7 @@ int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_stat
     (*type_status)[DataType::kSets] = s;
   }
 
-  s = lists_db_->Persist(key);
+  s = inst->ListsPersist(key);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
@@ -1171,12 +1326,12 @@ int32_t Storage::Persist(const Slice& key, std::map<DataType, Status>* type_stat
     (*type_status)[DataType::kLists] = s;
   }
 
-  s = zsets_db_->Persist(key);
+  s = inst->ZsetsPersist(key);
   if (s.ok()) {
     count++;
   } else if (!s.IsNotFound()) {
     is_corruption = true;
-    (*type_status)[DataType::kLists] = s;
+    (*type_status)[DataType::kZSets] = s;
   }
 
   if (is_corruption) {
@@ -1191,7 +1346,8 @@ std::map<DataType, int64_t> Storage::TTL(const Slice& key, std::map<DataType, St
   std::map<DataType, int64_t> ret;
   int64_t timestamp = 0;
 
-  s = strings_db_->TTL(key, &timestamp);
+  auto inst = GetDBInstance(key);
+  s = inst->StringsTTL(key, &timestamp);
   if (s.ok() || s.IsNotFound()) {
     ret[DataType::kStrings] = timestamp;
   } else if (!s.IsNotFound()) {
@@ -1199,7 +1355,7 @@ std::map<DataType, int64_t> Storage::TTL(const Slice& key, std::map<DataType, St
     (*type_status)[DataType::kStrings] = s;
   }
 
-  s = hashes_db_->TTL(key, &timestamp);
+  s = inst->HashesTTL(key, &timestamp);
   if (s.ok() || s.IsNotFound()) {
     ret[DataType::kHashes] = timestamp;
   } else if (!s.IsNotFound()) {
@@ -1207,7 +1363,7 @@ std::map<DataType, int64_t> Storage::TTL(const Slice& key, std::map<DataType, St
     (*type_status)[DataType::kHashes] = s;
   }
 
-  s = lists_db_->TTL(key, &timestamp);
+  s = inst->ListsTTL(key, &timestamp);
   if (s.ok() || s.IsNotFound()) {
     ret[DataType::kLists] = timestamp;
   } else if (!s.IsNotFound()) {
@@ -1215,7 +1371,7 @@ std::map<DataType, int64_t> Storage::TTL(const Slice& key, std::map<DataType, St
     (*type_status)[DataType::kLists] = s;
   }
 
-  s = sets_db_->TTL(key, &timestamp);
+  s = inst->SetsTTL(key, &timestamp);
   if (s.ok() || s.IsNotFound()) {
     ret[DataType::kSets] = timestamp;
   } else if (!s.IsNotFound()) {
@@ -1223,7 +1379,7 @@ std::map<DataType, int64_t> Storage::TTL(const Slice& key, std::map<DataType, St
     (*type_status)[DataType::kSets] = s;
   }
 
-  s = zsets_db_->TTL(key, &timestamp);
+  s = inst->ZsetsTTL(key, &timestamp);
   if (s.ok() || s.IsNotFound()) {
     ret[DataType::kZSets] = timestamp;
   } else if (!s.IsNotFound()) {
@@ -1238,7 +1394,8 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
 
   Status s;
   std::string value;
-  s = strings_db_->Get(key, &value);
+  auto inst = GetDBInstance(key);
+  s = inst->Get(key, &value);
   if (s.ok()) {
     types.emplace_back("string");
   } else if (!s.IsNotFound()) {
@@ -1249,7 +1406,7 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
   }
 
   int32_t hashes_len = 0;
-  s = hashes_db_->HLen(key, &hashes_len);
+  s = inst->HLen(key, &hashes_len);
   if (s.ok() && hashes_len != 0) {
     types.emplace_back("hash");
   } else if (!s.IsNotFound()) {
@@ -1260,7 +1417,7 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
   }
 
   uint64_t lists_len = 0;
-  s = lists_db_->LLen(key, &lists_len);
+  s = inst->LLen(key, &lists_len);
   if (s.ok() && lists_len != 0) {
     types.emplace_back("list");
   } else if (!s.IsNotFound()) {
@@ -1271,7 +1428,7 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
   }
 
   int32_t zsets_size = 0;
-  s = zsets_db_->ZCard(key, &zsets_size);
+  s = inst->ZCard(key, &zsets_size);
   if (s.ok() && zsets_size != 0) {
     types.emplace_back("zset");
   } else if (!s.IsNotFound()) {
@@ -1282,7 +1439,7 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
   }
 
   int32_t sets_size = 0;
-  s = sets_db_->SCard(key, &sets_size);
+  s = inst->SCard(key, &sets_size);
   if (s.ok() && sets_size != 0) {
     types.emplace_back("set");
   } else if (!s.IsNotFound()) {
@@ -1295,81 +1452,63 @@ Status Storage::GetType(const std::string& key, bool single, std::vector<std::st
 }
 
 Status Storage::Keys(const DataType& data_type, const std::string& pattern, std::vector<std::string>* keys) {
-  Status s;
-  if (data_type == DataType::kStrings) {
-    s = strings_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-  } else if (data_type == DataType::kHashes) {
-    s = hashes_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-  } else if (data_type == DataType::kZSets) {
-    s = zsets_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-  } else if (data_type == DataType::kSets) {
-    s = sets_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-  } else if (data_type == DataType::kLists) {
-    s = lists_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
+  keys->clear();
+  std::vector<DataType> types;
+  if (data_type == DataType::kAll) {
+    types.push_back(DataType::kStrings);
+    types.push_back(DataType::kHashes);
+    types.push_back(DataType::kLists);
+    types.push_back(DataType::kZSets);
+    types.push_back(DataType::kSets);
   } else {
-    s = strings_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
+    types.push_back(data_type);
+  }
+
+  for (const auto& type : types) {
+    std::vector<TypeIterator*> inst_iters;
+    for (const auto& inst : insts_) {
+      TypeIterator* iter = inst->CreateIterator(type, pattern,
+          nullptr/*lower_bound*/, nullptr/*upper_bound*/);
+      inst_iters.push_back(iter);
     }
-    s = hashes_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-    s = zsets_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-    s = sets_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
-    }
-    s = lists_db_->ScanKeys(pattern, keys);
-    if (!s.ok()) {
-      return s;
+
+    MergingIterator miter(inst_iters);
+    miter.SeekToFirst();
+    while (miter.Valid()) {
+      keys->push_back(miter.Key());
+      miter.Next();
     }
   }
-  return s;
+
+  return Status::OK();
 }
 
 void Storage::ScanDatabase(const DataType& type) {
-  switch (type) {
-    case kStrings:
-      strings_db_->ScanDatabase();
-      break;
-    case kHashes:
-      hashes_db_->ScanDatabase();
-      break;
-    case kSets:
-      sets_db_->ScanDatabase();
-      break;
-    case kZSets:
-      zsets_db_->ScanDatabase();
-      break;
-    case kLists:
-      lists_db_->ScanDatabase();
-      break;
-    case kAll:
-      strings_db_->ScanDatabase();
-      hashes_db_->ScanDatabase();
-      sets_db_->ScanDatabase();
-      zsets_db_->ScanDatabase();
-      lists_db_->ScanDatabase();
-      break;
+  for (const auto& inst : insts_) {
+    switch (type) {
+      case kStrings:
+        inst->ScanStrings();
+        break;
+      case kHashes:
+        inst->ScanHashes();
+        break;
+      case kSets:
+        inst->ScanSets();
+        break;
+      case kZSets:
+        inst->ScanZsets();
+        break;
+      case kLists:
+        inst->ScanLists();
+        break;
+      case kAll:
+        inst->ScanStrings();
+        inst->ScanHashes();
+        inst->ScanSets();
+        inst->ScanZsets();
+        inst->ScanLists();
+        break;
+    }
   }
 }
 
@@ -1383,7 +1522,8 @@ Status Storage::PfAdd(const Slice& key, const std::vector<std::string>& values, 
   std::string value;
   std::string registers;
   std::string result;
-  Status s = strings_db_->Get(key, &value);
+  auto inst = GetDBInstance(key);
+  Status s = inst->Get(key, &value);
   if (s.ok()) {
     registers = value;
   } else if (s.IsNotFound()) {
@@ -1401,7 +1541,7 @@ Status Storage::PfAdd(const Slice& key, const std::vector<std::string>& values, 
   if (previous != now || (s.IsNotFound() && values.empty())) {
     *update = true;
   }
-  s = strings_db_->Set(key, result);
+  s = inst->Set(key, result);
   return s;
 }
 
@@ -1412,7 +1552,8 @@ Status Storage::PfCount(const std::vector<std::string>& keys, int64_t* result) {
 
   std::string value;
   std::string first_registers;
-  Status s = strings_db_->Get(keys[0], &value);
+  auto inst = GetDBInstance(keys[0]);
+  Status s = inst->Get(keys[0], &value);
   if (s.ok()) {
     first_registers = std::string(value.data(), value.size());
   } else if (s.IsNotFound()) {
@@ -1423,7 +1564,8 @@ Status Storage::PfCount(const std::vector<std::string>& keys, int64_t* result) {
   for (size_t i = 1; i < keys.size(); ++i) {
     std::string value;
     std::string registers;
-    s = strings_db_->Get(keys[i], &value);
+    auto inst = GetDBInstance(keys[i]);
+    s = inst->Get(keys[i], &value);
     if (s.ok()) {
       registers = value;
     } else if (s.IsNotFound()) {
@@ -1447,7 +1589,8 @@ Status Storage::PfMerge(const std::vector<std::string>& keys, std::string& value
   std::string value;
   std::string first_registers;
   std::string result;
-  s = strings_db_->Get(keys[0], &value);
+  auto inst = GetDBInstance(keys[0]);
+  s = inst->Get(keys[0], &value);
   if (s.ok()) {
     first_registers = std::string(value.data(), value.size());
   } else if (s.IsNotFound()) {
@@ -1459,7 +1602,8 @@ Status Storage::PfMerge(const std::vector<std::string>& keys, std::string& value
   for (size_t i = 1; i < keys.size(); ++i) {
     std::string value;
     std::string registers;
-    s = strings_db_->Get(keys[i], &value);
+    inst = GetDBInstance(keys[i]);
+    s = inst->Get(keys[i], &value);
     if (s.ok()) {
       registers = std::string(value.data(), value.size());
     } else if (s.IsNotFound()) {
@@ -1470,27 +1614,35 @@ Status Storage::PfMerge(const std::vector<std::string>& keys, std::string& value
     HyperLogLog log(kPrecision, registers);
     result = first_log.Merge(log);
   }
-  s = strings_db_->Set(keys[0], result);
+  inst = GetDBInstance(keys[0]);
+  s = inst->Set(keys[0], result);
   value_to_dest = std::move(result);
   return s;
 }
 
+// TODO(wangshaoyi): bgthread
 static void* StartBGThreadWrapper(void* arg) {
+  /*
   auto s = reinterpret_cast<Storage*>(arg);
   s->RunBGTask();
+  */
   return nullptr;
 }
 
+// TODO(wangshaoyi): bgthread
 Status Storage::StartBGThread() {
+  /*
   int result = pthread_create(&bg_tasks_thread_id_, nullptr, StartBGThreadWrapper, this);
   if (result != 0) {
     char msg[128];
     snprintf(msg, sizeof(msg), "pthread create: %s", strerror(result));
     return Status::Corruption(msg);
   }
+  */
   return Status::OK();
 }
 
+// TODO(wangshaoyi): bgthread
 Status Storage::AddBGTask(const BGTask& bg_task) {
   bg_tasks_mutex_.lock();
   if (bg_task.type == kAll) {
@@ -1505,10 +1657,11 @@ Status Storage::AddBGTask(const BGTask& bg_task) {
   return Status::OK();
 }
 
+// TODO(wangshaoyi): bgthread
 Status Storage::RunBGTask() {
   BGTask task;
   while (!bg_tasks_should_exit_) {
-    std::unique_lock lock(bg_tasks_mutex_);
+    std::unique_lock<std::mutex> lock(bg_tasks_mutex_);
     bg_tasks_cond_var_.wait(lock, [this]() { return !bg_tasks_queue_.empty() || bg_tasks_should_exit_; });
 
     if (!bg_tasks_queue_.empty()) {
@@ -1539,7 +1692,10 @@ Status Storage::Compact(const DataType& type, bool sync) {
   return Status::OK();
 }
 
+//TODO(wangshaoyi):
 Status Storage::DoCompact(const DataType& type) {
+  return Status::OK();
+  /*
   if (type != kAll && type != kStrings && type != kHashes && type != kSets && type != kZSets && type != kLists) {
     return Status::InvalidArgument("");
   }
@@ -1570,9 +1726,13 @@ Status Storage::DoCompact(const DataType& type) {
   }
   current_task_type_ = Operation::kNone;
   return s;
+  */
 }
 
+// TODO(wangshaoyi):
 Status Storage::CompactKey(const DataType& type, const std::string& key) {
+  return Status::OK();
+/*
   std::string meta_start_key;
   std::string meta_end_key;
   std::string data_start_key;
@@ -1597,20 +1757,19 @@ Status Storage::CompactKey(const DataType& type, const std::string& key) {
     lists_db_->CompactRange(&slice_data_begin, &slice_data_end, kData);
   }
   return Status::OK();
+*/
 }
 
 Status Storage::SetMaxCacheStatisticKeys(uint32_t max_cache_statistic_keys) {
-  std::vector<Redis*> dbs = {sets_db_.get(), zsets_db_.get(), hashes_db_.get(), lists_db_.get()};
-  for (const auto& db : dbs) {
-    db->SetMaxCacheStatisticKeys(max_cache_statistic_keys);
+  for (const auto& inst : insts_) {
+    inst->SetMaxCacheStatisticKeys(max_cache_statistic_keys);
   }
   return Status::OK();
 }
 
 Status Storage::SetSmallCompactionThreshold(uint32_t small_compaction_threshold) {
-  std::vector<Redis*> dbs = {sets_db_.get(), zsets_db_.get(), hashes_db_.get(), lists_db_.get()};
-  for (const auto& db : dbs) {
-    db->SetSmallCompactionThreshold(small_compaction_threshold);
+  for (const auto& inst: insts_) {
+    inst->SetSmallCompactionThreshold(small_compaction_threshold);
   }
   return Status::OK();
 }
@@ -1637,41 +1796,30 @@ std::string Storage::GetCurrentTaskType() {
 }
 
 Status Storage::GetUsage(const std::string& property, uint64_t* const result) {
-  *result = GetProperty(ALL_DB, property);
+  std::map<int, uint64_t> inst_result;
+  GetUsage(property, &inst_result);
+  for (const auto& it : inst_result) {
+    *result += it.second;
+  }
   return Status::OK();
 }
 
-Status Storage::GetUsage(const std::string& property, std::map<std::string, uint64_t>* const type_result) {
-  type_result->clear();
-  (*type_result)[STRINGS_DB] = GetProperty(STRINGS_DB, property);
-  (*type_result)[HASHES_DB] = GetProperty(HASHES_DB, property);
-  (*type_result)[LISTS_DB] = GetProperty(LISTS_DB, property);
-  (*type_result)[ZSETS_DB] = GetProperty(ZSETS_DB, property);
-  (*type_result)[SETS_DB] = GetProperty(SETS_DB, property);
+Status Storage::GetUsage(const std::string& property, std::map<int, uint64_t>* const inst_result) {
+  inst_result->clear();
+  for (const auto& inst : insts_) {
+    uint64_t value;
+    inst->GetProperty(property, &value);
+    (*inst_result)[inst->GetIndex()] = value;
+  }
   return Status::OK();
 }
 
-uint64_t Storage::GetProperty(const std::string& db_type, const std::string& property) {
+uint64_t Storage::GetProperty(const std::string& property) {
   uint64_t out = 0;
   uint64_t result = 0;
-  if (db_type == ALL_DB || db_type == STRINGS_DB) {
-    strings_db_->GetProperty(property, &out);
-    result += out;
-  }
-  if (db_type == ALL_DB || db_type == HASHES_DB) {
-    hashes_db_->GetProperty(property, &out);
-    result += out;
-  }
-  if (db_type == ALL_DB || db_type == LISTS_DB) {
-    lists_db_->GetProperty(property, &out);
-    result += out;
-  }
-  if (db_type == ALL_DB || db_type == ZSETS_DB) {
-    zsets_db_->GetProperty(property, &out);
-    result += out;
-  }
-  if (db_type == ALL_DB || db_type == SETS_DB) {
-    sets_db_->GetProperty(property, &out);
+  Status s;
+  for (const auto& inst : insts_) {
+    s = inst->GetProperty(property, &out);
     result += out;
   }
   return result;
@@ -1679,15 +1827,19 @@ uint64_t Storage::GetProperty(const std::string& db_type, const std::string& pro
 
 Status Storage::GetKeyNum(std::vector<KeyInfo>* key_infos) {
   KeyInfo key_info;
-  // NOTE: keep the db order with string, hash, list, zset, set
-  std::vector<Redis*> dbs = {strings_db_.get(), hashes_db_.get(), lists_db_.get(), zsets_db_.get(), sets_db_.get()};
-  for (const auto& db : dbs) {
+  key_infos->resize(5);
+  for (const auto& db : insts_) {
+    std::vector<KeyInfo> db_key_infos;
     // check the scanner was stopped or not, before scanning the next db
     if (scan_keynum_exit_) {
       break;
     }
-    db->ScanKeyNum(&key_info);
-    key_infos->push_back(key_info);
+    auto s = db->ScanKeyNum(&db_key_infos);
+    if (!s.ok()) {
+      return s;
+    }
+    std::transform(db_key_infos.begin(), db_key_infos.end(),
+        key_infos->begin(), key_infos->begin(), std::plus<>{});
   }
   if (scan_keynum_exit_) {
     scan_keynum_exit_ = false;
@@ -1701,51 +1853,20 @@ Status Storage::StopScanKeyNum() {
   return Status::OK();
 }
 
-rocksdb::DB* Storage::GetDBByType(const std::string& type) {
-  if (type == STRINGS_DB) {
-    return strings_db_->GetDB();
-  } else if (type == HASHES_DB) {
-    return hashes_db_->GetDB();
-  } else if (type == LISTS_DB) {
-    return lists_db_->GetDB();
-  } else if (type == SETS_DB) {
-    return sets_db_->GetDB();
-  } else if (type == ZSETS_DB) {
-    return zsets_db_->GetDB();
-  } else {
+rocksdb::DB* Storage::GetDBByIndex(int index) {
+  if (index <= 0 || index >= g_pika_conf->db_instance_num()) {
+    LOG(WARNING) << "Invalid DB Index: " << index << "total: "
+                 << g_pika_conf->db_instance_num();
     return nullptr;
   }
+  return insts_[index]->GetDB();
 }
 
-Status Storage::SetOptions(const OptionType& option_type, const std::string& db_type,
-                           const std::unordered_map<std::string, std::string>& options) {
+Status Storage::SetOptions(const OptionType& option_type,
+    const std::unordered_map<std::string, std::string>& options) {
   Status s;
-  if (db_type == ALL_DB || db_type == STRINGS_DB) {
-    s = strings_db_->SetOptions(option_type, options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  if (db_type == ALL_DB || db_type == HASHES_DB) {
-    s = hashes_db_->SetOptions(option_type, options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  if (db_type == ALL_DB || db_type == LISTS_DB) {
-    s = lists_db_->SetOptions(option_type, options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  if (db_type == ALL_DB || db_type == ZSETS_DB) {
-    s = zsets_db_->SetOptions(option_type, options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  if (db_type == ALL_DB || db_type == SETS_DB) {
-    s = sets_db_->SetOptions(option_type, options);
+  for (const auto& inst : insts_) {
+    s = inst->SetOptions(option_type, options);
     if (!s.ok()) {
       return s;
     }
@@ -1754,19 +1875,17 @@ Status Storage::SetOptions(const OptionType& option_type, const std::string& db_
 }
 
 void Storage::GetRocksDBInfo(std::string& info) {
-  strings_db_->GetRocksDBInfo(info, "strings_");
-  hashes_db_->GetRocksDBInfo(info, "hashes_");
-  lists_db_->GetRocksDBInfo(info, "lists_");
-  sets_db_->GetRocksDBInfo(info, "sets_");
-  zsets_db_->GetRocksDBInfo(info, "zsets_");
+  char temp[12] = {0};
+  for (const auto& inst : insts_) {
+    sprintf(temp, "instance:%2d", inst->GetIndex());
+    inst->GetRocksDBInfo(info, temp);
+  }
 }
 
 void Storage::DisableWal(const bool is_wal_disable) {
-  strings_db_->SetWriteWalOptions(is_wal_disable);
-  hashes_db_->SetWriteWalOptions(is_wal_disable);
-  lists_db_->SetWriteWalOptions(is_wal_disable);
-  sets_db_->SetWriteWalOptions(is_wal_disable);
-  zsets_db_->SetWriteWalOptions(is_wal_disable);
+  for (const auto& inst : insts_) {
+    inst->SetWriteWalOptions(is_wal_disable);
+  }
 }
 
 }  //  namespace storage

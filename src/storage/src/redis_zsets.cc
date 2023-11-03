@@ -122,14 +122,14 @@ Status Instance::ZPopMax(const Slice& key, const int64_t count, std::vector<Scor
       int64_t num = parsed_zsets_meta_value.count();
       num = num <= count ? num : count;
       int32_t version = parsed_zsets_meta_value.version();
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::max(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[9]);
       int32_t del_cnt = 0;
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && del_cnt < num; iter->Prev()) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
         score_members->emplace_back(
             ScoreMember{parsed_zsets_score_key.score(), parsed_zsets_score_key.member().ToString()});
-        ZSetsMemberKey zsets_member_key(key, version, parsed_zsets_score_key.member());
+        ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, parsed_zsets_score_key.member());
         ++statistic;
         ++del_cnt;
         batch.Delete(handles_[8], zsets_member_key.Encode());
@@ -165,14 +165,14 @@ Status Instance::ZPopMin(const Slice& key, const int64_t count, std::vector<Scor
       int64_t num = parsed_zsets_meta_value.count();
       num = num <= count ? num : count;
       int32_t version = parsed_zsets_meta_value.version();
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[9]);
       int32_t del_cnt = 0;
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && del_cnt < num; iter->Next()) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
         score_members->emplace_back(
             ScoreMember{parsed_zsets_score_key.score(), parsed_zsets_score_key.member().ToString()});
-        ZSetsMemberKey zsets_member_key(key, version, parsed_zsets_score_key.member());
+        ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, parsed_zsets_score_key.member());
         ++statistic;
         ++del_cnt;
         batch.Delete(handles_[8], zsets_member_key.Encode());
@@ -224,7 +224,7 @@ Status Instance::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_me
     std::string data_value;
     for (const auto& sm : filtered_score_members) {
       bool not_found = true;
-      ZSetsMemberKey zsets_member_key(key, version, sm.member);
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, sm.member);
       if (vaild) {
         s = db_->Get(default_read_options_, handles_[8], zsets_member_key.Encode(), &data_value);
         if (s.ok()) {
@@ -235,7 +235,7 @@ Status Instance::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_me
           if (old_score == sm.score) {
             continue;
           } else {
-            ZSetsScoreKey zsets_score_key(key, version, old_score, sm.member);
+            ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, old_score, sm.member);
             batch.Delete(handles_[9], zsets_score_key.Encode());
             // delete old zsets_score_key and overwirte zsets_member_key
             // but in different column_families so we accumulative 1
@@ -250,7 +250,7 @@ Status Instance::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_me
       EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
       batch.Put(handles_[8], zsets_member_key.Encode(), Slice(score_buf, sizeof(uint64_t)));
 
-      ZSetsScoreKey zsets_score_key(key, version, sm.score, sm.member);
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, sm.score, sm.member);
       batch.Put(handles_[9], zsets_score_key.Encode(), Slice());
       if (not_found) {
         cnt++;
@@ -266,12 +266,12 @@ Status Instance::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_me
     version = zsets_meta_value.UpdateVersion();
     batch.Put(handles_[7], base_meta_key.Encode(), zsets_meta_value.Encode());
     for (const auto& sm : filtered_score_members) {
-      ZSetsMemberKey zsets_member_key(key, version, sm.member);
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, sm.member);
       const void* ptr_score = reinterpret_cast<const void*>(&sm.score);
       EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
       batch.Put(handles_[8], zsets_member_key.Encode(), Slice(score_buf, sizeof(uint64_t)));
 
-      ZSetsScoreKey zsets_score_key(key, version, sm.score, sm.member);
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, sm.score, sm.member);
       batch.Put(handles_[9], zsets_score_key.Encode(), Slice());
     }
     *ret = static_cast<int32_t>(filtered_score_members.size());
@@ -325,7 +325,7 @@ Status Instance::ZCount(const Slice& key, double min, double max, bool left_clos
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, min, Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, min, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -377,14 +377,14 @@ Status Instance::ZIncrby(const Slice& key, const Slice& member, double increment
       version = parsed_zsets_meta_value.version();
     }
     std::string data_value;
-    ZSetsMemberKey zsets_member_key(key, version, member);
+    ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
     s = db_->Get(default_read_options_, handles_[8], zsets_member_key.Encode(), &data_value);
     if (s.ok()) {
       uint64_t tmp = DecodeFixed64(data_value.data());
       const void* ptr_tmp = reinterpret_cast<const void*>(&tmp);
       double old_score = *reinterpret_cast<const double*>(ptr_tmp);
       score = old_score + increment;
-      ZSetsScoreKey zsets_score_key(key, version, old_score, member);
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, old_score, member);
       batch.Delete(handles_[9], zsets_score_key.Encode());
       // delete old zsets_score_key and overwirte zsets_member_key
       // but in different column_families so we accumulative 1
@@ -406,12 +406,12 @@ Status Instance::ZIncrby(const Slice& key, const Slice& member, double increment
   } else {
     return s;
   }
-  ZSetsMemberKey zsets_member_key(key, version, member);
+  ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
   const void* ptr_score = reinterpret_cast<const void*>(&score);
   EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
   batch.Put(handles_[8], zsets_member_key.Encode(), Slice(score_buf, sizeof(uint64_t)));
 
-  ZSetsScoreKey zsets_score_key(key, version, score, member);
+  ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, score, member);
   batch.Put(handles_[9], zsets_score_key.Encode(), Slice());
   *ret = score;
   s = db_->Write(default_write_options_, &batch);
@@ -447,7 +447,7 @@ Status Instance::ZRange(const Slice& key, int32_t start, int32_t stop, std::vect
       }
       int32_t cur_index = 0;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         if (cur_index >= start_index) {
@@ -486,7 +486,7 @@ Status Instance::ZRangebyscore(const Slice& key, double min, double max, bool le
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
       int64_t skipped = 0;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, min, Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, min, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && index <= stop_index; iter->Next(), ++index) {
         bool left_pass = false;
@@ -551,7 +551,7 @@ Status Instance::ZRank(const Slice& key, const Slice& member, int32_t* rank) {
       int32_t index = 0;
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && index <= stop_index; iter->Next(), ++index) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
@@ -600,7 +600,7 @@ Status Instance::ZRem(const Slice& key, const std::vector<std::string>& members,
       std::string data_value;
       int32_t version = parsed_zsets_meta_value.version();
       for (const auto& member : filtered_members) {
-        ZSetsMemberKey zsets_member_key(key, version, member);
+        ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
         s = db_->Get(default_read_options_, handles_[8], zsets_member_key.Encode(), &data_value);
         if (s.ok()) {
           del_cnt++;
@@ -610,7 +610,7 @@ Status Instance::ZRem(const Slice& key, const std::vector<std::string>& members,
           double score = *reinterpret_cast<const double*>(ptr_tmp);
           batch.Delete(handles_[8], zsets_member_key.Encode());
 
-          ZSetsScoreKey zsets_score_key(key, version, score, member);
+          ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, score, member);
           batch.Delete(handles_[9], zsets_score_key.Encode());
         } else if (!s.IsNotFound()) {
           return s;
@@ -655,12 +655,12 @@ Status Instance::ZRemrangebyrank(const Slice& key, int32_t start, int32_t stop, 
       if (start_index > stop_index || start_index >= count) {
         return s;
       }
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         if (cur_index >= start_index) {
           ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
-          ZSetsMemberKey zsets_member_key(key, version, parsed_zsets_score_key.member());
+          ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, parsed_zsets_score_key.member());
           batch.Delete(handles_[8], zsets_member_key.Encode());
           batch.Delete(handles_[9], iter->key());
           del_cnt++;
@@ -701,7 +701,7 @@ Status Instance::ZRemrangebyscore(const Slice& key, double min, double max, bool
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
       int32_t version = parsed_zsets_meta_value.version();
-      ZSetsScoreKey zsets_score_key(key, version, min, Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, min, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[9]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -722,7 +722,7 @@ Status Instance::ZRemrangebyscore(const Slice& key, double min, double max, bool
           right_pass = true;
         }
         if (left_pass && right_pass) {
-          ZSetsMemberKey zsets_member_key(key, version, parsed_zsets_score_key.member());
+          ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, parsed_zsets_score_key.member());
           batch.Delete(handles_[8], zsets_member_key.Encode());
           batch.Delete(handles_[9], iter->key());
           del_cnt++;
@@ -773,7 +773,7 @@ Status Instance::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::v
       }
       int32_t cur_index = count - 1;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::max(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && cur_index >= start_index;
            iter->Prev(), --cur_index) {
@@ -812,7 +812,7 @@ Status Instance::ZRevrangebyscore(const Slice& key, double min, double max, bool
       int32_t left = parsed_zsets_meta_value.count();
       int64_t skipped = 0;
       ScoreMember score_member;
-      ZSetsScoreKey zsets_score_key(key, version, std::nextafter(max, std::numeric_limits<double>::max()), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::nextafter(max, std::numeric_limits<double>::max()), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && left > 0; iter->Prev(), --left) {
         bool left_pass = false;
@@ -876,7 +876,7 @@ Status Instance::ZRevrank(const Slice& key, const Slice& member, int32_t* rank) 
       int32_t rev_index = 0;
       int32_t left = parsed_zsets_meta_value.count();
       int32_t version = parsed_zsets_meta_value.version();
-      ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
+      ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, std::numeric_limits<double>::max(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && left >= 0; iter->Prev(), --left, ++rev_index) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
@@ -915,7 +915,7 @@ Status Instance::ZScore(const Slice& key, const Slice& member, double* score) {
       return Status::NotFound();
     } else {
       std::string data_value;
-      ZSetsMemberKey zsets_member_key(key, version, member);
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
       s = db_->Get(read_options, handles_[8], zsets_member_key.Encode(), &data_value);
       if (s.ok()) {
         uint64_t tmp = DecodeFixed64(data_value.data());
@@ -959,7 +959,7 @@ Status Instance::ZUnionstore(const Slice& destination, const std::vector<std::st
         double score = 0;
         double weight = idx < weights.size() ? weights[idx] : 1;
         version = parsed_zsets_meta_value.version();
-        ZSetsScoreKey zsets_score_key(keys[idx], version, std::numeric_limits<double>::lowest(), Slice());
+        ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, keys[idx], version, std::numeric_limits<double>::lowest(), Slice());
         rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
         for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index;
              iter->Next(), ++cur_index) {
@@ -1010,13 +1010,13 @@ Status Instance::ZUnionstore(const Slice& destination, const std::vector<std::st
 
   char score_buf[8];
   for (const auto& sm : member_score_map) {
-    ZSetsMemberKey zsets_member_key(destination, version, sm.first);
+    ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, sm.first);
 
     const void* ptr_score = reinterpret_cast<const void*>(&sm.second);
     EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
     batch.Put(handles_[8], zsets_member_key.Encode(), Slice(score_buf, sizeof(uint64_t)));
 
-    ZSetsScoreKey zsets_score_key(destination, version, sm.second, sm.first);
+    ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, destination, version, sm.second, sm.first);
     batch.Put(handles_[9], zsets_score_key.Encode(), Slice());
   }
   *ret = static_cast<int32_t>(member_score_map.size());
@@ -1073,7 +1073,7 @@ Status Instance::ZInterstore(const Slice& destination, const std::vector<std::st
   }
 
   if (!have_invalid_zsets) {
-    ZSetsScoreKey zsets_score_key(vaild_zsets[0].key, vaild_zsets[0].version, std::numeric_limits<double>::lowest(),
+    ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, vaild_zsets[0].key, vaild_zsets[0].version, std::numeric_limits<double>::lowest(),
                                   Slice());
     rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[9]);
     for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
@@ -1091,7 +1091,7 @@ Status Instance::ZInterstore(const Slice& destination, const std::vector<std::st
       item.score = sm.score * (!weights.empty() ? weights[0] : 1);
       for (size_t idx = 1; idx < vaild_zsets.size(); ++idx) {
         double weight = idx < weights.size() ? weights[idx] : 1;
-        ZSetsMemberKey zsets_member_key(vaild_zsets[idx].key, vaild_zsets[idx].version, item.member);
+        ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, vaild_zsets[idx].key, vaild_zsets[idx].version, item.member);
         s = db_->Get(read_options, handles_[8], zsets_member_key.Encode(), &data_value);
         if (s.ok()) {
           uint64_t tmp = DecodeFixed64(data_value.data());
@@ -1138,13 +1138,13 @@ Status Instance::ZInterstore(const Slice& destination, const std::vector<std::st
   }
   char score_buf[8];
   for (const auto& sm : final_score_members) {
-    ZSetsMemberKey zsets_member_key(destination, version, sm.member);
+    ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, sm.member);
 
     const void* ptr_score = reinterpret_cast<const void*>(&sm.score);
     EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
     batch.Put(handles_[8], zsets_member_key.Encode(), Slice(score_buf, sizeof(uint64_t)));
 
-    ZSetsScoreKey zsets_score_key(destination, version, sm.score, sm.member);
+    ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, destination, version, sm.score, sm.member);
     batch.Put(handles_[9], zsets_score_key.Encode(), Slice());
   }
   *ret = static_cast<int32_t>(final_score_members.size());
@@ -1177,7 +1177,7 @@ Status Instance::ZRangebylex(const Slice& key, const Slice& min, const Slice& ma
       int32_t version = parsed_zsets_meta_value.version();
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
-      ZSetsMemberKey zsets_member_key(key, version, Slice());
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[8]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -1238,7 +1238,7 @@ Status Instance::ZRemrangebylex(const Slice& key, const Slice& min, const Slice&
       int32_t version = parsed_zsets_meta_value.version();
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.count() - 1;
-      ZSetsMemberKey zsets_member_key(key, version, Slice());
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[8]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -1257,7 +1257,7 @@ Status Instance::ZRemrangebylex(const Slice& key, const Slice& min, const Slice&
           uint64_t tmp = DecodeFixed64(iter->value().data());
           const void* ptr_tmp = reinterpret_cast<const void*>(&tmp);
           double score = *reinterpret_cast<const double*>(ptr_tmp);
-          ZSetsScoreKey zsets_score_key(key, version, score, member);
+          ZSetsScoreKey zsets_score_key(0/*db_id*/, 0/*slot_id*/, key, version, score, member);
           batch.Delete(handles_[9], zsets_score_key.Encode());
           del_cnt++;
           statistic++;
@@ -1387,8 +1387,8 @@ Status Instance::ZScan(const Slice& key, int64_t cursor, const std::string& patt
         sub_member = pattern.substr(0, pattern.size() - 1);
       }
 
-      ZSetsMemberKey zsets_member_prefix(key, version, sub_member);
-      ZSetsMemberKey zsets_member_key(key, version, start_point);
+      ZSetsMemberKey zsets_member_prefix(0/*db_id*/, 0/*slot_id*/, key, version, sub_member);
+      ZSetsMemberKey zsets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, start_point);
       std::string prefix = zsets_member_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[8]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);

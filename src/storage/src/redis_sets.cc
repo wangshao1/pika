@@ -126,7 +126,7 @@ rocksdb::Status Instance::SAdd(const Slice& key, const std::vector<std::string>&
       parsed_sets_meta_value.set_count(static_cast<int32_t>(filtered_members.size()));
       batch.Put(handles_[3], base_meta_key.Encode(), meta_value);
       for (const auto& member : filtered_members) {
-        SetsMemberKey sets_member_key(key, version, member);
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
         batch.Put(handles_[4], sets_member_key.Encode(), Slice());
       }
       *ret = static_cast<int32_t>(filtered_members.size());
@@ -135,7 +135,7 @@ rocksdb::Status Instance::SAdd(const Slice& key, const std::vector<std::string>&
       std::string member_value;
       version = parsed_sets_meta_value.version();
       for (const auto& member : filtered_members) {
-        SetsMemberKey sets_member_key(key, version, member);
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
         s = db_->Get(default_read_options_, handles_[4], sets_member_key.Encode(), &member_value);
         if (s.ok()) {
         } else if (s.IsNotFound()) {
@@ -160,7 +160,7 @@ rocksdb::Status Instance::SAdd(const Slice& key, const std::vector<std::string>&
     version = sets_meta_value.UpdateVersion();
     batch.Put(handles_[3], base_meta_key.Encode(), sets_meta_value.Encode());
     for (const auto& member : filtered_members) {
-      SetsMemberKey sets_member_key(key, version, member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
       batch.Put(handles_[4], sets_member_key.Encode(), Slice());
     }
     *ret = static_cast<int32_t>(filtered_members.size());
@@ -226,7 +226,7 @@ rocksdb::Status Instance::SDiff(const std::vector<std::string>& keys, std::vecto
       Slice prefix;
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(keys[0], version, Slice());
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, keys[0], version, Slice());
       prefix = sets_member_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[4]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -235,7 +235,7 @@ rocksdb::Status Instance::SDiff(const std::vector<std::string>& keys, std::vecto
 
         found = false;
         for (const auto& key_version : vaild_sets) {
-          SetsMemberKey sets_member_key(key_version.key, key_version.version, member);
+          SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, member);
           s = db_->Get(read_options, handles_[4], sets_member_key.Encode(), &member_value);
           if (s.ok()) {
             found = true;
@@ -296,7 +296,7 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
       bool found;
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(keys[0], version, Slice());
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, keys[0], version, Slice());
       Slice prefix = sets_member_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[4]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -305,7 +305,7 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
 
         found = false;
         for (const auto& key_version : vaild_sets) {
-          SetsMemberKey sets_member_key(key_version.key, key_version.version, member);
+          SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, member);
           s = db_->Get(read_options, handles_[4], sets_member_key.Encode(), &member_value);
           if (s.ok()) {
             found = true;
@@ -344,7 +344,7 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
     return s;
   }
   for (const auto& member : members) {
-    SetsMemberKey sets_member_key(destination, version, member);
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
     batch.Put(handles_[4], sets_member_key.Encode(), Slice());
   }
   *ret = static_cast<int32_t>(members.size());
@@ -396,7 +396,7 @@ rocksdb::Status Instance::SInter(const std::vector<std::string>& keys, std::vect
       bool reliable;
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(keys[0], version, Slice());
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, keys[0], version, Slice());
       Slice prefix = sets_member_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[4]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -405,7 +405,7 @@ rocksdb::Status Instance::SInter(const std::vector<std::string>& keys, std::vect
 
         reliable = true;
         for (const auto& key_version : vaild_sets) {
-          SetsMemberKey sets_member_key(key_version.key, key_version.version, member);
+          SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, member);
           s = db_->Get(read_options, handles_[4], sets_member_key.Encode(), &member_value);
           if (s.ok()) {
             continue;
@@ -480,7 +480,7 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
         bool reliable;
         std::string member_value;
         version = parsed_sets_meta_value.version();
-        SetsMemberKey sets_member_key(keys[0], version, Slice());
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, keys[0], version, Slice());
         Slice prefix = sets_member_key.Encode();
         auto iter = db_->NewIterator(read_options, handles_[4]);
         for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -489,7 +489,7 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
 
           reliable = true;
           for (const auto& key_version : vaild_sets) {
-            SetsMemberKey sets_member_key(key_version.key, key_version.version, member);
+            SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, member);
             s = db_->Get(read_options, handles_[4], sets_member_key.Encode(), &member_value);
             if (s.ok()) {
               continue;
@@ -532,7 +532,7 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
     return s;
   }
   for (const auto& member : members) {
-    SetsMemberKey sets_member_key(destination, version, member);
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
     batch.Put(handles_[4], sets_member_key.Encode(), Slice());
   }
   *ret = static_cast<int32_t>(members.size());
@@ -562,7 +562,7 @@ rocksdb::Status Instance::SIsmember(const Slice& key, const Slice& member, int32
     } else {
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(key, version, member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
       s = db_->Get(read_options, handles_[4], sets_member_key.Encode(), &member_value);
       *ret = s.ok() ? 1 : 0;
     }
@@ -590,7 +590,7 @@ rocksdb::Status Instance::SMembers(const Slice& key, std::vector<std::string>* m
       return rocksdb::Status::NotFound();
     } else {
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(key, version, Slice());
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
       Slice prefix = sets_member_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[4]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -630,7 +630,7 @@ rocksdb::Status Instance::SMove(const Slice& source, const Slice& destination, c
     } else {
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(source, version, member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, source, version, member);
       s = db_->Get(default_read_options_, handles_[4], sets_member_key.Encode(), &member_value);
       if (s.ok()) {
         *ret = 1;
@@ -660,12 +660,12 @@ rocksdb::Status Instance::SMove(const Slice& source, const Slice& destination, c
       version = parsed_sets_meta_value.InitialMetaValue();
       parsed_sets_meta_value.set_count(1);
       batch.Put(handles_[3], base_destination.Encode(), meta_value);
-      SetsMemberKey sets_member_key(destination, version, member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
       batch.Put(handles_[4], sets_member_key.Encode(), Slice());
     } else {
       std::string member_value;
       version = parsed_sets_meta_value.version();
-      SetsMemberKey sets_member_key(destination, version, member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
       s = db_->Get(default_read_options_, handles_[4], sets_member_key.Encode(), &member_value);
       if (s.IsNotFound()) {
         parsed_sets_meta_value.ModifyCount(1);
@@ -681,7 +681,7 @@ rocksdb::Status Instance::SMove(const Slice& source, const Slice& destination, c
     SetsMetaValue sets_meta_value(Slice(str, sizeof(int32_t)));
     version = sets_meta_value.UpdateVersion();
     batch.Put(handles_[3], base_destination.Encode(), sets_meta_value.Encode());
-    SetsMemberKey sets_member_key(destination, version, member);
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
     batch.Put(handles_[4], sets_member_key.Encode(), Slice());
   } else {
     return s;
@@ -713,7 +713,7 @@ rocksdb::Status Instance::SPop(const Slice& key, std::vector<std::string>* membe
         int32_t size = parsed_sets_meta_value.count();
         int32_t cur_index = 0;
         int32_t version = parsed_sets_meta_value.version();
-        SetsMemberKey sets_member_key(key, version, Slice());
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
         auto iter = db_->NewIterator(default_read_options_, handles_[4]);
         for (iter->Seek(sets_member_key.Encode());
             iter->Valid() && cur_index < size;
@@ -748,7 +748,7 @@ rocksdb::Status Instance::SPop(const Slice& key, std::vector<std::string>* membe
           sets_index.insert(target_index);
         }
 
-        SetsMemberKey sets_member_key(key, version, Slice());
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
         int64_t del_count = 0;
         auto iter = db_->NewIterator(default_read_options_, handles_[4]);
         for (iter->Seek(sets_member_key.Encode());
@@ -845,7 +845,7 @@ rocksdb::Status Instance::SRandmember(const Slice& key, int32_t count, std::vect
 
       int32_t cur_index = 0;
       int32_t idx = 0;
-      SetsMemberKey sets_member_key(key, version, Slice());
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
       auto iter = db_->NewIterator(default_read_options_, handles_[4]);
       for (iter->Seek(sets_member_key.Encode()); iter->Valid() && cur_index < size; iter->Next(), cur_index++) {
         if (static_cast<size_t>(idx) >= targets.size()) {
@@ -886,7 +886,7 @@ rocksdb::Status Instance::SRem(const Slice& key, const std::vector<std::string>&
       std::string member_value;
       version = parsed_sets_meta_value.version();
       for (const auto& member : members) {
-        SetsMemberKey sets_member_key(key, version, member);
+        SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, member);
         s = db_->Get(default_read_options_, handles_[4], sets_member_key.Encode(), &member_value);
         if (s.ok()) {
           cnt++;
@@ -942,7 +942,7 @@ rocksdb::Status Instance::SUnion(const std::vector<std::string>& keys, std::vect
   Slice prefix;
   std::map<std::string, bool> result_flag;
   for (const auto& key_version : vaild_sets) {
-    SetsMemberKey sets_member_key(key_version.key, key_version.version, Slice());
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, Slice());
     prefix = sets_member_key.Encode();
     auto iter = db_->NewIterator(read_options, handles_[4]);
     for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -992,7 +992,7 @@ rocksdb::Status Instance::SUnionstore(const Slice& destination, const std::vecto
   std::vector<std::string> members;
   std::map<std::string, bool> result_flag;
   for (const auto& key_version : vaild_sets) {
-    SetsMemberKey sets_member_key(key_version.key, key_version.version, Slice());
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key_version.key, key_version.version, Slice());
     prefix = sets_member_key.Encode();
     auto iter = db_->NewIterator(read_options, handles_[4]);
     for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -1025,7 +1025,7 @@ rocksdb::Status Instance::SUnionstore(const Slice& destination, const std::vecto
     return s;
   }
   for (const auto& member : members) {
-    SetsMemberKey sets_member_key(destination, version, member);
+    SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, destination, version, member);
     batch.Put(handles_[4], sets_member_key.Encode(), Slice());
   }
   *ret = static_cast<int32_t>(members.size());
@@ -1074,8 +1074,8 @@ rocksdb::Status Instance::SScan(const Slice& key, int64_t cursor, const std::str
         sub_member = pattern.substr(0, pattern.size() - 1);
       }
 
-      SetsMemberKey sets_member_prefix(key, version, sub_member);
-      SetsMemberKey sets_member_key(key, version, start_point);
+      SetsMemberKey sets_member_prefix(0/*db_id*/, 0/*slot_id*/, key, version, sub_member);
+      SetsMemberKey sets_member_key(0/*db_id*/, 0/*slot_id*/, key, version, start_point);
       std::string prefix = sets_member_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[4]);
       for (iter->Seek(sets_member_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);

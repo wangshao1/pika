@@ -66,10 +66,14 @@ struct KeyValue {
 };
 
 struct KeyInfo {
-  uint64_t keys;
-  uint64_t expires;
-  uint64_t avg_ttl;
-  uint64_t invaild_keys;
+  uint64_t keys = 0;
+  uint64_t expires = 0;
+  uint64_t avg_ttl = 0;
+  uint64_t invaild_keys = 0;
+
+  KeyInfo() : keys(0), expires(0), avg_ttl(0), invaild_keys(0) {}
+
+  KeyInfo(uint64_t k, uint64_t e, uint64_t a, uint64_t i) : keys(k), expires(e), avg_ttl(a), invaild_keys(i) {}
 
   KeyInfo operator + (const KeyInfo& info) {
     KeyInfo res;

@@ -13,7 +13,7 @@
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
 
-#include "pstd/include/heap.h"
+#include "util/heap.h"
 #include "storage/util.h"
 #include "src/mutex.h"
 #include "src/base_data_key_format.h"
@@ -255,8 +255,8 @@ private:
   const Comparator* cmp_;
 };
 
-using MergerMinIterHeap = pstd::BinaryHeap<IterSptr, MinMergeComparator>;
-using MergerMaxIterHeap = pstd::BinaryHeap<IterSptr, MaxMergeComparator>;
+using MergerMinIterHeap = rocksdb::BinaryHeap<IterSptr, MinMergeComparator>;
+using MergerMaxIterHeap = rocksdb::BinaryHeap<IterSptr, MaxMergeComparator>;
 
 class MergingIterator {
 public:

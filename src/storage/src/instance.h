@@ -257,7 +257,7 @@ class Instance {
   }
 
 private:
-  int32_t index_;
+  int32_t index_ = 0;
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
   rocksdb::DB* db_ = nullptr;

@@ -10,6 +10,7 @@
 #include <fmt/core.h>
 #include <glog/logging.h>
 
+#include "include/pika_codis_slot.h"
 #include "src/base_filter.h"
 #include "src/scope_record_lock.h"
 #include "src/scope_snapshot.h"
@@ -75,7 +76,6 @@ Status Instance::HashesPKPatternMatchDel(const std::string& pattern, int32_t* re
     if (!parsed_hashes_meta_value.IsStale() && (parsed_hashes_meta_value.count() != 0) &&
         (StringMatch(pattern.data(), pattern.size(), key.data(), key.size(), 0) != 0)) {
       parsed_hashes_meta_value.InitialMetaValue();
-      BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
       batch.Put(handles_[1], key, meta_value);
     }
     if (static_cast<size_t>(batch.Count()) >= BATCH_DELETE_LIMIT) {
@@ -124,7 +124,8 @@ Status Instance::HDel(const Slice& key, const std::vector<std::string>& fields, 
   ScopeRecordLock l(lock_mgr_, key);
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -135,7 +136,7 @@ Status Instance::HDel(const Slice& key, const std::vector<std::string>& fields, 
       std::string data_value;
       version = parsed_hashes_meta_value.version();
       for (const auto& field : filtered_fields) {
-        HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+        HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
         s = db_->Get(read_options, handles_[2], hashes_data_key.Encode(), &data_value);
         if (s.ok()) {
           del_cnt++;
@@ -174,7 +175,8 @@ Status Instance::HGet(const Slice& key, const Slice& field, std::string* value) 
   const rocksdb::Snapshot* snapshot;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -184,7 +186,7 @@ Status Instance::HGet(const Slice& key, const Slice& field, std::string* value) 
       return Status::NotFound();
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey data_key(0/*db_id*/, slot_id, key, version, field);
       s = db_->Get(read_options, handles_[2], data_key.Encode(), value);
     }
   }
@@ -199,7 +201,8 @@ Status Instance::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
   int32_t version = 0;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -209,7 +212,7 @@ Status Instance::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
       return Status::NotFound();
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, "");
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, "");
       Slice prefix = hashes_data_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -232,7 +235,8 @@ Status Instance::HIncrby(const Slice& key, const Slice& field, int64_t value, in
   std::string old_value;
   std::string meta_value;
 
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   char value_buf[32] = {0};
   char meta_value_buf[4] = {0};
@@ -243,13 +247,13 @@ Status Instance::HIncrby(const Slice& key, const Slice& field, int64_t value, in
       parsed_hashes_meta_value.set_count(1);
       parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[1], base_meta_key.Encode(), meta_value);
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       Int64ToStr(value_buf, 32, value);
       batch.Put(handles_[2], hashes_data_key.Encode(), value_buf);
       *ret = value;
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       s = db_->Get(default_read_options_, handles_[2], hashes_data_key.Encode(), &old_value);
       if (s.ok()) {
         int64_t ival = 0;
@@ -278,7 +282,7 @@ Status Instance::HIncrby(const Slice& key, const Slice& field, int64_t value, in
     HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[1], base_meta_key.Encode(), hashes_meta_value.Encode());
-    HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+    HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
 
     Int64ToStr(value_buf, 32, value);
     batch.Put(handles_[2], hashes_data_key.Encode(), value_buf);
@@ -306,7 +310,8 @@ Status Instance::HIncrbyfloat(const Slice& key, const Slice& field, const Slice&
     return Status::Corruption("value is not a vaild float");
   }
 
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   char meta_value_buf[4] = {0};
   if (s.ok()) {
@@ -316,13 +321,13 @@ Status Instance::HIncrbyfloat(const Slice& key, const Slice& field, const Slice&
       parsed_hashes_meta_value.set_count(1);
       parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[1], key, meta_value);
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
 
       LongDoubleToStr(long_double_by, new_value);
       batch.Put(handles_[2], hashes_data_key.Encode(), *new_value);
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       s = db_->Get(default_read_options_, handles_[2], hashes_data_key.Encode(), &old_value_str);
       if (s.ok()) {
         long double total;
@@ -352,7 +357,7 @@ Status Instance::HIncrbyfloat(const Slice& key, const Slice& field, const Slice&
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[1], base_meta_key.Encode(), hashes_meta_value.Encode());
 
-    HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+    HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
     LongDoubleToStr(long_double_by, new_value);
     batch.Put(handles_[2], hashes_data_key.Encode(), *new_value);
   } else {
@@ -372,7 +377,8 @@ Status Instance::HKeys(const Slice& key, std::vector<std::string>* fields) {
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
 
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -382,7 +388,7 @@ Status Instance::HKeys(const Slice& key, std::vector<std::string>* fields) {
       return Status::NotFound();
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, "");
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, "");
       Slice prefix = hashes_data_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -398,7 +404,8 @@ Status Instance::HKeys(const Slice& key, std::vector<std::string>* fields) {
 Status Instance::HLen(const Slice& key, int32_t* ret) {
   *ret = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -427,7 +434,8 @@ Status Instance::HMGet(const Slice& key, const std::vector<std::string>& fields,
   const rocksdb::Snapshot* snapshot;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -439,7 +447,7 @@ Status Instance::HMGet(const Slice& key, const std::vector<std::string>& fields,
     } else {
       version = parsed_hashes_meta_value.version();
       for (const auto& field : fields) {
-        HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+        HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
         s = db_->Get(read_options, handles_[2], hashes_data_key.Encode(), &value);
         if (s.ok()) {
           vss->push_back({value, Status::OK()});
@@ -477,7 +485,8 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
 
   int32_t version = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   char meta_value_buf[4] = {0};
   if (s.ok()) {
@@ -487,7 +496,7 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
       parsed_hashes_meta_value.set_count(static_cast<int32_t>(filtered_fvs.size()));
       batch.Put(handles_[1], base_meta_key.Encode(), meta_value);
       for (const auto& fv : filtered_fvs) {
-        HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, fv.field);
+        HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, fv.field);
         batch.Put(handles_[2], hashes_data_key.Encode(), fv.value);
       }
     } else {
@@ -495,7 +504,7 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
       std::string data_value;
       version = parsed_hashes_meta_value.version();
       for (const auto& fv : filtered_fvs) {
-        HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, fv.field);
+        HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, fv.field);
         s = db_->Get(default_read_options_, handles_[2], hashes_data_key.Encode(), &data_value);
         if (s.ok()) {
           statistic++;
@@ -516,7 +525,7 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[1], base_meta_key.Encode(), hashes_meta_value.Encode());
     for (const auto& fv : filtered_fvs) {
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, fv.field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, fv.field);
       batch.Put(handles_[2], hashes_data_key.Encode(), fv.value);
     }
   }
@@ -532,7 +541,8 @@ Status Instance::HSet(const Slice& key, const Slice& field, const Slice& value, 
   int32_t version = 0;
   uint32_t statistic = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   char meta_value_buf[4] = {0};
   if (s.ok()) {
@@ -541,13 +551,13 @@ Status Instance::HSet(const Slice& key, const Slice& field, const Slice& value, 
       version = parsed_hashes_meta_value.InitialMetaValue();
       parsed_hashes_meta_value.set_count(1);
       batch.Put(handles_[1], base_meta_key.Encode(), meta_value);
-      HashesDataKey data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey data_key(0/*db_id*/, slot_id, key, version, field);
       batch.Put(handles_[2], data_key.Encode(), value);
       *res = 1;
     } else {
       version = parsed_hashes_meta_value.version();
       std::string data_value;
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       s = db_->Get(default_read_options_, handles_[2], hashes_data_key.Encode(), &data_value);
       if (s.ok()) {
         *res = 0;
@@ -571,7 +581,7 @@ Status Instance::HSet(const Slice& key, const Slice& field, const Slice& value, 
     HashesMetaValue meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = meta_value.UpdateVersion();
     batch.Put(handles_[1], base_meta_key.Encode(), meta_value.Encode());
-    HashesDataKey data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+    HashesDataKey data_key(0/*db_id*/, slot_id, key, version, field);
     batch.Put(handles_[2], data_key.Encode(), value);
     *res = 1;
   } else {
@@ -588,7 +598,8 @@ Status Instance::HSetnx(const Slice& key, const Slice& field, const Slice& value
 
   int32_t version = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   char meta_value_buf[4] = {0};
   if (s.ok()) {
@@ -597,12 +608,12 @@ Status Instance::HSetnx(const Slice& key, const Slice& field, const Slice& value
       version = parsed_hashes_meta_value.InitialMetaValue();
       parsed_hashes_meta_value.set_count(1);
       batch.Put(handles_[1], base_meta_key.Encode(), meta_value);
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       batch.Put(handles_[2], hashes_data_key.Encode(), value);
       *ret = 1;
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
       std::string data_value;
       s = db_->Get(default_read_options_, handles_[2], hashes_data_key.Encode(), &data_value);
       if (s.ok()) {
@@ -621,7 +632,7 @@ Status Instance::HSetnx(const Slice& key, const Slice& field, const Slice& value
     HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[1], base_meta_key.Encode(), hashes_meta_value.Encode());
-    HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field);
+    HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, field);
     batch.Put(handles_[2], hashes_data_key.Encode(), value);
     *ret = 1;
   } else {
@@ -638,7 +649,8 @@ Status Instance::HVals(const Slice& key, std::vector<std::string>* values) {
   int32_t version = 0;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -648,7 +660,7 @@ Status Instance::HVals(const Slice& key, std::vector<std::string>* values) {
       return Status::NotFound();
     } else {
       version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_key(0/*db_id*/, 0/*slot_id*/, key, version, "");
+      HashesDataKey hashes_data_key(0/*db_id*/, slot_id, key, version, "");
       Slice prefix = hashes_data_key.Encode();
       auto iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -688,7 +700,8 @@ Status Instance::HScan(const Slice& key, int64_t cursor, const std::string& patt
   std::string meta_value;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -710,8 +723,8 @@ Status Instance::HScan(const Slice& key, int64_t cursor, const std::string& patt
         sub_field = pattern.substr(0, pattern.size() - 1);
       }
 
-      HashesDataKey hashes_data_prefix(0/*db_id*/, 0/*slot_id*/, key, version, sub_field);
-      HashesDataKey hashes_start_data_key(0/*db_id*/, 0/*slot_id*/, key, version, start_point);
+      HashesDataKey hashes_data_prefix(0/*db_id*/, slot_id, key, version, sub_field);
+      HashesDataKey hashes_start_data_key(0/*db_id*/, slot_id, key, version, start_point);
       std::string prefix = hashes_data_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
@@ -752,7 +765,8 @@ Status Instance::HScanx(const Slice& key, const std::string& start_field, const 
   const rocksdb::Snapshot* snapshot;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -761,8 +775,8 @@ Status Instance::HScanx(const Slice& key, const std::string& start_field, const 
       return Status::NotFound();
     } else {
       int32_t version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_prefix(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
-      HashesDataKey hashes_start_data_key(0/*db_id*/, 0/*slot_id*/, key, version, start_field);
+      HashesDataKey hashes_data_prefix(0/*db_id*/, slot_id, key, version, Slice());
+      HashesDataKey hashes_start_data_key(0/*db_id*/, slot_id, key, version, start_field);
       std::string prefix = hashes_data_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
@@ -810,7 +824,8 @@ Status Instance::PKHScanRange(const Slice& key, const Slice& field_start, const 
     return Status::InvalidArgument("error in given range");
   }
 
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -818,8 +833,8 @@ Status Instance::PKHScanRange(const Slice& key, const Slice& field_start, const 
       return Status::NotFound();
     } else {
       int32_t version = parsed_hashes_meta_value.version();
-      HashesDataKey hashes_data_prefix(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
-      HashesDataKey hashes_start_data_key(0/*db_id*/, 0/*slot_id*/, key, version, field_start);
+      HashesDataKey hashes_data_prefix(0/*db_id*/, slot_id, key, version, Slice());
+      HashesDataKey hashes_start_data_key(0/*db_id*/, slot_id, key, version, field_start);
       std::string prefix = hashes_data_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->Seek(start_no_limit ? prefix : hashes_start_data_key.Encode());
@@ -869,7 +884,8 @@ Status Instance::PKHRScanRange(const Slice& key, const Slice& field_start, const
     return Status::InvalidArgument("error in given range");
   }
 
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -879,8 +895,8 @@ Status Instance::PKHRScanRange(const Slice& key, const Slice& field_start, const
       int32_t version = parsed_hashes_meta_value.version();
       int32_t start_key_version = start_no_limit ? version + 1 : version;
       std::string start_key_field = start_no_limit ? "" : field_start.ToString();
-      HashesDataKey hashes_data_prefix(0/*db_id*/, 0/*slot_id*/, key, version, Slice());
-      HashesDataKey hashes_start_data_key(0/*db_id*/, 0/*slot_id*/, key, start_key_version, start_key_field);
+      HashesDataKey hashes_data_prefix(0/*db_id*/, slot_id, key, version, Slice());
+      HashesDataKey hashes_start_data_key(0/*db_id*/, slot_id, key, start_key_version, start_key_field);
       std::string prefix = hashes_data_prefix.Encode().ToString();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[2]);
       for (iter->SeekForPrev(hashes_start_data_key.Encode().ToString());
@@ -913,7 +929,8 @@ Status Instance::PKHRScanRange(const Slice& key, const Slice& field_start, const
 Status Instance::HashesExpire(const Slice& key, int32_t ttl) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -937,7 +954,8 @@ Status Instance::HashesExpire(const Slice& key, int32_t ttl) {
 Status Instance::HashesDel(const Slice& key) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -958,7 +976,8 @@ Status Instance::HashesDel(const Slice& key) {
 Status Instance::HashesExpireat(const Slice& key, int32_t timestamp) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -981,7 +1000,8 @@ Status Instance::HashesExpireat(const Slice& key, int32_t timestamp) {
 Status Instance::HashesPersist(const Slice& key) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
@@ -1004,7 +1024,8 @@ Status Instance::HashesPersist(const Slice& key) {
 
 Status Instance::HashesTTL(const Slice& key, int64_t* timestamp) {
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[1], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);

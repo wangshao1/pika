@@ -106,7 +106,8 @@ Status Instance::LIndex(const Slice& key, int64_t index, std::string* element) {
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -139,7 +140,8 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
   rocksdb::WriteBatch batch;
   ScopeRecordLock l(lock_mgr_, key);
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -233,7 +235,8 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
 Status Instance::LLen(const Slice& key, uint64_t* len) {
   *len = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -257,7 +260,8 @@ Status Instance::LPop(const Slice& key, int64_t count, std::vector<std::string>*
   ScopeRecordLock l(lock_mgr_, key);
 
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -303,7 +307,8 @@ Status Instance::LPush(const Slice& key, const std::vector<std::string>& values,
   uint64_t index = 0;
   int32_t version = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -346,7 +351,8 @@ Status Instance::LPushx(const Slice& key, const std::vector<std::string>& values
   ScopeRecordLock l(lock_mgr_, key);
 
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -379,7 +385,8 @@ Status Instance::LRange(const Slice& key, int64_t start, int64_t stop, std::vect
   read_options.snapshot = snapshot;
 
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(read_options, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -425,7 +432,8 @@ Status Instance::LRem(const Slice& key, int64_t count, const Slice& value, uint6
   rocksdb::WriteBatch batch;
   ScopeRecordLock l(lock_mgr_, key);
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -542,7 +550,8 @@ Status Instance::LSet(const Slice& key, int64_t index, const Slice& value) {
   uint32_t statistic = 0;
   ScopeRecordLock l(lock_mgr_, key);
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -574,7 +583,8 @@ Status Instance::LTrim(const Slice& key, int64_t start, int64_t stop) {
 
   uint32_t statistic = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -636,7 +646,8 @@ Status Instance::RPop(const Slice& key, int64_t count, std::vector<std::string>*
   ScopeRecordLock l(lock_mgr_, key);
 
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -682,7 +693,8 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   MultiScopeRecordLock l(lock_mgr_, {source.ToString(), destination.ToString()});
   if (source.compare(destination) == 0) {
     std::string meta_value;
-    BaseMetaKey base_source(0/*db_id*/, 0/*slot_id*/, source);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    BaseMetaKey base_source(0/*db_id*/, slot_id, source);
     s = db_->Get(default_read_options_, handles_[5], base_source.Encode(), &meta_value);
     if (s.ok()) {
       ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -725,7 +737,8 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   int32_t version;
   std::string target;
   std::string source_meta_value;
-  BaseMetaKey base_source(0/*db_id*/, 0/*slot_id*/, source);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_source(0/*db_id*/, slot_id, source);
   s = db_->Get(default_read_options_, handles_[5], base_source.Encode(), &source_meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&source_meta_value);
@@ -753,7 +766,8 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   }
 
   std::string destination_meta_value;
-  BaseMetaKey base_destination(0/*db_id*/, 0/*slot_id*/, destination);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
   s = db_->Get(default_read_options_, handles_[5], base_destination.Encode(), &destination_meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&destination_meta_value);
@@ -797,7 +811,8 @@ Status Instance::RPush(const Slice& key, const std::vector<std::string>& values,
   uint64_t index = 0;
   int32_t version = 0;
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -840,7 +855,8 @@ Status Instance::RPushx(const Slice& key, const std::vector<std::string>& values
 
   ScopeRecordLock l(lock_mgr_, key);
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -868,7 +884,8 @@ Status Instance::RPushx(const Slice& key, const std::vector<std::string>& values
 Status Instance::ListsExpire(const Slice& key, int32_t ttl) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -892,7 +909,8 @@ Status Instance::ListsExpire(const Slice& key, int32_t ttl) {
 Status Instance::ListsDel(const Slice& key) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -913,7 +931,8 @@ Status Instance::ListsDel(const Slice& key) {
 Status Instance::ListsExpireat(const Slice& key, int32_t timestamp) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -936,7 +955,8 @@ Status Instance::ListsExpireat(const Slice& key, int32_t timestamp) {
 Status Instance::ListsPersist(const Slice& key) {
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, key);
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
@@ -959,7 +979,8 @@ Status Instance::ListsPersist(const Slice& key) {
 
 Status Instance::ListsTTL(const Slice& key, int64_t* timestamp) {
   std::string meta_value;
-  BaseMetaKey base_meta_key(0/*db_id*/, 0/*slot_id*/, key);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
   Status s = db_->Get(default_read_options_, handles_[5], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);

@@ -23,9 +23,9 @@ inline const std::string DEFAULT_RS_PATH = "db";    // Default restore root dir
 // p_engine for BackupEngine handler
 // backup_dir
 struct BackupSaveArgs {
-  void* p_engine;
+  void* p_engine = nullptr;
   const std::string backup_dir;
-  int index_;
+  int index_ = 0;
   Status res;
 
   BackupSaveArgs(void* _p_engine, std::string  _backup_dir, int index)

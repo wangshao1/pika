@@ -20,7 +20,7 @@ public:
   void ReshardSlots(const std::vector<uint32_t>& slots) {}
 
 private:
-  uint32_t inst_num_;
+  uint32_t inst_num_ = 0;
 };
 } // namespace storage end
 

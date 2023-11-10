@@ -99,7 +99,7 @@ struct FieldValue {
 
 struct KeyVersion {
   std::string key;
-  uint64_t version;
+  uint64_t version = 0;
   bool operator==(const KeyVersion& kv) const { return (kv.key == key && kv.version == version); }
 };
 

@@ -10,12 +10,14 @@
 
 #include "rocksdb/env.h"
 #include "rocksdb/slice.h"
+
 #include "src/coding.h"
 #include "src/mutex.h"
+#include "pstd/include/pstd_coding.h"
 
 namespace storage {
 class InternalValue {
- public:
+public:
   explicit InternalValue(const rocksdb::Slice& user_value)
       :  user_value_(user_value) {}
   virtual ~InternalValue() {
@@ -35,28 +37,24 @@ class InternalValue {
     return rocksdb::Status::OK();
   }
   void SetVersion(uint64_t version = 0) { version_ = version; }
-  static const size_t kDefaultValueSuffixLength = sizeof(uint64_t) * 4;
-  virtual rocksdb::Slice Encode() {
-    size_t usize = user_value_.size();
-    size_t needed = usize + kDefaultValueSuffixLength;
+
+  char* ReAllocIfNeeded(size_t needed) {
     char* dst;
     if (needed <= sizeof(space_)) {
       dst = space_;
     } else {
       dst = new char[needed];
-
-      // Need to allocate space, delete previous space
       if (start_ != space_) {
-        delete[] start_;
+        delete [] start_;
       }
     }
     start_ = dst;
-    size_t len = AppendTimestampAndVersion();
-    return rocksdb::Slice(start_, len);
+    return dst;
   }
-  virtual size_t AppendTimestampAndVersion() = 0;
 
- protected:
+  virtual rocksdb::Slice Encode() = 0;
+
+protected:
   char space_[200];
   char* start_ = nullptr;
   rocksdb::Slice user_value_;
@@ -67,7 +65,7 @@ class InternalValue {
 };
 
 class ParsedInternalValue {
- public:
+public:
   // Use this constructor after rocksdb::DB::Get(), since we use this in
   // the implement of user interfaces and may need to modify the
   // original value suffix, so the value_ must point to the string
@@ -77,7 +75,7 @@ class ParsedInternalValue {
   // since we use this in Compaction process, all we need to do is parsing
   // the rocksdb::Slice, so don't need to modify the original value, value_ can be
   // set to nullptr
-  explicit ParsedInternalValue(const rocksdb::Slice& value)  {}
+  explicit ParsedInternalValue(const rocksdb::Slice& value) {}
 
   virtual ~ParsedInternalValue() = default;
 
@@ -124,31 +122,12 @@ class ParsedInternalValue {
     return !IsStale();
   }
 
-  void SetEtimeToValue() {
-    if (value_) {
-      char* dst = const_cast<char*>(value_->data()) + value_->size() - sizeof(uint64_t);
-      EncodeFixed64(dst, etime_);
-    }
-  }
-
-  void SetCtimeToValue() {
-    if (value_) {
-      char* dst = const_cast<char*>(value_->data()) + value_->size() - 2 * sizeof(uint64_t);
-      EncodeFixed64(dst, ctime_);
-    }
-  }
-
-  void SetReserveToValue() {
-    if (value_) {
-      char* dst = const_cast<char*>(value_->data()) + value_->size() - 4 * sizeof(uint64_t);
-      memcpy(dst, reserve_, 2 * sizeof(uint64_t));
-    }
-  }
-
   virtual void StripSuffix() = 0;
 
- protected:
+protected:
   virtual void SetVersionToValue() = 0;
+  virtual void SetEtimeToValue() = 0;
+  virtual void SetCtimeToValue() = 0;
   std::string* value_ = nullptr;
   rocksdb::Slice user_value_;
   uint64_t version_ = 0 ;

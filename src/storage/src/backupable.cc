@@ -6,7 +6,7 @@
 #include <dirent.h>
 #include <utility>
 
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 #include "storage/backupable.h"
 
 extern std::unique_ptr<PikaConf> g_pika_conf;
@@ -75,7 +75,7 @@ Status BackupEngine::SetBackupContent() {
 Status BackupEngine::CreateNewBackupSpecify(const std::string& backup_dir, int index) {
   auto it_engine = engines_.find(index);
   auto it_content = backup_content_.find(index);
-  std::string dir = GetSaveDirByType(backup_dir, index);
+  std::string dir = GetSaveDirByIndex(backup_dir, index);
   delete_dir(dir.c_str());
 
   if (it_content != backup_content_.end() && it_engine != engines_.end()) {

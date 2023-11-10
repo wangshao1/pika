@@ -60,7 +60,7 @@ class BackupEngine {
   std::map<int, pthread_t> backup_pthread_ts_;
 
   Status NewCheckpoint(rocksdb::DB* rocksdb_db, int index);
-  std::string GetSaveDirByType(const std::string& _dir, int index) const {
+  std::string GetSaveDirByIndex(const std::string& _dir, int index) const {
     std::string backup_dir = _dir.empty() ? DEFAULT_BK_PATH : _dir;
     return backup_dir + ((backup_dir.back() != '/') ? "/" : "") + std::to_string(index);
   }

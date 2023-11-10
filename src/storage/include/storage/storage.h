@@ -94,6 +94,8 @@ struct ValueStatus {
 struct FieldValue {
   std::string field;
   std::string value;
+  FieldValue(const std::string& k, const std::string& v) : field(k), value(v) {}
+  FieldValue(std::string&& k, std::string&& v) : field(std::move(k)), value(std::move(v)) {}
   bool operator==(const FieldValue& fv) const { return (fv.field == field && fv.value == value); }
 };
 
@@ -104,6 +106,8 @@ struct KeyVersion {
 };
 
 struct ScoreMember {
+  ScoreMember() = default;
+  ScoreMember(double t_score, const std::string& t_member) : score(t_score), member(t_member) {} 
   double score;
   std::string member;
   bool operator==(const ScoreMember& sm) const { return (sm.score == score && sm.member == member); }
@@ -111,16 +115,15 @@ struct ScoreMember {
 
 enum BeforeOrAfter { Before, After };
 
-enum DataType { kAll, kStrings, kHashes, kLists, kZSets, kSets };
+enum DataType { kAll, kStrings, kHashes, kSets, kLists, kZSets };
 
-const char DataTypeTag[] = {'a', 'k', 'h', 'l', 'z', 's'};
+const char DataTypeTag[] = {'a', 'k', 'h', 's', 'l', 'z'};
 
 enum class OptionType {
   kDB,
   kColumnFamily,
 };
 
-// TODO(wangshaoyi): about manual compaction
 enum ColumnFamilyType { kMeta, kData, kMetaAndData };
 
 enum AGGREGATE { SUM, MIN, MAX };
@@ -129,7 +132,6 @@ enum BitOpType { kBitOpAnd = 1, kBitOpOr, kBitOpXor, kBitOpNot, kBitOpDefault };
 
 enum Operation { kNone = 0, kCleanAll, kCleanStrings, kCleanHashes, kCleanZSets, kCleanSets, kCleanLists, kCompactKey };
 
-// TODO(wangshaoyi): about manual compaction
 struct BGTask {
   DataType type;
   Operation operation;
@@ -1028,24 +1030,10 @@ class Storage {
                     const std::unordered_map<std::string, std::string>& options);
   void GetRocksDBInfo(std::string& info);
 
-  // TODO(wangshaoyi): keep pace with codis
-  int GetSlotID(const Slice& key) const {
-    static int seed = 1111;
-    int slot_id = 0;
-    return slot_id;
-  }
-
-  // TODO(wangshaoyi): keep pace with codis
-  int GetSlotID(const std::string& key) const {
-    static int seed = 1111;
-    int slot_id = 0;
-    return int(slot_id);
-  }
-
  private:
   std::vector<std::shared_ptr<Instance>> insts_;
   std::unique_ptr<SlotIndexer> slot_indexer_;
-  std::atomic<bool> is_opened_ = false;
+  std::atomic<bool> is_opened_ = {false};
   int slot_num_;
 
   std::unique_ptr<LRUCache<std::string, std::string>> cursors_store_;
@@ -1056,11 +1044,11 @@ class Storage {
   pstd::CondVar bg_tasks_cond_var_;
   std::queue<BGTask> bg_tasks_queue_;
 
-  std::atomic<int> current_task_type_ = kNone;
-  std::atomic<bool> bg_tasks_should_exit_ = false;
+  std::atomic<int> current_task_type_ = {kNone};
+  std::atomic<bool> bg_tasks_should_exit_ = {false};
 
   // For scan keys in data base
-  std::atomic<bool> scan_keynum_exit_ = false;
+  std::atomic<bool> scan_keynum_exit_ = {false};
 };
 
 }  //  namespace storage

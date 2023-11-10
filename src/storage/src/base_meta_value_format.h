@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "storage/storage_define.h"
 #include "src/base_value_format.h"
 
 namespace storage {
@@ -20,11 +21,15 @@ namespace storage {
 class BaseMetaValue : public InternalValue {
  public:
   explicit BaseMetaValue(const Slice& user_value) : InternalValue(user_value) {}
-  size_t AppendTimestampAndVersion() override {
+
+  rocksdb::Slice Encode() override {
     size_t usize = user_value_.size();
-    char* dst = start_;
-    memcpy(dst, user_value_.data(), usize);
-    dst += usize;
+    size_t needed = usize + kVersionLength + kSuffixReserveLength + 2 * kTimestampLength;
+    char* dst = ReAllocIfNeeded(needed);
+    char* start_pos = dst;
+
+    memcpy(dst, user_value_.data(), user_value_.size());
+    dst += user_value_.size();
     EncodeFixed64(dst, version_);
     dst += sizeof(version_);
     memcpy(dst, reserve_, sizeof(reserve_));
@@ -32,7 +37,8 @@ class BaseMetaValue : public InternalValue {
     EncodeFixed64(dst, ctime_);
     dst += sizeof(ctime_);
     EncodeFixed64(dst, etime_);
-    return usize + 5 * sizeof(int64_t);
+    dst += sizeof(etime_);
+    return rocksdb::Slice(start_, needed);
   }
 
   uint64_t UpdateVersion() {
@@ -96,9 +102,21 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
     }
   }
 
-  static const size_t kBaseMetaValueSuffixLength = 5 * sizeof(uint64_t);
+  void SetCtimeToValue() override {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() - 2 * kTimestampLength;
+      EncodeFixed64(dst, ctime_);
+    }
+  }
 
-  int32_t InitialMetaValue() {
+  void SetEtimeToValue() override {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() - kTimestampLength;
+      EncodeFixed64(dst, etime_);
+    }
+  }
+
+  uint64_t InitialMetaValue() {
     this->set_count(0);
     this->SetEtime(0);
     this->SetCtime(0);
@@ -127,7 +145,7 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
     }
   }
 
-  int32_t UpdateVersion() {
+  uint64_t UpdateVersion() {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
     if (version_ >= static_cast<uint64_t>(unix_time)) {
@@ -140,6 +158,7 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   }
 
  private:
+  static const size_t kBaseMetaValueSuffixLength = kVersionLength + kSuffixReserveLength + 2 * kTimestampLength;
   int32_t count_ = 0;
 };
 

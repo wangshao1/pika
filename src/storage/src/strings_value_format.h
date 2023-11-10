@@ -9,6 +9,7 @@
 #include <string>
 
 #include "src/base_value_format.h"
+#include "storage/storage_define.h"
 
 namespace storage {
 /*
@@ -18,17 +19,20 @@ namespace storage {
 class StringsValue : public InternalValue {
  public:
   explicit StringsValue(const rocksdb::Slice& user_value) : InternalValue(user_value) {}
-  size_t AppendTimestampAndVersion() override {
+  virtual rocksdb::Slice Encode() override {
     size_t usize = user_value_.size();
-    char* dst = start_;
+    size_t needed = usize + kSuffixReserveLength + 2 * kTimestampLength;
+    char* dst = ReAllocIfNeeded(needed);
+    char* start_pos = dst;
+
     memcpy(dst, user_value_.data(), usize);
     dst += usize;
-    memcpy(dst, reserve_, 2 * sizeof(uint64_t));
-    dst += 2 * sizeof(uint64_t);
+    memcpy(dst, reserve_, kSuffixReserveLength);
+    dst += kSuffixReserveLength;
     EncodeFixed64(dst, ctime_);
-    dst += sizeof(uint64_t);
+    dst += kTimestampLength;
     EncodeFixed64(dst, etime_);
-    return usize + 4 * sizeof(uint64_t);
+    return rocksdb::Slice(start_pos, needed);
   }
 };
 
@@ -38,9 +42,9 @@ class ParsedStringsValue : public ParsedInternalValue {
   explicit ParsedStringsValue(std::string* internal_value_str) : ParsedInternalValue(internal_value_str) {
     if (internal_value_str->size() >= kStringsValueSuffixLength) {
       user_value_ = rocksdb::Slice(internal_value_str->data(), internal_value_str->size() - kStringsValueSuffixLength);
-      memcpy(reserve_, internal_value_str->data() + user_value_.size(), 2 * sizeof(uint64_t));
-      ctime_ = DecodeFixed64(internal_value_str->data() + user_value_.size() + 2 * sizeof(uint64_t));
-      etime_ = DecodeFixed64(internal_value_str->data() + user_value_.size() + 3 * sizeof(uint64_t));
+      memcpy(reserve_, internal_value_str->data() + user_value_.size(), kSuffixReserveLength);
+      ctime_ = DecodeFixed64(internal_value_str->data() + user_value_.size() + kSuffixReserveLength);
+      etime_ = DecodeFixed64(internal_value_str->data() + user_value_.size() + kSuffixReserveLength + kTimestampLength);
     }
   }
 
@@ -48,9 +52,9 @@ class ParsedStringsValue : public ParsedInternalValue {
   explicit ParsedStringsValue(const rocksdb::Slice& internal_value_slice) : ParsedInternalValue(internal_value_slice) {
     if (internal_value_slice.size() >= kStringsValueSuffixLength) {
       user_value_ = rocksdb::Slice(internal_value_slice.data(), internal_value_slice.size() - kStringsValueSuffixLength);
-      memcpy(reserve_, internal_value_slice.data() + user_value_.size(), 2 * sizeof(uint64_t));
-      ctime_ = DecodeFixed64(internal_value_slice.data() + user_value_.size() + 2 * sizeof(uint64_t));
-      etime_ = DecodeFixed64(internal_value_slice.data() + user_value_.size() + 3 * sizeof(uint64_t));
+      memcpy(reserve_, internal_value_slice.data() + user_value_.size(), kSuffixReserveLength);
+      ctime_ = DecodeFixed64(internal_value_slice.data() + user_value_.size() + kSuffixReserveLength);
+      etime_ = DecodeFixed64(internal_value_slice.data() + user_value_.size() + kSuffixReserveLength + kTimestampLength);
     }
   }
 
@@ -63,9 +67,24 @@ class ParsedStringsValue : public ParsedInternalValue {
   // Strings type do not have version field;
   void SetVersionToValue() override {}
 
-  rocksdb::Slice Value() { return user_value_; }
+  void SetCtimeToValue() override {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() -
+                  kStringsValueSuffixLength + kSuffixReserveLength;
+      EncodeFixed64(dst, ctime_);
+    }
+  }
 
-  static const size_t kStringsValueSuffixLength = 4 * sizeof(uint64_t);
+  void SetEtimeToValue() override {
+    if (value_) {
+      char* dst = const_cast<char*>(value_->data()) + value_->size() -
+                  kStringsValueSuffixLength + kSuffixReserveLength + kTimestampLength;
+      EncodeFixed64(dst, etime_);
+    }
+  }
+
+private:
+  const size_t kStringsValueSuffixLength =  2 * kTimestampLength + kSuffixReserveLength;
 };
 
 }  //  namespace storage

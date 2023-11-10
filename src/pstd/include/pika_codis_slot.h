@@ -9,8 +9,7 @@
 #include <stdint.h>
 #include <memory>
 
-#include "include/pika_conf.h"
-#include "include/pika_data_distribution.h"
+#include "pstd/include/pika_conf.h"
 
 extern std::unique_ptr<PikaConf> g_pika_conf;
 
@@ -30,5 +29,4 @@ int GetSlotsID(const std::string& str, uint32_t* pcrc, int* phastag);
 int GetSlotID(const std::string& str);
 
 #endif
-
 

@@ -14,26 +14,30 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
+#include "glog/logging.h"
 
 #include "util/heap.h"
 #include "storage/util.h"
 #include "src/mutex.h"
+#include "src/debug.h"
 #include "src/base_data_key_format.h"
-#include "src/base_meta_key_format.h"
+#include "src/base_key_format.h"
 #include "src/base_meta_value_format.h"
 #include "src/strings_value_format.h"
 #include "src/lists_meta_value_format.h"
+#include "storage/storage_define.h"
 
 namespace storage {
 using ColumnFamilyHandle = rocksdb::ColumnFamilyHandle;
 using Comparator = rocksdb::Comparator;
+
+enum Direction { kForward, kReverse };
 
 class TypeIterator {
 public:
   TypeIterator(const rocksdb::ReadOptions& options, rocksdb::DB* db,
   ColumnFamilyHandle* handle) {
     raw_iter_.reset(db->NewIterator(options, handle));
-    cmp_ = handle->GetComparator();
   }
 
   virtual ~TypeIterator() {}
@@ -82,8 +86,6 @@ public:
 
   virtual bool ShouldSkip() { return false; }
 
-  const Comparator* GetComparator() { return cmp_;}
-
   virtual std::string Key() const { return user_key_; }
 
   virtual std::string Value() const {return user_value_; }
@@ -94,9 +96,9 @@ public:
 
 protected:
   std::unique_ptr<rocksdb::Iterator> raw_iter_;
-  const Comparator* cmp_;
   std::string user_key_;
   std::string user_value_;
+  Direction direction_ = kForward;
 };
 
 class StringsIterator : public TypeIterator {
@@ -113,14 +115,15 @@ public:
       return true;
     }
 
-    ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
+    ParsedBaseKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
         parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
       return true;
     }
+
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_value.UserValue().ToString();
-    return false;
+    return false; 
   }
 private:
   std::string pattern_;
@@ -147,7 +150,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false;
+    return false; 
   }
 private:
   std::string pattern_;
@@ -174,7 +177,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false;
+    return false; 
   }
 private:
   std::string pattern_;
@@ -201,7 +204,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false;
+    return false; 
   }
 private:
   std::string pattern_;
@@ -228,7 +231,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false;
+    return false; 
   }
 private:
   std::string pattern_;
@@ -239,22 +242,23 @@ using IterSptr = std::shared_ptr<TypeIterator>;
 
 class MinMergeComparator {
 public:
-  MinMergeComparator(const Comparator* cmp) : cmp_(cmp) {}
+  MinMergeComparator() = default;
   bool operator() (IterSptr a, IterSptr b) {
-    return cmp_->Compare(a->Key(), b->Key()) > 0;
+
+    int a_len = a->Key().size();
+    int b_len = b->Key().size();
+    return a->Key().compare(b->Key()) > 0;
   }
-private:
-  const Comparator* cmp_;
 };
 
 class MaxMergeComparator {
 public:
-  MaxMergeComparator(const Comparator* cmp) : cmp_(cmp) {}
+  MaxMergeComparator() = default;
   bool operator() (IterSptr a, IterSptr b) {
-    return cmp_->Compare(a->Key(), b->Key()) < 0;
+    int a_len = a->Key().size();
+    int b_len = b->Key().size();
+    return a->Key().compare(b->Key()) < 0;
   }
-private:
-  const Comparator* cmp_;
 };
 
 using MergerMinIterHeap = rocksdb::BinaryHeap<IterSptr, MinMergeComparator>;
@@ -263,9 +267,7 @@ using MergerMaxIterHeap = rocksdb::BinaryHeap<IterSptr, MaxMergeComparator>;
 class MergingIterator {
 public:
   MergingIterator(const std::vector<IterSptr>& children)
-      :  current_(nullptr), min_heap_(children[0]->GetComparator()),
-         max_heap_(children[0]->GetComparator()),
-         direction_(kForward) {
+      :  current_(nullptr), direction_(kForward) {
     std::copy(children.begin(), children.end(), std::back_inserter(children_));
     for (const auto& child : children_) {
       if (child->Valid()) {
@@ -389,7 +391,6 @@ public:
   bool Valid() { return current_ != nullptr; }
 
 private:
-  enum Direction { kForward, kReverse };
 
   MergerMinIterHeap min_heap_;
   MergerMaxIterHeap max_heap_;

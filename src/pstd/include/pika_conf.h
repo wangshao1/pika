@@ -11,13 +11,13 @@
 #include <set>
 #include <unordered_set>
 
+#include "rocksdb/compression_type.h"
+
 #include "pstd/include/base_conf.h"
 #include "pstd/include/pstd_mutex.h"
 #include "pstd/include/pstd_string.h"
-
-#include "include/pika_define.h"
-#include "include/pika_meta.h"
-#include "rocksdb/compression_type.h"
+#include "pstd/include/pstd_status.h"
+#include "pstd/include/pika_define.h"
 
 #define kBinlogReadWinDefaultSize 9000
 #define kBinlogReadWinMaxSize 90000
@@ -353,7 +353,6 @@ class PikaConf : public pstd::BaseConf {
   bool daemonize() { return daemonize_; }
   std::string pidfile() { return pidfile_; }
   int binlog_file_size() { return binlog_file_size_; }
-  PikaMeta* local_meta() { return local_meta_.get(); }
   std::vector<rocksdb::CompressionType> compression_per_level();
   std::string compression_all_levels() const { return compression_per_level_; };
   static rocksdb::CompressionType GetCompression(const std::string& value);
@@ -710,8 +709,6 @@ class PikaConf : public pstd::BaseConf {
   double blob_garbage_collection_force_threshold_ = 1.0;
   int64_t blob_cache_ = 0;
   int64_t blob_num_shard_bits_ = 0;
-
-  std::unique_ptr<PikaMeta> local_meta_;
 
   std::shared_mutex rwlock_;
 

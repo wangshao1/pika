@@ -1,7 +1,8 @@
-//  Copyright (c) 2017-present, Qihoo, Inc.  All rights reserved.
+//  Copyright (c) 2023-present, Qihoo, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
+
 #ifndef TYPE_ITERATOR_H_
 #define TYPE_ITERATOR_H_
 
@@ -30,11 +31,11 @@ class TypeIterator {
 public:
   TypeIterator(const rocksdb::ReadOptions& options, rocksdb::DB* db,
   ColumnFamilyHandle* handle) {
-    raw_iter_ = db->NewIterator(options, handle);
+    raw_iter_.reset(db->NewIterator(options, handle));
     cmp_ = handle->GetComparator();
   }
 
-  virtual ~TypeIterator() { delete raw_iter_; }
+  virtual ~TypeIterator() {}
 
   virtual void Seek(const std::string& start_key) {
     raw_iter_->Seek(Slice(start_key));
@@ -91,7 +92,7 @@ public:
   virtual Status status() { return raw_iter_->status(); }
 
 protected:
-  rocksdb::Iterator* raw_iter_;
+  std::unique_ptr<rocksdb::Iterator> raw_iter_;
   const Comparator* cmp_;
   std::string user_key_;
   std::string user_value_;

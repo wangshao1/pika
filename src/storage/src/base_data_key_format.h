@@ -34,6 +34,47 @@ class BaseDataKey {
     }
   }
 
+  Slice EncodeSeekKey() {
+    size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(version_);
+    size_t usize = key_.size() + sizeof(uint32_t) + data_.size();
+    size_t needed = meta_size + usize;
+    char* dst;
+    if (needed <= sizeof(space_)) {
+      dst = space_;
+    } else {
+      dst = new char[needed];
+
+      // Need to allocate space, delete previous space
+      if (start_ != space_) {
+        delete[] start_;
+      }
+    }
+
+    start_ = dst;
+    // reserve1: 8 byte
+    memcpy(dst, reserve1_, sizeof(reserve1_));
+    dst += sizeof(reserve1_);
+    // db_id: 2 byte
+    pstd::EncodeFixed16(dst, db_id_);
+    dst += sizeof(db_id_);
+    // slot_id: 2 byte
+    pstd::EncodeFixed16(dst, slot_id_);
+    dst += sizeof(slot_id_);
+    // key_size: 4 byte
+    pstd::EncodeFixed32(dst, key_.size());
+    dst += sizeof(uint32_t);
+    // key
+    memcpy(dst, key_.data(), key_.size());
+    dst += key_.size();
+    // version 8 byte
+    pstd::EncodeFixed64(dst, version_);
+    dst += sizeof(version_);
+    // data
+    memcpy(dst, data_.data(), data_.size());
+    dst += data_.size();
+    return Slice(start_, needed);
+  }
+
   Slice Encode() {
     size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(version_) + sizeof(reserve2_);
     size_t usize = key_.size() + data_.size() + sizeof(uint32_t);
@@ -105,7 +146,10 @@ class ParsedBaseDataKey {
   }
 
   std::string EncodedMetaKey() {
-    return meta_key_prefix_.ToString();
+    std::string res = meta_key_prefix_.ToString();
+    res.append(key_.ToString());
+    res.append(sizeof(reserve2_), 0);
+    return res; 
   }
 
   void decode(const char* ptr, const char* end_ptr) {
@@ -117,11 +161,11 @@ class ParsedBaseDataKey {
     ptr += sizeof(db_id_);
     slot_id_ = pstd::DecodeFixed16(ptr);
     ptr += sizeof(slot_id_);
+    meta_key_prefix_ = Slice(start, std::distance(start, ptr));
     uint32_t key_len = pstd::DecodeFixed32(ptr);
     ptr += sizeof(uint32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
-    meta_key_prefix_ = Slice(start, std::distance(start, ptr));
 
     version_ = pstd::DecodeFixed64(ptr);
     ptr += sizeof(version_);

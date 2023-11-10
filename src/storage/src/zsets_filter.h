@@ -38,7 +38,7 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
       if (cf_handles_ptr_->empty()) {
         return false;
       }
-      Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[0], cur_key_, &meta_value);
+      Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[7], cur_key_, &meta_value);
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);

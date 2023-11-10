@@ -16,7 +16,7 @@
 #include "pstd/include/pstd_status.h"
 
 #include "include/pika_binlog_reader.h"
-#include "include/pika_define.h"
+#include "pstd/include/pika_define.h"
 #include "include/pika_repl_bgworker.h"
 #include "include/pika_repl_client_thread.h"
 #include "include/pika_slot.h"

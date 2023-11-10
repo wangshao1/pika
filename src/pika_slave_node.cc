@@ -5,7 +5,7 @@
 
 #include "include/pika_slave_node.h"
 
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 
 using pstd::Status;
 

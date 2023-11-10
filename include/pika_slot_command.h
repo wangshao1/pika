@@ -14,16 +14,6 @@ const std::string SlotTagPrefix = "_internal:slottag:4migrate:";
 
 const size_t MaxKeySendSize = 10 * 1024;
 
-extern uint32_t crc32tab[256];
-
-void CRC32TableInit(uint32_t poly);
-
-extern void InitCRC32Table();
-
-extern uint32_t CRC32Update(uint32_t crc, const char *buf, int len);
-extern uint32_t CRC32CheckSum(const char *buf, int len);
-
-int GetSlotID(const std::string &str);
 int GetKeyType(const std::string& key, std::string &key_type, const std::shared_ptr<Slot>& slot);
 void AddSlotKey(const std::string& type, const std::string& key, const std::shared_ptr<Slot>& slot);
 void RemSlotKey(const std::string& key, const std::shared_ptr<Slot>& slot);

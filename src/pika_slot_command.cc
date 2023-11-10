@@ -3,15 +3,17 @@
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
 
-#include "include/pika_slot_command.h"
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "pstd/include/pika_codis_slot.h"
+#include "include/pika_slot_command.h"
 #include "include/pika_command.h"
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 #include "include/pika_data_distribution.h"
-#include "include/pika_define.h"
+#include "pstd/include/pika_define.h"
 #include "include/pika_migrate_thread.h"
 #include "include/pika_server.h"
 #include "pstd/include/pstd_status.h"
@@ -716,27 +718,6 @@ static int SlotsMgrtTag(const std::string &host, const int port, int timeout, co
   }
 
   return count;
-}
-
-// get slot tag
-static const char *GetSlotsTag(const std::string &str, int *plen) {
-  const char *s = str.data();
-  int i, j, n = static_cast<int32_t>(str.length());
-  for (i = 0; i < n && s[i] != '{'; i++) {
-  }
-  if (i == n) {
-    return nullptr;
-  }
-  i++;
-  for (j = i; j < n && s[j] != '}'; j++) {
-  }
-  if (j == n) {
-    return nullptr;
-  }
-  if (plen != nullptr) {
-    *plen = j - i;
-  }
-  return s + i;
 }
 
 std::string GetSlotKey(int slot) {

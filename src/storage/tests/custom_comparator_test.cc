@@ -7,12 +7,15 @@
 #include <iostream>
 #include <thread>
 
+#include "pstd/include/pika_conf.h"
 #include "src/custom_comparator.h"
-#include "src/redis.h"
+#include "src/instance.h"
 #include "src/zsets_data_key_format.h"
 #include "storage/storage.h"
 
 using namespace storage;
+
+std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 // FindShortestSeparator
 TEST(ZSetScoreKeyComparator, FindShortestSeparatorTest) {
@@ -146,6 +149,10 @@ TEST(ZSetScoreKeyComparator, FindShortestSeparatorTest) {
 }
 
 int main(int argc, char** argv) {
+  if (g_pika_conf->Load()) {
+    printf("pika load conf error\n");
+    return 0;
+  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

@@ -98,7 +98,7 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
 
   static const size_t kBaseMetaValueSuffixLength = 5 * sizeof(uint64_t);
 
-  int32_t InitialMetaValue() {
+  uint64_t InitialMetaValue() {
     this->set_count(0);
     this->SetEtime(0);
     this->SetCtime(0);
@@ -127,7 +127,7 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
     }
   }
 
-  int32_t UpdateVersion() {
+  uint64_t UpdateVersion() {
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);
     if (version_ >= static_cast<uint64_t>(unix_time)) {

@@ -20,7 +20,7 @@ using Slice = rocksdb::Slice;
 class BaseMetaKey {
  public:
   BaseMetaKey(uint16_t db_id, uint16_t slot_id, const Slice& key)
-      : key_(key), slot_id_(slot_id) {}
+      : db_id_(db_id), key_(key), slot_id_(slot_id) {}
 
   BaseMetaKey(const Slice& key) : db_id_(0), slot_id_(0), key_(key) {}
 
@@ -67,8 +67,8 @@ class BaseMetaKey {
   char* start_ = nullptr;
   char space_[200];
   char reserve1_[8] = {0};
-  uint16_t db_id_;
-  uint16_t slot_id_;
+  uint16_t db_id_ = {0};
+  uint16_t slot_id_ = {0};
   Slice key_;
   char reserve2_[16] = {0};
 };

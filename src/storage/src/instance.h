@@ -22,6 +22,7 @@
 #include "src/type_iterator.h"
 #include "storage/storage.h"
 #include "pstd/include/env.h"
+#include "src/debug.h"
 
 #define SPOP_COMPACT_THRESHOLD_COUNT 500
 #define SPOP_COMPACT_THRESHOLD_DURATION (1000 * 1000)  // 1000ms
@@ -44,13 +45,10 @@ class Instance {
 
   // Common Commands
   Status Open(const StorageOptions& storage_options, const std::string& db_path);
-  void Close();
 
-  // TODO:(wangshaoyi)
-  virtual Status CompactRange(const rocksdb::Slice* begin, const rocksdb::Slice* end,
-                              const ColumnFamilyType& type = kMetaAndData) {
-    return Status::OK();
-  }
+  virtual Status CompactRange(const DataType& option_type, const rocksdb::Slice* begin, const rocksdb::Slice* end,
+                              const ColumnFamilyType& type = kMetaAndData);
+
   virtual Status GetProperty(const std::string& property, uint64_t* out);
 
   Status ScanKeyNum(std::vector<KeyInfo>* key_info);
@@ -207,6 +205,7 @@ class Instance {
                           int64_t offset, std::vector<ScoreMember>* score_members);
   Status ZRevrank(const Slice& key, const Slice& member, int32_t* rank);
   Status ZScore(const Slice& key, const Slice& member, double* score);
+  Status ZGetAll(const Slice& key, double weight, std::map<std::string, double>* value_to_dest);
   Status ZUnionstore(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
                      AGGREGATE agg, std::map<std::string, double>& value_to_dest, int32_t* ret);
   Status ZInterstore(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
@@ -230,24 +229,28 @@ class Instance {
   void ScanSets();
 
   TypeIterator* CreateIterator(const DataType& type, const std::string& pattern, const Slice* lower_bound, const Slice* upper_bound) {
+    return CreateIterator(DataTypeTag[type], pattern, lower_bound, upper_bound);
+  }
+
+  TypeIterator* CreateIterator(const char& type, const std::string& pattern, const Slice* lower_bound, const Slice* upper_bound) {
     rocksdb::ReadOptions options;
     options.fill_cache = false;
     options.iterate_lower_bound = lower_bound;
     options.iterate_upper_bound = upper_bound;
     switch (type) {
-      case DataType::kStrings:
+      case 'k':
         return new StringsIterator(options, db_, handles_[0], pattern);
         break;
-      case DataType::kHashes:
+      case 'h':
         return new HashesIterator(options, db_, handles_[1], pattern);
         break;
-      case DataType::kSets:
+      case 's':
         return new SetsIterator(options, db_, handles_[3], pattern);
         break;
-      case DataType::kLists:
+      case 'l':
         return new ListsIterator(options, db_, handles_[5], pattern);
         break;
-      case DataType::kZSets:
+      case 'z':
         return new ZsetsIterator(options, db_, handles_[7], pattern);
         break;
       default:
@@ -262,6 +265,7 @@ private:
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
   rocksdb::DB* db_ = nullptr;
+  //std::unique_ptr<rocksdb::Env> env_;
 
   /*
   * handles_[0] : string
@@ -291,8 +295,8 @@ private:
   std::atomic<size_t> small_compaction_threshold_;
   std::unique_ptr<LRUCache<std::string, size_t>> statistics_store_;
 
-  Status UpdateSpecificKeyStatistics(const std::string& key, size_t count);
-  Status AddCompactKeyTaskIfNeeded(const std::string& key, size_t total);
+  Status UpdateSpecificKeyStatistics(const DataType& dtype, const std::string& key, size_t count);
+  Status AddCompactKeyTaskIfNeeded(const DataType& dtype, const std::string& key, size_t total);
 };
 
 }  //  namespace storage

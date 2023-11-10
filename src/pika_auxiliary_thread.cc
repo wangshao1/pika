@@ -5,7 +5,7 @@
 
 #include "include/pika_auxiliary_thread.h"
 
-#include "include/pika_define.h"
+#include "pstd/include/pika_define.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 

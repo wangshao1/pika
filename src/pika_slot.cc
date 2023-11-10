@@ -6,7 +6,7 @@
 #include <fstream>
 #include <memory>
 
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "include/pika_slot.h"
@@ -127,11 +127,10 @@ std::shared_ptr<pstd::lock::LockMgr> Slot::LockMgr() { return lock_mgr_; }
 
 void Slot::PrepareRsync() {
   pstd::DeleteDirIfExist(dbsync_path_);
-  pstd::CreatePath(dbsync_path_ + "strings");
-  pstd::CreatePath(dbsync_path_ + "hashes");
-  pstd::CreatePath(dbsync_path_ + "lists");
-  pstd::CreatePath(dbsync_path_ + "sets");
-  pstd::CreatePath(dbsync_path_ + "zsets");
+  int db_instance_num = g_pika_conf->db_instance_num();
+  for (int index = 0; index < db_instance_num; index++) {
+    pstd::CreatePath(dbsync_path_ + std::to_string(index));
+  }
 }
 
 // Try to update master offset
@@ -241,6 +240,7 @@ bool Slot::ChangeDb(const std::string& new_path) {
   std::lock_guard l(db_rwlock_);
   LOG(INFO) << "Slot: " << slot_name_ << ", Prepare change db from: " << tmp_path;
   db_.reset();
+  LOG(INFO) << "db_ " << db_.get(); 
 
   if (0 != pstd::RenameFile(db_path_, tmp_path)) {
     LOG(WARNING) << "Slot: " << slot_name_
@@ -248,14 +248,18 @@ bool Slot::ChangeDb(const std::string& new_path) {
     return false;
   }
 
+  LOG(WARNING) << "rename tmp_path success";
+
   if (0 != pstd::RenameFile(new_path, db_path_)) {
     LOG(WARNING) << "Slot: " << slot_name_
                  << ", Failed to rename new db path when change db, error: " << strerror(errno);
     return false;
   }
+  LOG(WARNING) << "rename db_path success";
 
   db_ = std::make_shared<storage::Storage>();
   rocksdb::Status s = db_->Open(g_pika_server->storage_options(), db_path_);
+  LOG(WARNING) << "open db success";
   assert(db_);
   assert(s.ok());
   pstd::DeleteDirIfExist(tmp_path);

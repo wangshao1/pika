@@ -109,6 +109,7 @@ class ParsedBaseKey {
 
 protected:
   Slice key_;
+  char reserve1_[16] = {0};
   uint16_t slot_id_ = (uint16_t)(-1);
   uint16_t db_id_ = (uint16_t)(-1);
 };

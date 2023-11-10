@@ -12,6 +12,10 @@
 
 #include "pstd/include/pstd_string.h"
 
+#include "pstd/include/pika_codis_slot.h"
+
+#include "src/base_meta_key_format.h"
+#include "src/base_data_key_format.h"
 #include "src/coding.h"
 #include "storage/util.h"
 
@@ -206,32 +210,19 @@ int is_dir(const char* filename) {
 }
 
 int CalculateMetaStartAndEndKey(const std::string& key, std::string* meta_start_key, std::string* meta_end_key) {
-  size_t needed = key.size() + 1;
-  auto dst = std::make_unique<char[]>(needed);
-  const char* start = dst.get();
-  std::strncpy(dst.get(), key.data(), key.size());
-  char* dst_ptr = dst.get() + key.size();
-  meta_start_key->assign(start, key.size());
-  *dst_ptr = static_cast<char>(0xff);
-  meta_end_key->assign(start, key.size() + 1);
+  uint16_t slot_id = GetSlotID(key);
+  BaseMetaKey base_key(0/*db_id*/, slot_id, rocksdb::Slice(key));
+  *meta_start_key = base_key.Encode().ToString();
+  *meta_end_key = *meta_start_key;
+  meta_end_key->append(1, static_cast<char>(0xff));
   return 0;
 }
 
 int CalculateDataStartAndEndKey(const std::string& key, std::string* data_start_key, std::string* data_end_key) {
-  size_t needed = sizeof(int32_t) + key.size() + 1;
-  auto dst = std::make_unique<char[]>(needed);
-  const char* start = dst.get();
-  char* dst_ptr = dst.get();
-
-  EncodeFixed32(dst_ptr, key.size());
-  dst_ptr += sizeof(int32_t);
-  std::strncpy(dst_ptr, key.data(), key.size());
-  dst_ptr += key.size();
-  *dst_ptr = static_cast<char>(0xff);
-
-  data_start_key->assign(start, sizeof(int32_t) + key.size());
-  data_end_key->assign(start, sizeof(int32_t) + key.size() + 1);
-
+  uint16_t slot_id = GetSlotID(key);
+  BaseDataKey base_key(0/*db_id*/, slot_id, Slice(key), 0/*version*/, Slice()); 
+  *data_start_key = base_key.Encode().ToString();
+  *data_end_key = *data_start_key;
   return 0;
 }
 

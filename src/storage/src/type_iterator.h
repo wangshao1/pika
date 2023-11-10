@@ -15,6 +15,7 @@
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
 
+#include "glog/logging.h"
 #include "util/heap.h"
 #include "storage/util.h"
 #include "src/mutex.h"
@@ -40,6 +41,7 @@ public:
 
   virtual void Seek(const std::string& start_key) {
     raw_iter_->Seek(Slice(start_key));
+    LOG(WARNING) << "seek " << Slice(start_key).ToString(true);
     while (raw_iter_->Valid() && ShouldSkip()) {
       raw_iter_->Next();
     }
@@ -60,6 +62,7 @@ public:
   }
 
   virtual void SeekForPrev(const std::string& start_key) {
+    LOG(INFO) << "SeekForPrev hex-encoded key: " << Slice(start_key).ToString(true);
     raw_iter_->SeekForPrev(Slice(start_key));
     while (raw_iter_->Valid() && ShouldSkip()) {
       raw_iter_->Prev();
@@ -110,16 +113,20 @@ public:
   bool ShouldSkip() override {
     ParsedStringsValue parsed_value(raw_iter_->value());
     if (parsed_value.IsStale()) {
+      LOG(INFO) << "Skip stale key-value";
       return true;
     }
 
     ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
         parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
+      LOG(INFO) << "Skip mismatched key, pattern: " << pattern_ << " user key: " 
+                 << parsed_key.Key().ToString(true);
       return true;
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_value.UserValue().ToString();
+    LOG(INFO) << "Valid user key: " << user_key_;
     return false;
   }
 private:
@@ -137,16 +144,20 @@ public:
   bool ShouldSkip() override {
     ParsedHashesMetaValue parsed_meta_value(raw_iter_->value());
     if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+      LOG(INFO) << "Skip stale key-value";
       return true;
     }
 
     ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
                     parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
+      LOG(INFO) << "Skip mismatched key, pattern: " << pattern_ << " user key: " 
+                 << parsed_key.Key().ToString(true);
       return true;
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
+    LOG(INFO) << "Valid user key: " << user_key_;
     return false;
   }
 private:
@@ -164,16 +175,20 @@ public:
   bool ShouldSkip() override {
     ParsedListsMetaValue parsed_meta_value(raw_iter_->value());
     if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+      LOG(INFO) << "Skip stale key-value";
       return true;
     }
 
     ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
         parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
+      LOG(INFO) << "Skip mismatched key, pattern: " << pattern_ << " user key: " 
+                 << parsed_key.Key().ToString(true);
       return true;
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
+    LOG(INFO) << "Valid user key: " << user_key_;
     return false;
   }
 private:
@@ -191,16 +206,20 @@ public:
   bool ShouldSkip() override {
     ParsedSetsMetaValue parsed_meta_value(raw_iter_->value());
     if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+      LOG(INFO) << "Skip stale key-value";
       return true;
     }
 
     ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
         parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
+      LOG(INFO) << "Skip mismatched key, pattern: " << pattern_ << " user key: " 
+                 << parsed_key.Key().ToString(true);
       return true;
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
+    LOG(INFO) << "Valid user key: " << user_key_;
     return false;
   }
 private:
@@ -218,16 +237,20 @@ public:
   bool ShouldSkip() override {
     ParsedZSetsMetaValue parsed_meta_value(raw_iter_->value());
     if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+      LOG(INFO) << "Skip stale key-value";
       return true;
     }
 
     ParsedBaseMetaKey parsed_key(raw_iter_->key().ToString());
     if (StringMatch(pattern_.data(), pattern_.size(),
         parsed_key.Key().data(), parsed_key.Key().size(), 0) == 0) {
+      LOG(INFO) << "Skip mismatched key, pattern: " << pattern_ << " user key: " 
+                 << parsed_key.Key().ToString(true);
       return true;
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
+    LOG(INFO) << "Valid user key: " << user_key_;
     return false;
   }
 private:

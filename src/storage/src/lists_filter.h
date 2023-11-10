@@ -79,7 +79,7 @@ class ListsDataFilter : public rocksdb::CompactionFilter {
       if (cf_handles_ptr_->empty()) {
         return false;
       }
-      rocksdb::Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[0], cur_key_, &meta_value);
+      rocksdb::Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[5], cur_key_, &meta_value);
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedListsMetaValue parsed_lists_meta_value(&meta_value);

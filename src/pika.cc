@@ -8,11 +8,12 @@
 #include <csignal>
 
 #include "net/include/net_stats.h"
+#include "pstd/include/pika_codis_slot.h"
 #include "include/build_version.h"
 #include "include/pika_cmd_table_manager.h"
 #include "include/pika_command.h"
-#include "include/pika_conf.h"
-#include "include/pika_define.h"
+#include "pstd/include/pika_conf.h"
+#include "pstd/include/pika_define.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "include/pika_slot_command.h"

@@ -7,10 +7,13 @@
 #include <iostream>
 #include <thread>
 
+#include "pstd/include/pika_conf.h"
 #include "src/strings_filter.h"
 #include "storage/storage.h"
 
 using namespace storage;
+
+std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 // Filter
 TEST(StringsFilterTest, FilterTest) {
@@ -30,6 +33,10 @@ TEST(StringsFilterTest, FilterTest) {
 }
 
 int main(int argc, char** argv) {
+  if (g_pika_conf->Load()) {
+    printf("pika load conf error\n");
+    return 0;
+  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

@@ -7,8 +7,15 @@
 #include <iostream>
 #include <thread>
 
+#include "glog/logging.h"
+
+#include "pstd/include/pika_codis_slot.h"
+#include "pstd/include/env.h"
+#include "pstd/include/pika_conf.h"
 #include "storage/storage.h"
 #include "storage/util.h"
+
+std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 // using namespace storage;
 using storage::Status;
@@ -103,6 +110,7 @@ static bool size_match(storage::Storage* const db, const Slice& key, int32_t exp
   if (s.IsNotFound() && (expect_size == 0)) {
     return true;
   }
+  LOG(WARNING) << "size_match ? size: " << size << " expect_size: " << expect_size;
   return size == expect_size;
 }
 
@@ -3854,6 +3862,7 @@ TEST_F(ZSetsTest, ZUnionstoreTest) {  // NOLINT
   //
   // {1, MM1}   {1, MM2}   {1, MM3}
   //
+  LOG(WARNING) << "--------------";
   std::vector<storage::ScoreMember> gp8_sm1{{1, "MM1"}};
   std::vector<storage::ScoreMember> gp8_sm2{{1, "MM2"}};
   std::vector<storage::ScoreMember> gp8_sm3{{1, "MM3"}};
@@ -5233,6 +5242,19 @@ TEST_F(ZSetsTest, ZScanTest) {  // NOLINT
 }
 
 int main(int argc, char** argv) {
+  if (!pstd::FileExists(g_pika_conf->log_path())) {
+    pstd::CreatePath("./log");
+  }
+  FLAGS_log_dir = "./log";
+  FLAGS_minloglevel = 0;
+  FLAGS_max_log_size = 1800;
+  FLAGS_logbufsecs = 0;
+  InitCRC32Table();
+  ::google::InitGoogleLogging("zsets_test");
+  if (g_pika_conf->Load()) {
+    printf("pika load conf error\n");
+    return 0;
+  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

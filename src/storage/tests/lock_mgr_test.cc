@@ -5,10 +5,13 @@
 
 #include <thread>
 
+#include "pstd/include/pika_conf.h"
 #include "src/lock_mgr.h"
 #include "src/mutex_impl.h"
 
 using namespace storage;
+
+std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 void Func(LockMgr* mgr, int id, const std::string& key) {
   mgr->TryLock(key);
@@ -19,6 +22,10 @@ void Func(LockMgr* mgr, int id, const std::string& key) {
 }
 
 int main() {
+  if (g_pika_conf->Load()) {
+    printf("pika load conf error\n");
+    return 0;
+  }
   std::shared_ptr<MutexFactory> factory = std::make_shared<MutexFactoryImpl>();
   LockMgr mgr(1, 3, factory);
 

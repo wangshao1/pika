@@ -10,10 +10,17 @@
 #include <iterator>
 #include <thread>
 
+#include "glog/logging.h"
+
+#include "pstd/include/pika_codis_slot.h"
+#include "pstd/include/env.h"
+#include "pstd/include/pika_conf.h"
 #include "storage/storage.h"
 #include "storage/util.h"
 
 using namespace storage;
+
+std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 class HashesTest : public ::testing::Test {
  public:
@@ -2420,6 +2427,19 @@ TEST_F(HashesTest, PKHRScanRangeTest) {
 }
 
 int main(int argc, char** argv) {
+  if (!pstd::FileExists(g_pika_conf->log_path())) {
+    pstd::CreatePath("./log");
+  }
+  FLAGS_log_dir = "./log";
+  FLAGS_minloglevel = 0;
+  FLAGS_max_log_size = 1800;
+  FLAGS_logbufsecs = 0;
+  InitCRC32Table();
+  ::google::InitGoogleLogging("hashes_test");
+  if (g_pika_conf->Load()) {
+    printf("pika load conf error\n");
+    return 0;
+  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

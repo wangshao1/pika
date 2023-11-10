@@ -7,7 +7,7 @@
 
 #include "pstd/include/pstd_string.h"
 
-#include "include/pika_define.h"
+#include "pstd/include/pika_define.h"
 #include "include/pika_slot_command.h"
 
 void BitSetCmd::DoInitial() {

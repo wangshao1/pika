@@ -13,7 +13,7 @@
 
 #include "include/pika_admin.h"
 #include "include/pika_cmd_table_manager.h"
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 

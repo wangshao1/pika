@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "glog/logging.h"
 #include "rocksdb/compaction_filter.h"
 #include "src/base_data_key_format.h"
 #include "src/base_meta_value_format.h"
@@ -59,9 +60,10 @@ class BaseMetaFilterFactory : public rocksdb::CompactionFilterFactory {
 
 class BaseDataFilter : public rocksdb::CompactionFilter {
  public:
-  BaseDataFilter(rocksdb::DB* db, std::vector<rocksdb::ColumnFamilyHandle*>* cf_handles_ptr)
+  BaseDataFilter(rocksdb::DB* db, std::vector<rocksdb::ColumnFamilyHandle*>* cf_handles_ptr, int meta_cf_index)
       : db_(db),
-        cf_handles_ptr_(cf_handles_ptr)
+        cf_handles_ptr_(cf_handles_ptr),
+        meta_cf_index_(meta_cf_index)
         {}
 
   bool Filter(int level, const Slice& key, const rocksdb::Slice& value, std::string* new_value,
@@ -71,6 +73,8 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
     TRACE("[DataFilter], key: %s, data = %s, version = %d", parsed_base_data_key.key().ToString().c_str(),
           parsed_base_data_key.data().ToString().c_str(), parsed_base_data_key.version());
 
+    LOG(INFO) << "BaseDataFilter EncodedMetaKey: " << get_printable_key(parsed_base_data_key.EncodedMetaKey()) << " cur_key_: " << get_printable_key(cur_key_);
+
     if (parsed_base_data_key.EncodedMetaKey() != cur_key_) {
       cur_key_ = parsed_base_data_key.EncodedMetaKey();
       std::string meta_value;
@@ -78,7 +82,7 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
       if (cf_handles_ptr_->empty()) {
         return false;
       }
-      Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[0], cur_key_, &meta_value);
+      Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[meta_cf_index_], cur_key_, &meta_value);
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedBaseMetaValue parsed_base_meta_value(&meta_value);
@@ -124,21 +128,23 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
   mutable bool meta_not_found_ = false;
   mutable uint64_t cur_meta_version_ = 0;
   mutable uint64_t cur_meta_etime_ = 0;
+  int meta_cf_index_ = 0;
 };
 
 class BaseDataFilterFactory : public rocksdb::CompactionFilterFactory {
  public:
-  BaseDataFilterFactory(rocksdb::DB** db_ptr, std::vector<rocksdb::ColumnFamilyHandle*>* handles_ptr)
-      : db_ptr_(db_ptr), cf_handles_ptr_(handles_ptr) {}
+  BaseDataFilterFactory(rocksdb::DB** db_ptr, std::vector<rocksdb::ColumnFamilyHandle*>* handles_ptr, int meta_cf_index)
+      : db_ptr_(db_ptr), cf_handles_ptr_(handles_ptr), meta_cf_index_(meta_cf_index) {}
   std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
       const rocksdb::CompactionFilter::Context& context) override {
-    return std::unique_ptr<rocksdb::CompactionFilter>(new BaseDataFilter(*db_ptr_, cf_handles_ptr_));
+    return std::unique_ptr<rocksdb::CompactionFilter>(new BaseDataFilter(*db_ptr_, cf_handles_ptr_, meta_cf_index_));
   }
   const char* Name() const override { return "BaseDataFilterFactory"; }
 
  private:
   rocksdb::DB** db_ptr_ = nullptr;
   std::vector<rocksdb::ColumnFamilyHandle*>* cf_handles_ptr_ = nullptr;
+  int meta_cf_index_ = 0;
 };
 
 using HashesMetaFilter = BaseMetaFilter;

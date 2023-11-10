@@ -16,12 +16,14 @@
 #include "src/options_helper.h"
 #include "src/redis_hyperloglog.h"
 #include "src/type_iterator.h"
-#include "include/pika_conf.h"
 #include "src/instance.h"
+#include "pstd/include/pika_conf.h"
+#include "pstd/include/pika_codis_slot.h"
 
 extern std::unique_ptr<PikaConf> g_pika_conf;
 
 namespace storage {
+extern std::string BitOpOperate(BitOpType op, const std::vector<std::string>& src_values, int64_t max_len);
 class Instance;
 Status StorageOptions::ResetOptions(const OptionType& option_type,
                                     const std::unordered_map<std::string, std::string>& options_map) {
@@ -55,13 +57,10 @@ Storage::Storage() {
   slot_indexer_ = std::make_unique<SlotIndexer>(g_pika_conf->db_instance_num());
   slot_num_ = g_pika_conf->default_slot_num();
 
-  /*
-  //TODO(wangshaoyi): start each bg thread in each instance
   Status s = StartBGThread();
   if (!s.ok()) {
     LOG(FATAL) << "start bg thread failed, " << s.ToString();
   }
-  */
 }
 
 Storage::~Storage() {
@@ -69,8 +68,8 @@ Storage::~Storage() {
   bg_tasks_cond_var_.notify_one();
 
   if (is_opened_) {
-    for (const auto& inst : insts_) {
-      inst->Close();
+    for (auto& inst : insts_) {
+      inst.reset();
     }
   }
 }
@@ -124,9 +123,6 @@ std::shared_ptr<Instance> Storage::GetDBInstance(const Slice& key) {
 }
 
 std::shared_ptr<Instance> Storage::GetDBInstance(const std::string& key) {
-  if (g_pika_conf->classic_mode()) {
-    return insts_[0];
-  }
   auto inst_index = slot_indexer_->GetInstanceID(GetSlotID(key));
   return insts_[inst_index];
 }
@@ -190,7 +186,7 @@ Status Storage::MGet(const std::vector<std::string>& keys, std::vector<ValueStat
       return s;
     }
   }
-  return s;
+  return Status::OK();
 }
 
 Status Storage::Setnx(const Slice& key, const Slice& value, int32_t* ret, const int32_t ttl) {
@@ -254,12 +250,36 @@ Status Storage::BitCount(const Slice& key, int64_t start_offset, int64_t end_off
   return inst->BitCount(key, start_offset, end_offset, ret, have_range);
 }
 
-// TODO(wangshaoyi): class mode implementation
 // disallowed in codis proxy, only runs in classic mode
 Status Storage::BitOp(BitOpType op, const std::string& dest_key, const std::vector<std::string>& src_keys,
                       std::string &value_to_dest, int64_t* ret) {
   assert(g_pika_conf->classic_mode());
-  return insts_[0]->BitOp(op, dest_key, src_keys, value_to_dest, ret);
+  Status s;
+  int64_t max_len = 0;
+  int64_t value_len = 0;
+  std::vector<std::string> src_vlaues;
+  for (const auto& src_key : src_keys) {
+    auto inst = GetDBInstance(src_key);
+    std::string value;
+    s = inst->Get(Slice(src_key), &value);
+    if (s.ok()) {
+      src_vlaues.push_back(value);
+      value_len = value.size();
+    } else if (s.IsNotFound()) {
+      src_vlaues.push_back("");
+      value_len = 0;
+    } else {
+      return s;
+    }
+    max_len = std::max(max_len, value_len);
+  }
+
+  std::string dest_value = BitOpOperate(op, src_vlaues, max_len);
+  value_to_dest = dest_value;
+  *ret = static_cast<int64_t>(GetSlotID(dest_key));
+
+  auto dest_inst = GetDBInstance(dest_key);
+  return dest_inst->Set(Slice(dest_key), Slice(dest_value));
 }
 
 Status Storage::BitPos(const Slice& key, int32_t bit, int64_t* ret) {
@@ -415,51 +435,134 @@ Status Storage::SCard(const Slice& key, int32_t* ret) {
   return inst->SCard(key, ret);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SDiff(const std::vector<std::string>& keys, std::vector<std::string>* members) {
+  if (keys.empty()) {
+    return rocksdb::Status::Corruption("SDiff invalid parameter, no keys");
+  }
+  members->clear();
+
   Status s;
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
     s = inst->SDiff(keys, members);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    return s;
   }
-  return s;
+
+  auto inst = GetDBInstance(keys[0]);
+  std::vector<std::string> keys0_members;
+  s = inst->SMembers(Slice(keys[0]), &keys0_members);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+
+  for (const auto& member : keys0_members) {
+    int32_t exist = 0;
+    for (int idx = 1; idx < keys.size(); idx++) {
+      Slice pkey = Slice(keys[idx]);
+      auto inst = GetDBInstance(pkey);
+      s = inst->SIsmember(pkey, Slice(member), &exist);
+      if (!s.ok() && !s.IsNotFound()) {
+        return s;
+      }
+      if (exist) break;
+    }
+    if (!exist) {
+      members->push_back(member);
+    }
+  }
+  return Status::OK();
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SDiffstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
   Status s;
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
     s = inst->SDiffstore(destination, keys, value_to_dest, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    return s;
   }
+
+  s = SDiff(keys, &value_to_dest);
+  if (!s.ok()) {
+    return s;
+  }
+
+  auto inst = GetDBInstance(destination);
+  s = inst->SetsDel(destination);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+
+  s = inst->SAdd(destination, value_to_dest, ret);
   return s;
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SInter(const std::vector<std::string>& keys, std::vector<std::string>* members) {
   Status s;
+  members->clear();
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
     s = inst->SInter(keys, members);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    return s;
   }
-  return s;
+
+  std::vector<std::string> key0_members;
+  auto inst = GetDBInstance(keys[0]);
+  s = inst->SMembers(keys[0], &key0_members);
+  if (s.IsNotFound()) {
+    return Status::OK();
+  }
+  if (!s.ok()) {
+    return s;
+  }
+
+  for (const auto member : key0_members) {
+    int32_t exist = 1;
+    for (int idx = 1; idx < keys.size(); idx++) {
+      Slice pkey(keys[idx]);
+      auto inst = GetDBInstance(keys[idx]);
+      s = inst->SIsmember(keys[idx], member, &exist);
+      if (s.ok() && exist > 0) {
+        continue;
+      } else if (!s.IsNotFound()) {
+        return s;
+      } else {
+        break;
+      }
+    }
+    if (exist > 0) {
+      members->push_back(member);
+    }
+  }
+  return Status::OK();
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
   Status s;
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
     s = inst->SInterstore(destination, keys, value_to_dest, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    return s;
   }
+
+  s = SInter(keys, &value_to_dest);
+  if (!s.ok()) {
+    return s;
+  }
+
+  auto dest_inst = GetDBInstance(destination);
+  s = dest_inst->SetsDel(destination);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+
+  s = dest_inst->SAdd(destination, value_to_dest, ret);
   return s;
 }
 
@@ -473,14 +576,32 @@ Status Storage::SMembers(const Slice& key, std::vector<std::string>* members) {
   return inst->SMembers(key, members);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SMove(const Slice& source, const Slice& destination, const Slice& member, int32_t* ret) {
+  Status s;
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(source);
-    return inst->SMove(source, destination, member, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    s = inst->SMove(source, destination, member, ret);
   }
+
+  auto src_inst = GetDBInstance(source);
+  s = src_inst->SIsmember(source, member, ret);
+  if (s.IsNotFound()) {
+    *ret = 0;
+    return s;
+  }
+  if (!s.ok()) {
+    return s;
+  }
+
+  s = src_inst->SRem(source, std::vector<std::string>{member.ToString()}, ret);
+  if (!s.ok()) {
+    return s;
+  }
+  auto dest_inst = GetDBInstance(destination);
+  int unused_ret;
+  return dest_inst->SAdd(destination, std::vector<std::string>{member.ToString()}, &unused_ret);
 }
 
 Status Storage::SPop(const Slice& key, std::vector<std::string>* members, int64_t count) {
@@ -503,23 +624,60 @@ Status Storage::SRem(const Slice& key, const std::vector<std::string>& members, 
   return inst->SRem(key, members, ret);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SUnion(const std::vector<std::string>& keys, std::vector<std::string>* members) {
+  Status s;
+  members->clear();
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
     return inst->SUnion(keys, members);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
   }
+
+  using Iter = std::vector<std::string>::iterator;
+  using Uset = std::unordered_set<std::string>;
+  Uset member_set;
+  for (const auto& key : keys) {
+    std::vector<std::string> vec;
+    auto inst = GetDBInstance(key);
+    s = inst->SMembers(key, &vec);
+    if (s.IsNotFound()) {
+      continue;
+    }
+    if (!s.ok()) {
+      return s;
+    }
+    std::copy(std::move_iterator<Iter>(vec.begin()),
+              std::move_iterator<Iter>(vec.end()),
+              std::insert_iterator<Uset>(member_set, member_set.begin()));
+  }
+
+  std::copy(member_set.begin(), member_set.end(), std::back_inserter(*members));
+  return Status::OK();
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::SUnionstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
+  Status s;
+  value_to_dest.clear();
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
-    auto inst = SUnionstore(destination, keys, value_to_dest, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    auto inst = GetDBInstance(destination);
+    s = inst->SUnionstore(destination, keys, value_to_dest, ret);
+    return s;
   }
+
+  s = SUnion(keys, &value_to_dest);
+  if (!s.ok()) {
+    return s;
+  }
+  *ret = value_to_dest.size();
+  auto dest_inst = GetDBInstance(destination);
+  s = dest_inst->SetsDel(destination);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+  int unused_ret;
+  return dest_inst->SAdd(destination, value_to_dest, &unused_ret);
 }
 
 Status Storage::SScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
@@ -539,6 +697,7 @@ Status Storage::RPush(const Slice& key, const std::vector<std::string>& values, 
 }
 
 Status Storage::LRange(const Slice& key, int64_t start, int64_t stop, std::vector<std::string>* ret) {
+  ret->clear();
   auto inst = GetDBInstance(key);
   return inst->LRange(key, start, stop, ret);
 }
@@ -554,16 +713,19 @@ Status Storage::LLen(const Slice& key, uint64_t* len) {
 }
 
 Status Storage::LPop(const Slice& key, int64_t count, std::vector<std::string>* elements) {
+  elements->clear();
   auto inst = GetDBInstance(key);
   return inst->LPop(key, count, elements);
 }
 
 Status Storage::RPop(const Slice& key, int64_t count, std::vector<std::string>* elements) {
+  elements->clear();
   auto inst = GetDBInstance(key);
   return inst->RPop(key, count, elements);
 }
 
 Status Storage::LIndex(const Slice& key, int64_t index, std::string* element) {
+  element->clear();
   auto inst = GetDBInstance(key);
   return inst->LIndex(key, index, element);
 }
@@ -594,21 +756,43 @@ Status Storage::LSet(const Slice& key, int64_t index, const Slice& value) {
   return inst->LSet(key, index, value);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::RPoplpush(const Slice& source, const Slice& destination, std::string* element) {
+  Status s;
+  element->clear();
+
+  // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(source);
-  } else {
-    // TODO(wangshaoyi): implement classic mode
+    s = inst->RPoplpush(source, destination, element);
+    return s;
   }
+
+  auto source_inst = GetDBInstance(source);
+  if (source.compare(destination) == 0) {
+    s = source_inst->RPoplpush(source, destination, element);
+    return s;
+  }
+
+  std::vector<std::string> elements;
+  s = source_inst->RPop(source, 1, &elements);
+  if (!s.ok()) {
+    return s;
+  }
+  *element = elements.front();
+  auto dest_inst = GetDBInstance(destination);
+  uint64_t ret;
+  s = dest_inst->LPush(destination, elements, &ret);
+  return s;
 }
 
 Status Storage::ZPopMax(const Slice& key, const int64_t count, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZPopMax(key, count, score_members);
 }
 
 Status Storage::ZPopMin(const Slice& key, const int64_t count, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZPopMin(key, count, score_members);
 }
@@ -634,6 +818,7 @@ Status Storage::ZIncrby(const Slice& key, const Slice& member, double increment,
 }
 
 Status Storage::ZRange(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRange(key, start, stop, score_members);
 }
@@ -641,6 +826,7 @@ Status Storage::ZRange(const Slice& key, int32_t start, int32_t stop, std::vecto
 Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                               std::vector<ScoreMember>* score_members) {
   // maximum number of zset is std::numeric_limits<int32_t>::max()
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(), 0,
                                   score_members);
@@ -648,6 +834,7 @@ Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool lef
 
 Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                               int64_t count, int64_t offset, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
 }
@@ -675,11 +862,13 @@ Status Storage::ZRemrangebyscore(const Slice& key, double min, double max, bool 
 
 Status Storage::ZRevrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                                  int64_t count, int64_t offset, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRevrangebyscore(key, min, max, left_close, right_close, count, offset, score_members);
 }
 
 Status Storage::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRevrange(key, start, stop, score_members);
 }
@@ -687,6 +876,7 @@ Status Storage::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::ve
 Status Storage::ZRevrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
                                  std::vector<ScoreMember>* score_members) {
   // maximum number of zset is std::numeric_limits<int32_t>::max()
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRevrangebyscore(key, min, max, left_close, right_close, std::numeric_limits<int32_t>::max(),
                                               0, score_members);
@@ -702,32 +892,136 @@ Status Storage::ZScore(const Slice& key, const Slice& member, double* ret) {
   return inst->ZScore(key, member, ret);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::string>& keys,
                             const std::vector<double>& weights, const AGGREGATE agg,
                             std::map<std::string, double>& value_to_dest, int32_t* ret) {
-  if (g_pika_conf->classic_mode()) {
+  value_to_dest.clear();
+  Status s;
+
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
-    return inst->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    s = inst->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
+    return s;
   }
+
+  for (int idx = 0; idx < keys.size(); idx++) {
+    Slice key = Slice(keys[idx]);
+    auto inst = GetDBInstance(key);
+    std::map<std::string, double> member_to_score;
+    double weight = idx >= weights.size() ? 1 : weights[idx];
+    s = inst->ZGetAll(key, weight, &member_to_score);
+    if (!s.ok() && !s.IsNotFound()) {
+      return s;
+    }
+    for (const auto& key_score : member_to_score) {
+      const std::string& member = key_score.first;
+      double score = key_score.second;
+      if (value_to_dest.find(member) == value_to_dest.end()) {
+        value_to_dest[member] = score;
+        continue;
+      }
+      switch (agg) {
+        case SUM:
+          score += value_to_dest[member];
+          break;
+        case MIN:
+          score = std::min(value_to_dest[member], score);
+          break;
+        case MAX:
+          score = std::max(value_to_dest[member], score);
+          break;
+      }
+      value_to_dest[member] = (score == -0.0) ? 0 : score;
+    }
+  }
+
+  BaseMetaKey base_destination(destination);
+  auto inst = GetDBInstance(destination);
+  s = inst->ZsetsDel(destination);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+  std::vector<ScoreMember> score_members;
+  std::for_each(value_to_dest.begin(), value_to_dest.end(), [&score_members](auto kv) {
+      score_members.emplace_back(kv.second, kv.first);
+      });
+  *ret = score_members.size();
+  int unused_ret;
+  return inst->ZAdd(destination, score_members, &unused_ret);
 }
 
-// in codis mode, users should garentee keys will be hashed to same slot
 Status Storage::ZInterstore(const Slice& destination, const std::vector<std::string>& keys,
                             const std::vector<double>& weights, const AGGREGATE agg,
                             std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
-  if (g_pika_conf->classic_mode()) {
+  Status s;
+  value_to_dest.clear();
+
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
     auto inst = GetDBInstance(keys[0]);
-    return inst->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
-  } else {
-    // TODO(wangshaoyi): implements in classic mode
+    s = inst->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
+    return s;
   }
+
+  Slice key = Slice(keys[0]);
+  auto inst = GetDBInstance(key);
+  std::map<std::string, double> member_to_score;
+  double weight = weights.empty() ? 1 : weights[0];
+  s = inst->ZGetAll(key, weight, &member_to_score);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+
+  for (const auto member_score : member_to_score) {
+    std::string member = member_score.first;
+    double score = member_score.second;
+    bool reliable = true;
+
+    for (int idx = 1; idx < keys.size(); idx++) {
+      double weight = idx >= weights.size() ? 1 : weights[idx];
+      auto inst = GetDBInstance(keys[idx]);
+      double ret_score;
+      s = inst->ZScore(keys[idx], member, &ret_score);
+      if (!s.ok() && !s.IsNotFound()) {
+        return s;
+      }
+      if (s.IsNotFound()) {
+        reliable = false;
+        break;
+      }
+      switch (agg) {
+        case SUM:
+          score += ret_score * weight;
+          break;
+        case MIN:
+          score = std::min(score, ret_score * weight);
+          break;
+        case MAX:
+          score = std::max(score, ret_score * weight);
+          break;
+      }
+    }
+    if (reliable) {
+      value_to_dest.emplace_back(score, member);
+    }
+  }
+
+  BaseMetaKey base_destination(destination);
+  inst = GetDBInstance(destination);
+
+  s = inst->ZsetsDel(destination);
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+  *ret = value_to_dest.size();
+  int unused_ret;
+  return inst->ZAdd(destination, value_to_dest, &unused_ret);
 }
 
 Status Storage::ZRangebylex(const Slice& key, const Slice& min, const Slice& max, bool left_close,
                             bool right_close, std::vector<std::string>* members) {
+  members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZRangebylex(key, min, max, left_close, right_close, members);
 }
@@ -746,11 +1040,13 @@ Status Storage::ZRemrangebylex(const Slice& key, const Slice& min, const Slice& 
 
 Status Storage::ZScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                       std::vector<ScoreMember>* score_members, int64_t* next_cursor) {
+  score_members->clear();
   auto inst = GetDBInstance(key);
   return inst->ZScan(key, cursor, pattern, count, score_members, next_cursor);
 }
 
 int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status>* type_status) {
+  type_status->clear();
   int32_t ret = 0;
   bool is_corruption = false;
 
@@ -1009,44 +1305,45 @@ int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& 
   std::string prefix;
   char key_type;
 
-  prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
-
   // invalid cursor
   if (cursor < 0) {
     return cursor_ret;
   }
+
+  // get seek by corsor
+  prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
   Status s = LoadCursorStartKey(dtype, cursor, &key_type, &start_key);
   if (!s.ok()) {
     // If want to scan all the databases, we start with the strings database
-    key_type = dtype == DataType::kAll ? DataTypeTag[kStrings] : DataTypeTag[dtype];
+    key_type = dtype == DataType::kAll ? DataTypeTag[DataType::kStrings] : DataTypeTag[dtype];
     start_key = prefix;
     cursor = 0;
   }
 
-  std::vector<DataType> types;
+  // collect types to scan 
+  std::vector<char> types;
   if (DataType::kAll == dtype) {
-    std::vector<DataType> temp = {DataType::kStrings, DataType::kHashes, DataType::kLists, DataType::kZSets, DataType::kSets};
-    for (int i = 0; i < temp.size(); i++) {
-      if (temp[i] == key_type) {
-        std::copy(temp.begin() + i, temp.end(), std::back_inserter(types));
-        break;
-      }
+    auto iter_end = std::end(DataTypeTag);
+    auto pos = std::find(std::begin(DataTypeTag), iter_end, key_type); 
+    if (pos == iter_end) {
+      LOG(WARNING) << "Invalid key_type: " << key_type;
+      return 0;
     }
+    std::copy(pos, iter_end, std::back_inserter(types));
   } else {
-    types.push_back(dtype);
+    types.push_back(DataTypeTag[dtype]);
   }
 
   for (const auto& type : types) {
     std::vector<IterSptr> inst_iters;
     for (const auto& inst : insts_) {
       IterSptr iter_sptr;
-      iter_sptr.reset(inst->CreateIterator(type, pattern, nullptr/*lower_bound*/, nullptr/*upper_bound*/));
-
+      iter_sptr.reset(inst->CreateIterator(type, pattern,
+          nullptr/*lower_bound*/, nullptr/*upper_bound*/));
       inst_iters.push_back(iter_sptr);
     }
-    bool is_finish = true;
 
-    BaseMetaKey base_start_key(0/*db_id*/, 0/*slot_id*/, start_key);
+    BaseMetaKey base_start_key(start_key);
     MergingIterator miter(inst_iters);
     miter.Seek(base_start_key.Encode().ToString());
     while (miter.Valid() && count > 0) {
@@ -1055,23 +1352,27 @@ int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& 
       count--;
     }
 
-    is_finish = true;
-    if (miter.Valid() && miter.Key().compare(prefix) <= 0 || miter.Key().substr(0, prefix.size()) == prefix) {
+    bool is_finish = !miter.Valid();
+    if (miter.Valid() &&
+      (miter.Key().compare(prefix) <= 0 ||
+       miter.Key().substr(0, prefix.size()) == prefix)) {
       is_finish = false;
     }
+    
+    // for specific type scan, reach the end
+    if (is_finish && dtype != DataType::kAll) {
+      return cursor_ret;
+    }
 
+    // already get count's element, while iterator is still valid,
+    // store cursor
     if (!is_finish) {
       next_key = miter.Key();
-      cursor_ret += step_length;
+      cursor_ret = cursor + step_length;
       StoreCursorStartKey(dtype, cursor_ret, type, next_key);
       return cursor_ret;
     }
 
-    // for specific type scan, now reaches the end, return cursor_ret to 0
-    if (dtype != DataType::kAll) {
-      cursor_ret = 0;
-      break;
-    }
     // for all type scan, move to next type, reset start_key
     start_key = prefix;
   }
@@ -1085,8 +1386,8 @@ Status Storage::PKScanRange(const DataType& data_type, const Slice& key_start, c
   std::string key;
   std::string value;
 
-  BaseMetaKey base_key_start(0, 0, key_start);
-  BaseMetaKey base_key_end(0, 0, key_end);
+  BaseMetaKey base_key_start(key_start);
+  BaseMetaKey base_key_end(key_end);
   Slice base_key_end_slice(base_key_end.Encode());
 
   bool start_no_limit = key_start.empty();
@@ -1099,17 +1400,20 @@ Status Storage::PKScanRange(const DataType& data_type, const Slice& key_start, c
   for (const auto& inst : insts_) {
     IterSptr iter_sptr;
     iter_sptr.reset(inst->CreateIterator(data_type, pattern.ToString(),
-        nullptr/*lower_bound*/, &base_key_end_slice/*upper_bound*/));
+        nullptr/*lower_bound*/, nullptr/*upper_bound*/));
     inst_iters.push_back(iter_sptr);
   }
+
   MergingIterator miter(inst_iters);
   if (start_no_limit) {
     miter.SeekToFirst();
   } else {
-    miter.Seek(base_key_start.Encode().ToString());
+    std::string temp = base_key_start.Encode().ToString();
+    miter.Seek(temp);
   }
 
-  while (miter.Valid() && limit > 0 && (end_no_limit || miter.Key().compare(key_end.ToString()) <= 0)) {
+  while (miter.Valid() && limit > 0 && 
+      (end_no_limit || miter.Key().compare(key_end.ToString()) <= 0)) {
     if (data_type == DataType::kStrings) {
       kvs->push_back({miter.Key(), miter.Value()});
     } else {
@@ -1118,7 +1422,10 @@ Status Storage::PKScanRange(const DataType& data_type, const Slice& key_start, c
     limit--;
     miter.Next();
   }
-  *next_key = miter.Key();
+
+  if (miter.Valid() && (end_no_limit || miter.Key().compare(key_end.ToString()) <= 0)) {
+    *next_key = miter.Key();
+  }
   return Status::OK();
 }
 
@@ -1127,8 +1434,8 @@ Status Storage::PKRScanRange(const DataType& data_type, const Slice& key_start, 
                              std::vector<KeyValue>* kvs, std::string* next_key) {
   next_key->clear();
   std::string key, value;
-  BaseMetaKey base_key_start(0, 0, key_start);
-  BaseMetaKey base_key_end(0, 0, key_end);
+  BaseMetaKey base_key_start(key_start);
+  BaseMetaKey base_key_end(key_end);
   Slice base_key_start_slice = Slice(base_key_start.Encode());
 
   bool start_no_limit = key_start.empty();
@@ -1142,7 +1449,7 @@ Status Storage::PKRScanRange(const DataType& data_type, const Slice& key_start, 
   for (const auto& inst : insts_) {
     IterSptr iter_sptr;
     iter_sptr.reset(inst->CreateIterator(data_type, pattern.ToString(),
-        &base_key_start_slice/*lower_bound*/, nullptr/*upper_bound*/));
+        nullptr/*lower_bound*/, nullptr/*upper_bound*/));
     inst_iters.push_back(iter_sptr);
   }
   MergingIterator miter(inst_iters);
@@ -1153,15 +1460,19 @@ Status Storage::PKRScanRange(const DataType& data_type, const Slice& key_start, 
   }
 
   while (miter.Valid() && limit > 0 &&
-         (end_no_limit || miter.Key().compare(key_end.ToString()) >= 0)) {
+      (end_no_limit || miter.Key().compare(key_end.ToString()) >= 0)) {
     if (data_type == DataType::kStrings) {
       kvs->push_back({miter.Key(), miter.Value()});
     } else {
       keys->push_back(miter.Key());
     }
     limit--;
+    miter.Prev();
   }
-  *next_key = miter.Key();
+
+  if (miter.Valid() && (end_no_limit || miter.Key().compare(key_end.ToString()) >= 0)) {
+    *next_key = miter.Key();
+  }
   return Status::OK();
 }
 
@@ -1222,7 +1533,7 @@ Status Storage::Scanx(const DataType& data_type, const std::string& start_key, c
   }
 
 
-  BaseMetaKey base_start_key(0/*db_id*/, 0/*slot_id*/, start_key);
+  BaseMetaKey base_start_key(start_key);
   MergingIterator miter(inst_iters);
   miter.Seek(base_start_key.Encode().ToString());
   while (miter.Valid() && count > 0) {
@@ -1625,29 +1936,22 @@ Status Storage::PfMerge(const std::vector<std::string>& keys, std::string& value
   return s;
 }
 
-// TODO(wangshaoyi): bgthread
 static void* StartBGThreadWrapper(void* arg) {
-  /*
   auto s = reinterpret_cast<Storage*>(arg);
   s->RunBGTask();
-  */
   return nullptr;
 }
 
-// TODO(wangshaoyi): bgthread
 Status Storage::StartBGThread() {
-  /*
   int result = pthread_create(&bg_tasks_thread_id_, nullptr, StartBGThreadWrapper, this);
   if (result != 0) {
     char msg[128];
     snprintf(msg, sizeof(msg), "pthread create: %s", strerror(result));
     return Status::Corruption(msg);
   }
-  */
   return Status::OK();
 }
 
-// TODO(wangshaoyi): bgthread
 Status Storage::AddBGTask(const BGTask& bg_task) {
   bg_tasks_mutex_.lock();
   if (bg_task.type == kAll) {
@@ -1662,7 +1966,6 @@ Status Storage::AddBGTask(const BGTask& bg_task) {
   return Status::OK();
 }
 
-// TODO(wangshaoyi): bgthread
 Status Storage::RunBGTask() {
   BGTask task;
   while (!bg_tasks_should_exit_) {
@@ -1697,47 +2000,54 @@ Status Storage::Compact(const DataType& type, bool sync) {
   return Status::OK();
 }
 
-//TODO(wangshaoyi):
 Status Storage::DoCompact(const DataType& type) {
-  return Status::OK();
-  /*
   if (type != kAll && type != kStrings && type != kHashes && type != kSets && type != kZSets && type != kLists) {
     return Status::InvalidArgument("");
   }
 
   Status s;
-  if (type == kStrings) {
-    current_task_type_ = Operation::kCleanStrings;
-    s = strings_db_->CompactRange(nullptr, nullptr);
-  } else if (type == kHashes) {
-    current_task_type_ = Operation::kCleanHashes;
-    s = hashes_db_->CompactRange(nullptr, nullptr);
-  } else if (type == kSets) {
-    current_task_type_ = Operation::kCleanSets;
-    s = sets_db_->CompactRange(nullptr, nullptr);
-  } else if (type == kZSets) {
-    current_task_type_ = Operation::kCleanZSets;
-    s = zsets_db_->CompactRange(nullptr, nullptr);
-  } else if (type == kLists) {
-    current_task_type_ = Operation::kCleanLists;
-    s = lists_db_->CompactRange(nullptr, nullptr);
-  } else {
-    current_task_type_ = Operation::kCleanAll;
-    s = strings_db_->CompactRange(nullptr, nullptr);
-    s = hashes_db_->CompactRange(nullptr, nullptr);
-    s = sets_db_->CompactRange(nullptr, nullptr);
-    s = zsets_db_->CompactRange(nullptr, nullptr);
-    s = lists_db_->CompactRange(nullptr, nullptr);
+  for (const auto& inst : insts_) {
+    switch (type) {
+      case DataType::kStrings:
+        current_task_type_ = Operation::kCleanStrings;
+        s = inst->CompactRange(type, nullptr, nullptr);
+        break;
+      case DataType::kHashes:
+        current_task_type_ = Operation::kCleanHashes;
+        s = inst->CompactRange(type, nullptr, nullptr);
+        break;
+      case DataType::kLists:
+        current_task_type_ = Operation::kCleanLists;
+        s = inst->CompactRange(type, nullptr, nullptr);
+        break;
+      case DataType::kSets:
+        current_task_type_ = Operation::kCleanSets;
+        s = inst->CompactRange(type, nullptr, nullptr);
+        break;
+      case DataType::kZSets:
+        current_task_type_ = Operation::kCleanZSets;
+        s = inst->CompactRange(type, nullptr, nullptr);
+        break;
+      default:
+        current_task_type_ = Operation::kCleanAll;
+        s = inst->CompactRange(DataType::kStrings, nullptr, nullptr);
+        s = inst->CompactRange(DataType::kHashes, nullptr, nullptr);
+        s = inst->CompactRange(DataType::kLists, nullptr, nullptr);
+        s = inst->CompactRange(DataType::kSets, nullptr, nullptr);
+        s = inst->CompactRange(DataType::kZSets, nullptr, nullptr);
+    }
   }
   current_task_type_ = Operation::kNone;
   return s;
-  */
 }
 
-// TODO(wangshaoyi):
 Status Storage::CompactKey(const DataType& type, const std::string& key) {
-  return Status::OK();
-/*
+  Status s;
+  auto inst = GetDBInstance(key);
+  if (inst == nullptr) {
+    return Status::Corruption("Unsupported data types");
+  }
+
   std::string meta_start_key;
   std::string meta_end_key;
   std::string data_start_key;
@@ -1748,21 +2058,11 @@ Status Storage::CompactKey(const DataType& type, const std::string& key) {
   Slice slice_meta_end(meta_end_key);
   Slice slice_data_begin(data_start_key);
   Slice slice_data_end(data_end_key);
-  if (type == kSets) {
-    sets_db_->CompactRange(&slice_meta_begin, &slice_meta_end, kMeta);
-    sets_db_->CompactRange(&slice_data_begin, &slice_data_end, kData);
-  } else if (type == kZSets) {
-    zsets_db_->CompactRange(&slice_meta_begin, &slice_meta_end, kMeta);
-    zsets_db_->CompactRange(&slice_data_begin, &slice_data_end, kData);
-  } else if (type == kHashes) {
-    hashes_db_->CompactRange(&slice_meta_begin, &slice_meta_end, kMeta);
-    hashes_db_->CompactRange(&slice_data_begin, &slice_data_end, kData);
-  } else if (type == kLists) {
-    lists_db_->CompactRange(&slice_meta_begin, &slice_meta_end, kMeta);
-    lists_db_->CompactRange(&slice_data_begin, &slice_data_end, kData);
+  s = inst->CompactRange(type, &slice_meta_begin, &slice_meta_end, kMeta);
+  if (s.ok()) {
+    s = inst->CompactRange(type, &slice_data_begin, &slice_data_end, kData);
   }
-  return Status::OK();
-*/
+  return s;
 }
 
 Status Storage::SetMaxCacheStatisticKeys(uint32_t max_cache_statistic_keys) {
@@ -1859,7 +2159,7 @@ Status Storage::StopScanKeyNum() {
 }
 
 rocksdb::DB* Storage::GetDBByIndex(int index) {
-  if (index <= 0 || index >= g_pika_conf->db_instance_num()) {
+  if (index < 0 || index >= g_pika_conf->db_instance_num()) {
     LOG(WARNING) << "Invalid DB Index: " << index << "total: "
                  << g_pika_conf->db_instance_num();
     return nullptr;

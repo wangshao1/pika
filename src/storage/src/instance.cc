@@ -5,6 +5,8 @@
 
 #include <sstream>
 
+#include "rocksdb/env.h"
+
 #include "src/instance.h"
 #include "src/strings_filter.h"
 #include "src/lists_filter.h"
@@ -28,13 +30,16 @@ Instance::Instance(Storage* const s, int32_t index)
       small_compaction_threshold_(5000) {
   statistics_store_ = std::make_unique<LRUCache<std::string, size_t>>();
   scan_cursors_store_ = std::make_unique<LRUCache<std::string, std::string>>();
+  spop_counts_store_ = std::make_unique<LRUCache<std::string, size_t>>();
   default_compact_range_options_.exclusive_manual_compaction = false;
   default_compact_range_options_.change_level = true;
+  spop_counts_store_->SetCapacity(1000);
   scan_cursors_store_->SetCapacity(5000);
   handles_.clear();
 }
 
 Instance::~Instance() {
+  rocksdb::CancelAllBackgroundWork(db_, true);
   std::vector<rocksdb::ColumnFamilyHandle*> tmp_handles = handles_;
   handles_.clear();
   for (auto handle : tmp_handles) {
@@ -43,39 +48,14 @@ Instance::~Instance() {
   delete db_;
 }
 
-void Instance::Close() {
-  rocksdb::CancelAllBackgroundWork(db_, true);
-  db_->Close();
-}
-
 Status Instance::Open(const StorageOptions& storage_options, const std::string& db_path) {
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
-  rocksdb::Options ops(storage_options.options);
-  Status s = rocksdb::DB::Open(ops, db_path, &db_);
-  if (!s.ok()) {
-    return s;
-  }
-
-  // create column-family
-  std::vector<std::string> cf_names{"hash_meta_cf", "hash_data_cf",
-      "set_meta_cf", "set_data_cf", "list_meta_cf", "list_data_cf",
-      "zset_meta_cf", "zset_data_cf", "zset_score_cf"};
-  for (const auto& it : cf_names) {
-    rocksdb::ColumnFamilyHandle *cf = nullptr;
-    s = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), it, &cf);
-    if (!s.ok()) {
-      break;
-    }
-    delete cf;
-  }
-  delete db_;
-  if (!s.ok()) {
-    return s;
-  }
-
   rocksdb::DBOptions db_ops(storage_options.options);
+  db_ops.create_missing_column_families = true;
+  //db_ops.env = rocksdb::Env::Instance();
+
   // string column-family options
   rocksdb::ColumnFamilyOptions string_cf_ops(storage_options.options);
   string_cf_ops.compaction_filter_factory = std::make_shared<StringsFilterFactory>();
@@ -84,7 +64,7 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
   rocksdb::ColumnFamilyOptions hash_meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions hash_data_cf_ops(storage_options.options);
   hash_meta_cf_ops.compaction_filter_factory = std::make_shared<HashesMetaFilterFactory>();
-  hash_data_cf_ops.compaction_filter_factory = std::make_shared<HashesDataFilterFactory>(&db_, &handles_);
+  hash_data_cf_ops.compaction_filter_factory = std::make_shared<HashesDataFilterFactory>(&db_, &handles_, kHashesMetaCF);
 
   // list column-family options
   rocksdb::ColumnFamilyOptions list_meta_cf_ops(storage_options.options);
@@ -97,14 +77,14 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
   rocksdb::ColumnFamilyOptions set_meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions set_data_cf_ops(storage_options.options);
   set_meta_cf_ops.compaction_filter_factory = std::make_shared<SetsMetaFilterFactory>();
-  set_data_cf_ops.compaction_filter_factory = std::make_shared<SetsMemberFilterFactory>(&db_, &handles_);
+  set_data_cf_ops.compaction_filter_factory = std::make_shared<SetsMemberFilterFactory>(&db_, &handles_, kSetsMetaCF);
 
   // zset column-family options
   rocksdb::ColumnFamilyOptions zset_meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions zset_data_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions zset_score_cf_ops(storage_options.options);
   zset_meta_cf_ops.compaction_filter_factory = std::make_shared<ZSetsMetaFilterFactory>();
-  zset_data_cf_ops.compaction_filter_factory = std::make_shared<ZSetsDataFilterFactory>(&db_, &handles_);
+  zset_data_cf_ops.compaction_filter_factory = std::make_shared<ZSetsDataFilterFactory>(&db_, &handles_, kZsetsMetaCF);
   zset_score_cf_ops.compaction_filter_factory = std::make_shared<ZSetsScoreFilterFactory>(&db_, &handles_);
   zset_score_cf_ops.comparator = ZSetsScoreKeyComparator();
 
@@ -157,7 +137,7 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
   // zset CF
   column_families.emplace_back("zset_meta_cf", zset_meta_cf_ops);
   column_families.emplace_back("zset_data_cf", zset_data_cf_ops);
-  column_families.emplace_back("zset_score_cf", zset_data_cf_ops);
+  column_families.emplace_back("zset_score_cf", zset_score_cf_ops);
   return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
 }
 
@@ -191,32 +171,78 @@ Status Instance::SetMaxCacheStatisticKeys(size_t max_cache_statistic_keys) {
   return Status::OK();
 }
 
+Status Instance::CompactRange(const DataType& dtype, const rocksdb::Slice* begin, const rocksdb::Slice* end, const ColumnFamilyType& type) {
+  Status s;
+  switch (dtype) {
+    case DataType::kStrings:
+      s = db_->CompactRange(default_compact_range_options_, begin, end);
+      break;
+    case DataType::kHashes:
+      if (type == kMeta || type == kMetaAndData) {
+        s = db_->CompactRange(default_compact_range_options_, handles_[kHashesMetaCF], begin, end);
+      }
+      if (s.ok() && (type == kData || type == kMetaAndData)) {
+        s = db_->CompactRange(default_compact_range_options_, handles_[kHashesDataCF], begin, end);
+      }
+      break;
+    case DataType::kSets:
+      if (type == kMeta || type == kMetaAndData) {
+        db_->CompactRange(default_compact_range_options_, handles_[kSetsMetaCF], begin, end);
+      }
+      if (s.ok() && (type == kData || type == kMetaAndData)) {
+        db_->CompactRange(default_compact_range_options_, handles_[kSetsDataCF], begin, end);
+      }
+      break;
+    case DataType::kLists:
+      if (type == kMeta || type == kMetaAndData) {
+        s = db_->CompactRange(default_compact_range_options_, handles_[kListsMetaCF], begin, end);
+      }
+      if (s.ok() && (type == kData || type == kMetaAndData)) {
+        s = db_->CompactRange(default_compact_range_options_, handles_[kListsDataCF], begin, end);
+      }
+      break;
+    case DataType::kZSets:
+      if (type == kMeta || type == kMetaAndData) {
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsMetaCF], begin, end);
+      }
+      if (s.ok() && (type == kData || type == kMetaAndData)) {
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsDataCF], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsScoreCF], begin, end);
+      }
+      break;
+    default:
+      return Status::Corruption("Invalid data type");
+  }
+  return s;
+}
+
 Status Instance::SetSmallCompactionThreshold(size_t small_compaction_threshold) {
   small_compaction_threshold_ = small_compaction_threshold;
   return Status::OK();
 }
 
-// TODO: (wangshaoyi)
-Status Instance::UpdateSpecificKeyStatistics(const std::string& key, size_t count) {
+Status Instance::UpdateSpecificKeyStatistics(const DataType& dtype, const std::string& key, size_t count) {
   if ((statistics_store_->Capacity() != 0U) && (count != 0U)) {
+    std::string lkp_key;
+    lkp_key.append(1, DataTypeTag[dtype]);
+    lkp_key.append(key);
     size_t total = 0;
-    statistics_store_->Lookup(key, &total);
-    statistics_store_->Insert(key, total + count);
-    AddCompactKeyTaskIfNeeded(key, total + count);
+    statistics_store_->Lookup(lkp_key, &total);
+    statistics_store_->Insert(lkp_key, total + count);
+    AddCompactKeyTaskIfNeeded(dtype, key, total + count);
   }
   return Status::OK();
 }
 
-// TODO: (wangshaoyi)
-Status Instance::AddCompactKeyTaskIfNeeded(const std::string& key, size_t total) {
-  /*
+Status Instance::AddCompactKeyTaskIfNeeded(const DataType& dtype, const std::string& key, size_t total) {
   if (total < small_compaction_threshold_) {
     return Status::OK();
   } else {
-    storage_->AddBGTask({type_, kCompactKey, key});
-    statistics_store_->Remove(key);
+    std::string lkp_key(1, DataTypeTag[dtype]);
+    lkp_key.append(key);
+    storage_->AddBGTask({dtype, kCompactKey, key});
+    statistics_store_->Remove(lkp_key);
   }
-*/
   return Status::OK();
 }
 

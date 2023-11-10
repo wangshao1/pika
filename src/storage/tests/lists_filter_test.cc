@@ -8,7 +8,7 @@
 #include <thread>
 
 #include "src/lists_filter.h"
-#include "src/redis.h"
+#include "src/instance.h"
 #include "storage/storage.h"
 
 using storage::EncodeFixed64;

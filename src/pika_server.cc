@@ -21,6 +21,7 @@
 #include "net/include/net_stats.h"
 #include "pstd/include/env.h"
 #include "pstd/include/rsync.h"
+#include "pstd/include/pika_codis_slot.h"
 
 #include "include/pika_cmd_table_manager.h"
 #include "include/pika_dispatch_thread.h"

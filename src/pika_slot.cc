@@ -6,7 +6,7 @@
 #include <fstream>
 #include <memory>
 
-#include "include/pika_conf.h"
+#include "pstd/include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "include/pika_slot.h"
@@ -127,11 +127,10 @@ std::shared_ptr<pstd::lock::LockMgr> Slot::LockMgr() { return lock_mgr_; }
 
 void Slot::PrepareRsync() {
   pstd::DeleteDirIfExist(dbsync_path_);
-  pstd::CreatePath(dbsync_path_ + "strings");
-  pstd::CreatePath(dbsync_path_ + "hashes");
-  pstd::CreatePath(dbsync_path_ + "lists");
-  pstd::CreatePath(dbsync_path_ + "sets");
-  pstd::CreatePath(dbsync_path_ + "zsets");
+  int db_instance_num = g_pika_conf->db_instance_num();
+  for (int index = 0; index < db_instance_num; index++) {
+    pstd::CreatePath(dbsync_path_ + std::to_string(index));
+  }
 }
 
 // Try to update master offset

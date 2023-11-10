@@ -72,14 +72,20 @@ class ListsDataFilter : public rocksdb::CompactionFilter {
     TRACE("[DataFilter], key: %s, index = %llu, data = %s, version = %d", parsed_lists_data_key.key().ToString().c_str(),
           parsed_lists_data_key.index(), value.ToString().c_str(), parsed_lists_data_key.version());
 
-    if (parsed_lists_data_key.EncodedMetaKey() != cur_key_) {
-      cur_key_ = parsed_lists_data_key.EncodedMetaKey();
+    const char* ptr = key.data();
+    int key_size = key.size();
+    ptr = SeekUserkeyDelim(ptr + kPrefixReserveLength, key_size - kPrefixReserveLength);
+    std::string meta_key_enc(key.data(), std::distance(key.data(), ptr));
+    meta_key_enc.append(kSUffixReserveLength, kNeedTransformCharacter);
+
+    if (meta_key_enc != cur_key_) {
+      cur_key_ = meta_key_enc;
       std::string meta_value;
       // destroyed when close the database, Reserve Current key value
       if (cf_handles_ptr_->empty()) {
         return false;
       }
-      rocksdb::Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[0], cur_key_, &meta_value);
+      rocksdb::Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[5], cur_key_, &meta_value);
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedListsMetaValue parsed_lists_meta_value(&meta_value);

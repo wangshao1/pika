@@ -6,20 +6,21 @@
 #ifndef SRC_BASE_KEY_FORMAT_H_
 #define SRC_BASE_KEY_FORMAT_H_
 
+#include <iostream>
+
 #include "pstd/include/pstd_coding.h"
+#include "storage/storage_define.h"
 
 namespace storage {
 /*
 * used for string data key or hash/zset/set/list's meta key. format:
-* | reserve1 | db_id | slot_id | key | reserve2 |
-* |    8B    |   2B  |    2B   |     |   16B    |
+* | reserve1 | key | reserve2 |
+* |    8B    |     |   16B    |
 */
+
 class BaseKey {
  public:
-  BaseKey(uint16_t db_id, uint16_t slot_id, const Slice& key)
-      : db_id_(db_id), slot_id_(slot_id), key_(key) {}
-  BaseKey(const Slice& key)
-      : db_id_(0), slot_id_(0), key_(key) {}
+  BaseKey(const Slice& key) : key_(key) {}
 
   ~BaseKey() {
     if (start_ != space_) {
@@ -28,8 +29,9 @@ class BaseKey {
   }
 
   Slice Encode() {
-    size_t meta_size = sizeof(reserve1_) + sizeof(db_id_) + sizeof(slot_id_) + sizeof(reserve2_);
-    size_t usize = key_.size();
+    size_t meta_size = sizeof(reserve1_) + sizeof(reserve2_);
+    size_t usize = std::count(key_.data(), key_.data() + key_.size(), kNeedTransformCharacter);
+    usize += kEncodedKeyDelimSize + key_.size();
     size_t needed = meta_size + usize;
     char* dst;
     if (needed <= sizeof(space_)) {
@@ -47,17 +49,10 @@ class BaseKey {
     // reserve1: 8 byte
     memcpy(dst, reserve1_, sizeof(reserve1_));
     dst += sizeof(reserve1_);
-    // db_id: 2 byte
-    pstd::EncodeFixed16(dst, db_id_);
-    dst += sizeof(db_id_);
-    // slot_id: 2 byte
-    pstd::EncodeFixed16(dst, slot_id_);
-    dst += sizeof(slot_id_);
     // key
-    memcpy(dst, key_.data(), key_.size());
-    dst += key_.size();
-    // TODO(wangshaoyi): too much for reserve
-    // reserve2: 16 byte
+    dst = EncodeUserKey(key_, dst);
+    // TODO(wangshaoyi): no need to reserve tailing,
+    // since we already set delimiter
     memcpy(dst, reserve2_, sizeof(reserve2_));
     return Slice(start_, needed);
   }
@@ -66,8 +61,6 @@ class BaseKey {
   char* start_ = nullptr;
   char space_[200];
   char reserve1_[8] = {0};
-  uint16_t slot_id_ = (uint16_t)(-1);
-  uint16_t db_id_ = (uint16_t)(-1);
   Slice key_;
   char reserve2_[16] = {0};
 };
@@ -87,31 +80,24 @@ class ParsedBaseKey {
   }
 
   void decode(const char* ptr, const char* end_ptr) {
-    // skip reserve1_
+    // skip head reserve1_
     ptr += sizeof(reserve1_);
-
-    db_id_ = pstd::DecodeFixed16(ptr);
-    ptr += sizeof(db_id_);
-    slot_id_ = pstd::DecodeFixed16(ptr);
-    ptr += sizeof(slot_id_);
-    // reserve2_
-    end_ptr -= 16;
-    key_ = Slice(ptr, std::distance(ptr, end_ptr));
+    // skip tail reserve2_
+    end_ptr -= kSUffixReserveLength;
+    DecodeUserKey(ptr, std::distance(ptr, end_ptr), &key_str_);
   }
 
   virtual ~ParsedBaseKey() = default;
 
-  Slice key() { return key_; }
-
-  uint16_t slot_id() { return slot_id_; }
-
-  uint16_t db_id() { return db_id_; }
+  Slice Key() { return Slice(key_str_); }
 
 protected:
-  Slice key_;
-  uint16_t slot_id_ = (uint16_t)(-1);
-  uint16_t db_id_ = (uint16_t)(-1);
+  std::string key_str_;
+  char reserve1_[8] = {0};
 };
+
+using ParsedBaseMetaKey = ParsedBaseKey;
+using BaseMetaKey = BaseKey;
 
 }  //  namespace storage
 #endif  // SRC_BASE_KEY_FORMAT_H_

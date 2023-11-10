@@ -3,8 +3,7 @@
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 
-#include "src/instance.h"
-
+#include <iostream>
 #include <algorithm>
 #include <climits>
 #include <limits>
@@ -12,13 +11,14 @@
 
 #include <fmt/core.h>
 #include <glog/logging.h>
-#include <iostream>
 
-#include "include/pika_codis_slot.h"
-#include "src/base_meta_key_format.h"
+#include "pstd/include/pika_codis_slot.h"
+#include "src/base_key_format.h"
+#include "src/base_key_format.h"
 #include "src/scope_record_lock.h"
 #include "src/scope_snapshot.h"
 #include "src/strings_filter.h"
+#include "src/instance.h"
 #include "storage/util.h"
 
 namespace storage {
@@ -111,15 +111,15 @@ Status Instance::Append(const Slice& key, const Slice& value, int32_t* ret) {
   std::string old_value;
   *ret = 0;
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&old_value);
     if (parsed_strings_value.IsStale()) {
       *ret = static_cast<int32_t>(value.size());
       StringsValue strings_value(value);
-      return db_->Put(default_write_options_, key, strings_value.Encode());
+      return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     } else {
       uint64_t timestamp = parsed_strings_value.etime();
       std::string old_user_value = parsed_strings_value.UserValue().ToString();
@@ -127,12 +127,12 @@ Status Instance::Append(const Slice& key, const Slice& value, int32_t* ret) {
       StringsValue strings_value(new_value);
       strings_value.SetEtime(timestamp);
       *ret = static_cast<int32_t>(new_value.size());
-      return db_->Put(default_write_options_, key, strings_value.Encode());
+      return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     }
   } else if (s.IsNotFound()) {
     *ret = static_cast<int32_t>(value.size());
     StringsValue strings_value(value);
-    return db_->Put(default_write_options_, key, strings_value.Encode());
+    return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
   }
   return s;
 }
@@ -157,8 +157,8 @@ Status Instance::BitCount(const Slice& key, int64_t start_offset, int64_t end_of
                           bool have_range) {
   *ret = 0;
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
@@ -254,8 +254,7 @@ Status Instance::BitOp(BitOpType op, const std::string& dest_key, const std::vec
   std::vector<std::string> src_values;
   for (const auto & src_key : src_keys) {
     std::string value;
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(src_key));
-    BaseMetaKey base_key(0/*db_id*/, slot_id, src_key);
+    BaseKey base_key(src_key);
     s = db_->Get(default_read_options_, base_key.Encode(), &value);
     if (s.ok()) {
       ParsedStringsValue parsed_strings_value(&value);
@@ -282,8 +281,7 @@ Status Instance::BitOp(BitOpType op, const std::string& dest_key, const std::vec
 
   StringsValue strings_value(Slice(dest_value.c_str(), max_len));
   ScopeRecordLock l(lock_mgr_, dest_key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(dest_key));
-  BaseMetaKey base_dest_key(0/*db_id*/, slot_id, dest_key);
+  BaseKey base_dest_key(dest_key);
   return db_->Put(default_write_options_, base_dest_key.Encode(), strings_value.Encode());
 }
 
@@ -291,8 +289,8 @@ Status Instance::Decrby(const Slice& key, int64_t value, int64_t* ret) {
   std::string old_value;
   std::string new_value;
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&old_value);
@@ -330,8 +328,8 @@ Status Instance::Decrby(const Slice& key, int64_t value, int64_t* ret) {
 
 Status Instance::Get(const Slice& key, std::string* value) {
   value->clear();
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(value);
@@ -347,8 +345,8 @@ Status Instance::Get(const Slice& key, std::string* value) {
 
 Status Instance::GetBit(const Slice& key, int64_t offset, int32_t* ret) {
   std::string meta_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &meta_value);
   if (s.ok() || s.IsNotFound()) {
     std::string data_value;
@@ -377,8 +375,8 @@ Status Instance::GetBit(const Slice& key, int64_t offset, int32_t* ret) {
 Status Instance::Getrange(const Slice& key, int64_t start_offset, int64_t end_offset, std::string* ret) {
   *ret = "";
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
@@ -411,8 +409,8 @@ Status Instance::Getrange(const Slice& key, int64_t start_offset, int64_t end_of
 
 Status Instance::GetSet(const Slice& key, const Slice& value, std::string* old_value) {
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), old_value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(old_value);
@@ -432,8 +430,8 @@ Status Instance::Incrby(const Slice& key, int64_t value, int64_t* ret) {
   std::string old_value;
   std::string new_value;
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   char buf[32] = {0};
   if (s.ok()) {
@@ -477,8 +475,8 @@ Status Instance::Incrbyfloat(const Slice& key, const Slice& value, std::string* 
   if (StrToLongDouble(value.data(), value.size(), &long_double_by) == -1) {
     return Status::Corruption("Value is not a vaild float");
   }
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
@@ -526,8 +524,7 @@ for (const auto& kv : kvs) {
   MultiScopeRecordLock ml(lock_mgr_, keys);
   rocksdb::WriteBatch batch;
   for (const auto& kv : kvs) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(kv.key));
-    BaseMetaKey base_key(0/*db_id*/, slot_id, kv.key);
+    BaseKey base_key(kv.key);
     StringsValue strings_value(kv.value);
     batch.Put(base_key.Encode(), strings_value.Encode());
   }
@@ -540,8 +537,7 @@ Status Instance::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) {
   *ret = 0;
   std::string value;
   for (const auto & kv : kvs) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(kv.key));
-    BaseMetaKey base_key(0/*db_id*/, 0/*slot_id*/, kv.key);
+    BaseKey base_key(kv.key);
     s = db_->Get(default_read_options_, base_key.Encode(), &value);
     if (s.ok()) {
       ParsedStringsValue parsed_strings_value(&value);
@@ -563,8 +559,8 @@ Status Instance::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) {
 Status Instance::Set(const Slice& key, const Slice& value) {
   StringsValue strings_value(value);
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
 }
 
@@ -572,8 +568,8 @@ Status Instance::Setxx(const Slice& key, const Slice& value, int32_t* ret, const
   bool not_found = true;
   std::string old_value;
   StringsValue strings_value(value);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
@@ -603,8 +599,7 @@ Status Instance::SetBit(const Slice& key, int64_t offset, int32_t on, int32_t* r
     return Status::InvalidArgument("offset < 0");
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &meta_value);
   if (s.ok() || s.IsNotFound()) {
@@ -653,8 +648,8 @@ Status Instance::Setex(const Slice& key, const Slice& value, int32_t ttl) {
   if (s != Status::OK()) {
     return s;
   }
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
 }
@@ -662,8 +657,8 @@ Status Instance::Setex(const Slice& key, const Slice& value, int32_t ttl) {
 Status Instance::Setnx(const Slice& key, const Slice& value, int32_t* ret, const int32_t ttl) {
   *ret = 0;
   std::string old_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
@@ -695,8 +690,8 @@ Status Instance::Setvx(const Slice& key, const Slice& value, const Slice& new_va
                            const int32_t ttl) {
   *ret = 0;
   std::string old_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
@@ -729,8 +724,8 @@ Status Instance::Setvx(const Slice& key, const Slice& value, const Slice& new_va
 Status Instance::Delvx(const Slice& key, const Slice& value, int32_t* ret) {
   *ret = 0;
   std::string old_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
@@ -760,8 +755,8 @@ Status Instance::Setrange(const Slice& key, int64_t start_offset, const Slice& v
   }
 
   ScopeRecordLock l(lock_mgr_, key);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   Status s = db_->Get(default_read_options_, base_key.Encode(), &old_value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&old_value);
@@ -798,9 +793,7 @@ Status Instance::Setrange(const Slice& key, int64_t start_offset, const Slice& v
 
 Status Instance::Strlen(const Slice& key, int32_t* len) {
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
-  Status s = Get(base_key.Encode(), &value);
+  Status s = Get(key, &value);
   if (s.ok()) {
     *len = static_cast<int32_t>(value.size());
   } else {
@@ -858,8 +851,8 @@ int32_t GetBitPos(const unsigned char* s, unsigned int bytes, int bit) {
 Status Instance::BitPos(const Slice& key, int32_t bit, int64_t* ret) {
   Status s;
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
@@ -895,8 +888,8 @@ Status Instance::BitPos(const Slice& key, int32_t bit, int64_t* ret) {
 Status Instance::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int64_t* ret) {
   Status s;
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
@@ -945,8 +938,8 @@ Status Instance::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int
 Status Instance::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int64_t end_offset, int64_t* ret) {
   Status s;
   std::string value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
@@ -1004,8 +997,8 @@ Status Instance::BitPos(const Slice& key, int32_t bit, int64_t start_offset, int
 //TODO(wangshaoyi): timestamp uint64_t
 Status Instance::PKSetexAt(const Slice& key, const Slice& value, int32_t timestamp) {
   StringsValue strings_value(value);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_key(0/*db_id*/, slot_id, key);
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
   strings_value.SetEtime(uint64_t(timestamp));
   return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
@@ -1013,8 +1006,10 @@ Status Instance::PKSetexAt(const Slice& key, const Slice& value, int32_t timesta
 
 Status Instance::StringsExpire(const Slice& key, int32_t ttl) {
   std::string value;
+
+  BaseKey base_key(key);
   ScopeRecordLock l(lock_mgr_, key);
-  Status s = db_->Get(default_read_options_, key, &value);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
     if (parsed_strings_value.IsStale()) {
@@ -1022,25 +1017,26 @@ Status Instance::StringsExpire(const Slice& key, int32_t ttl) {
     }
     if (ttl > 0) {
       parsed_strings_value.SetRelativeTimestamp(ttl);
-      return db_->Put(default_write_options_, key, value);
+      return db_->Put(default_write_options_, base_key.Encode(), value);
     } else {
-      return db_->Delete(default_write_options_, key);
+      return db_->Delete(default_write_options_, base_key.Encode());
     }
   }
   return s;
 }
 
-// TODO(wangshaoyi): 直接delete有啥问题？
 Status Instance::StringsDel(const Slice& key) {
   std::string value;
   ScopeRecordLock l(lock_mgr_, key);
-  Status s = db_->Get(default_read_options_, key, &value);
+
+  BaseKey base_key(key);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
     if (parsed_strings_value.IsStale()) {
       return Status::NotFound("Stale");
     }
-    return db_->Delete(default_write_options_, key);
+    return db_->Delete(default_write_options_, base_key.Encode());
   }
   return s;
 }
@@ -1048,7 +1044,9 @@ Status Instance::StringsDel(const Slice& key) {
 Status Instance::StringsExpireat(const Slice& key, int32_t timestamp) {
   std::string value;
   ScopeRecordLock l(lock_mgr_, key);
-  Status s = db_->Get(default_read_options_, key, &value);
+
+  BaseKey base_key(key);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
     if (parsed_strings_value.IsStale()) {
@@ -1056,9 +1054,9 @@ Status Instance::StringsExpireat(const Slice& key, int32_t timestamp) {
     } else {
       if (timestamp > 0) {
         parsed_strings_value.SetEtime(uint64_t(timestamp));
-        return db_->Put(default_write_options_, key, value);
+        return db_->Put(default_write_options_, base_key.Encode(), value);
       } else {
-        return db_->Delete(default_write_options_, key);
+        return db_->Delete(default_write_options_, base_key.Encode());
       }
     }
   }
@@ -1068,7 +1066,9 @@ Status Instance::StringsExpireat(const Slice& key, int32_t timestamp) {
 Status Instance::StringsPersist(const Slice& key) {
   std::string value;
   ScopeRecordLock l(lock_mgr_, key);
-  Status s = db_->Get(default_read_options_, key, &value);
+
+  BaseKey base_key(key);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
     if (parsed_strings_value.IsStale()) {
@@ -1079,7 +1079,7 @@ Status Instance::StringsPersist(const Slice& key) {
         return Status::NotFound("Not have an associated timeout");
       } else {
         parsed_strings_value.SetEtime(0);
-        return db_->Put(default_write_options_, key, value);
+        return db_->Put(default_write_options_, base_key.Encode(), value);
       }
     }
   }
@@ -1089,7 +1089,9 @@ Status Instance::StringsPersist(const Slice& key) {
 Status Instance::StringsTTL(const Slice& key, int64_t* timestamp) {
   std::string value;
   ScopeRecordLock l(lock_mgr_, key);
-  Status s = db_->Get(default_read_options_, key, &value);
+
+  BaseKey base_key(key);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), &value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(&value);
     if (parsed_strings_value.IsStale()) {
@@ -1122,13 +1124,14 @@ void Instance::ScanStrings() {
   LOG(INFO) << "***************" << "rocksdb instance: " << index_ << " " << "String Data***************";
   auto iter = db_->NewIterator(iterator_options);
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    ParsedBaseKey parsed_strings_key(iter->key());
     ParsedStringsValue parsed_strings_value(iter->value());
     int32_t survival_time = 0;
     if (parsed_strings_value.etime() != 0) {
       survival_time =
           parsed_strings_value.etime() - current_time > 0 ? parsed_strings_value.etime() - current_time : -1;
     }
-    LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", iter->key().ToString(),
+    LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", parsed_strings_key.Key().ToString(),
                              parsed_strings_value.UserValue().ToString(), parsed_strings_value.etime(), parsed_strings_value.version(),
                              survival_time);
 

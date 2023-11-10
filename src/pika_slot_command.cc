@@ -30,35 +30,6 @@ extern std::unique_ptr<PikaConf> g_pika_conf;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
 extern std::unique_ptr<PikaCmdTableManager> g_pika_cmd_table_manager;
 
-uint32_t crc32tab[256];
-void CRC32TableInit(uint32_t poly) {
-  int i, j;
-  for (i = 0; i < 256; i++) {
-    uint32_t crc = i;
-    for (j = 0; j < 8; j++) {
-      if (crc & 1) {
-        crc = (crc >> 1) ^ poly;
-      } else {
-        crc = (crc >> 1);
-      }
-    }
-    crc32tab[i] = crc;
-  }
-}
-
-void InitCRC32Table() {
-  CRC32TableInit(IEEE_POLY);
-}
-
-uint32_t CRC32Update(uint32_t crc, const char *buf, int len) {
-  int i;
-  crc = ~crc;
-  for (i = 0; i < len; i++) {
-    crc = crc32tab[static_cast<uint8_t>(static_cast<char>(crc) ^ buf[i])] ^ (crc >> 8);
-  }
-  return ~crc;
-}
-
 PikaMigrate::PikaMigrate() { migrate_clients_.clear(); }
 
 PikaMigrate::~PikaMigrate() {
@@ -771,32 +742,6 @@ static const char *GetSlotsTag(const std::string &str, int *plen) {
 std::string GetSlotKey(int slot) {
   return SlotKeyPrefix + std::to_string(slot);
 }
-
-// get slot number of the key
-int GetSlotID(const std::string &str) { return GetSlotsID(str, nullptr, nullptr); }
-
-// get the slot number by key
-int GetSlotsID(const std::string &str, uint32_t *pcrc, int *phastag) {
-  const char *s = str.data();
-  int taglen;
-  int hastag = 0;
-  const char *tag = GetSlotsTag(str, &taglen);
-  if (tag == nullptr) {
-    tag = s, taglen = static_cast<int32_t>(str.length());
-  } else {
-    hastag = 1;
-  }
-  uint32_t crc = CRC32CheckSum(tag, taglen);
-  if (pcrc != nullptr) {
-    *pcrc = crc;
-  }
-  if (phastag != nullptr) {
-    *phastag = hastag;
-  }
-  return crc % g_pika_conf->default_slot_num();
-}
-
-uint32_t CRC32CheckSum(const char *buf, int len) { return CRC32Update(0, buf, len); }
 
 // add key to slotkey
 void AddSlotKey(const std::string& type, const std::string& key, const std::shared_ptr<Slot>& slot) {

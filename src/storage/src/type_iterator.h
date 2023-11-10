@@ -7,7 +7,7 @@
 #define TYPE_ITERATOR_H_
 
 #include <vector>
-#include <memeory>
+#include <memory>
 
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
@@ -93,7 +93,7 @@ public:
   virtual Status status() { return raw_iter_->status(); }
 
 protected:
-  std::uniue_ptr<rocksdb::Iterator> raw_iter_;
+  std::unique_ptr<rocksdb::Iterator> raw_iter_;
   const Comparator* cmp_;
   std::string user_key_;
   std::string user_value_;

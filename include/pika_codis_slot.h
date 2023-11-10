@@ -1,4 +1,4 @@
-// Copyright (c) 2018-present, Qihoo, Inc.  All rights reserved.
+// Copyright (c) 2023-present, Qihoo, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -7,87 +7,28 @@
 #define PIKA_CODIS_SLOT_H_
 
 #include <stdint.h>
+#include <memory>
 
 #include "include/pika_conf.h"
 #include "include/pika_data_distribution.h"
 
 extern std::unique_ptr<PikaConf> g_pika_conf;
 
-uint32_t crc32tab[256];
-void CRC32TableInit(uint32_t poly) {
-  int i, j;
-  for (i = 0; i < 256; i++) {
-    uint32_t crc = i;
-    for (j = 0; j < 8; j++) {
-      if (crc & 1) {
-        crc = (crc >> 1) ^ poly;
-      } else {
-        crc = (crc >> 1);
-      }
-    }
-    crc32tab[i] = crc;
-  }
-}
+extern uint32_t crc32tab[256];
+void CRC32TableInit(uint32_t poly);
 
-void InitCRC32Table() {
-  CRC32TableInit(IEEE_POLY);
-}
+extern void InitCRC32Table();
 
-uint32_t CRC32Update(uint32_t crc, const char *buf, int len) {
-  int i;
-  crc = ~crc;
-  for (i = 0; i < len; i++) {
-    crc = crc32tab[static_cast<uint8_t>(static_cast<char>(crc) ^ buf[i])] ^ (crc >> 8);
-  }
-  return ~crc;
-}
+extern uint32_t CRC32Update(uint32_t crc, const char *buf, int len);
 
-uint32_t CRC32CheckSum(const char *buf, int len) { return CRC32Update(0, buf, len); }
-
-// get slot tag
-static const char *GetSlotsTag(const std::string &str, int *plen) {
-  const char *s = str.data();
-  int i, j, n = static_cast<int32_t>(str.length());
-  for (i = 0; i < n && s[i] != '{'; i++) {
-  }
-  if (i == n) {
-    return nullptr;
-  }
-  i++;
-  for (j = i; j < n && s[j] != '}'; j++) {
-  }
-  if (j == n) {
-    return nullptr;
-  }
-  if (plen != nullptr) {
-    *plen = j - i;
-  }
-  return s + i;
-}
+extern uint32_t CRC32CheckSum(const char *buf, int len);
 
 // get the slot number by key
-int GetSlotsID(const std::string &str, uint32_t *pcrc, int *phastag) {
-  const char *s = str.data();
-  int taglen;
-  int hastag = 0;
-  const char *tag = GetSlotsTag(str, &taglen);
-  if (tag == nullptr) {
-    tag = s, taglen = static_cast<int32_t>(str.length());
-  } else {
-    hastag = 1;
-  }
-  uint32_t crc = CRC32CheckSum(tag, taglen);
-  if (pcrc != nullptr) {
-    *pcrc = crc;
-  }
-  if (phastag != nullptr) {
-    *phastag = hastag;
-  }
-  return crc % g_pika_conf->default_slot_num();
-}
+int GetSlotsID(const std::string &str, uint32_t *pcrc, int *phastag);
 
 // get slot number of the key
-int GetSlotID(const std::string &str) { return GetSlotsID(str, nullptr, nullptr); }
+int GetSlotID(const std::string &str);
 
 #endif
+
 

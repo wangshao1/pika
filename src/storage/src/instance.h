@@ -14,6 +14,7 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 
+#include "include/pika_codis_slot.h"
 #include "src/lock_mgr.h"
 #include "src/lru_cache.h"
 #include "src/mutex_impl.h"

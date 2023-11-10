@@ -207,7 +207,7 @@ rocksdb::Status Instance::SDiff(const std::vector<std::string>& keys, std::vecto
   rocksdb::Status s;
 
   for (uint32_t idx = 1; idx < keys.size(); ++idx) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[idx]));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, keys[idx]);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -220,7 +220,7 @@ rocksdb::Status Instance::SDiff(const std::vector<std::string>& keys, std::vecto
     }
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[0]));
   BaseMetaKey base_meta_key0(0/*db_id*/, slot_id, keys[0]);
   s = db_->Get(read_options, handles_[3], base_meta_key0.Encode(), &meta_value);
   if (s.ok()) {
@@ -279,7 +279,7 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
   rocksdb::Status s;
 
   for (uint32_t idx = 1; idx < keys.size(); ++idx) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[idx]));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, keys[idx]);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -293,7 +293,7 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
   }
 
   std::vector<std::string> members;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[0]));
   BaseMetaKey base_meta_key0(0/*db_id*/, slot_id, keys[0]);
   s = db_->Get(read_options, handles_[3], base_meta_key0.Encode(), &meta_value);
   if (s.ok()) {
@@ -332,8 +332,8 @@ rocksdb::Status Instance::SDiffstore(const Slice& destination, const std::vector
   }
 
   uint32_t statistic = 0;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
+  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
   s = db_->Get(read_options, handles_[3], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
@@ -377,7 +377,7 @@ rocksdb::Status Instance::SInter(const std::vector<std::string>& keys, std::vect
   rocksdb::Status s;
 
   for (uint32_t idx = 1; idx < keys.size(); ++idx) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[idx]));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, keys[idx]);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -394,7 +394,7 @@ rocksdb::Status Instance::SInter(const std::vector<std::string>& keys, std::vect
     }
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[0]));
   BaseMetaKey base_meta_key0(0/*db_id*/, slot_id, keys[0]);
   s = db_->Get(read_options, handles_[3], base_meta_key0.Encode(), &meta_value);
   if (s.ok()) {
@@ -459,7 +459,7 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
   rocksdb::Status s;
 
   for (uint32_t idx = 1; idx < keys.size(); ++idx) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[idx]));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, keys[idx]);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -480,7 +480,7 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
 
   std::vector<std::string> members;
   if (!have_invalid_sets) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(keys[0]));
     BaseMetaKey base_meta_key0(0/*db_id*/, slot_id, keys[0]);
     s = db_->Get(read_options, handles_[3], base_meta_key0.Encode(), &meta_value);
     if (s.ok()) {
@@ -525,8 +525,8 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
   }
 
   uint32_t statistic = 0;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
+  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
   s = db_->Get(read_options, handles_[3], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
@@ -633,7 +633,7 @@ rocksdb::Status Instance::SMove(const Slice& source, const Slice& destination, c
     return rocksdb::Status::OK();
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(source.ToString()));
   BaseMetaKey base_source(0/*db_id*/, slot_id, source);
   rocksdb::Status s = db_->Get(default_read_options_, handles_[3], base_source.Encode(), &meta_value);
   if (s.ok()) {
@@ -667,8 +667,8 @@ rocksdb::Status Instance::SMove(const Slice& source, const Slice& destination, c
     return s;
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
+  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
   s = db_->Get(default_read_options_, handles_[3], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
@@ -946,7 +946,7 @@ rocksdb::Status Instance::SUnion(const std::vector<std::string>& keys, std::vect
   rocksdb::Status s;
 
   for (const auto & key : keys) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -996,7 +996,7 @@ rocksdb::Status Instance::SUnionstore(const Slice& destination, const std::vecto
   rocksdb::Status s;
 
   for (const auto & key : keys) {
-    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key));
     BaseMetaKey base_meta_key(0/*db_id*/, slot_id, key);
     s = db_->Get(read_options, handles_[3], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
@@ -1028,8 +1028,8 @@ rocksdb::Status Instance::SUnionstore(const Slice& destination, const std::vecto
   }
 
   uint32_t statistic = 0;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
+  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
   s = db_->Get(read_options, handles_[3], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);

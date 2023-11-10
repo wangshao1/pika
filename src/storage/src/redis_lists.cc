@@ -693,7 +693,7 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   MultiScopeRecordLock l(lock_mgr_, {source.ToString(), destination.ToString()});
   if (source.compare(destination) == 0) {
     std::string meta_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+    uint16_t slot_id = static_cast<uint16_t>(GetSlotID(source.ToString()));
     BaseMetaKey base_source(0/*db_id*/, slot_id, source);
     s = db_->Get(default_read_options_, handles_[5], base_source.Encode(), &meta_value);
     if (s.ok()) {
@@ -737,7 +737,7 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   int32_t version;
   std::string target;
   std::string source_meta_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(source.ToString()));
   BaseMetaKey base_source(0/*db_id*/, slot_id, source);
   s = db_->Get(default_read_options_, handles_[5], base_source.Encode(), &source_meta_value);
   if (s.ok()) {
@@ -766,8 +766,8 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   }
 
   std::string destination_meta_value;
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(key.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
+  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
   s = db_->Get(default_read_options_, handles_[5], base_destination.Encode(), &destination_meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&destination_meta_value);

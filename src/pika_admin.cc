@@ -1178,7 +1178,7 @@ void InfoCmd::InfoData(std::string& info) {
   tmp_stream << "compression:" << g_pika_conf->compression() << "\r\n";
 
   // rocksdb related memory usage
-  std::map<std::string, uint64_t> background_errors;
+  std::map<int, uint64_t> background_errors;
   uint64_t total_background_errors = 0;
   uint64_t total_memtable_usage = 0;
   uint64_t memtable_usage = 0;
@@ -2656,7 +2656,7 @@ void DiskRecoveryCmd::Do(std::shared_ptr<Slot> slot) {
       slot_item.second->DbRWUnLock();
       for (const auto &item: background_errors_) {
         if (item.second != 0) {
-          rocksdb::Status s = slot_item.second->db()->GetDBByType(item.first)->Resume();
+          rocksdb::Status s = slot_item.second->db()->GetDBByIndex(item.first)->Resume();
           if (!s.ok()) {
             res_.SetRes(CmdRes::kErrOther, "The restore operation failed.");
           }

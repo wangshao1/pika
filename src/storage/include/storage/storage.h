@@ -22,6 +22,7 @@
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
 
+#include "slot_indexer.h"
 #include "pstd/include/pstd_mutex.h"
 
 namespace storage {
@@ -33,13 +34,6 @@ inline const std::string PROPERTY_TYPE_ROCKSDB_CUR_SIZE_ALL_MEM_TABLES = "rocksd
 inline const std::string PROPERTY_TYPE_ROCKSDB_ESTIMATE_TABLE_READER_MEM = "rocksdb.estimate-table-readers-mem";
 inline const std::string PROPERTY_TYPE_ROCKSDB_BACKGROUND_ERRORS = "rocksdb.background-errors";
 
-inline const std::string ALL_DB = "all";
-inline const std::string STRINGS_DB = "strings";
-inline const std::string HASHES_DB = "hashes";
-inline const std::string LISTS_DB = "lists";
-inline const std::string ZSETS_DB = "zsets";
-inline const std::string SETS_DB = "sets";
-
 inline constexpr size_t BATCH_DELETE_LIMIT = 100;
 inline constexpr size_t COMPACT_THRESHOLD_COUNT = 2000;
 
@@ -48,12 +42,7 @@ using BlockBasedTableOptions = rocksdb::BlockBasedTableOptions;
 using Status = rocksdb::Status;
 using Slice = rocksdb::Slice;
 
-class RedisStrings;
-class RedisHashes;
-class RedisSets;
-class RedisLists;
-class RedisZSets;
-class HyperLogLog;
+class Instance;
 enum class OptionType;
 
 template <typename T1, typename T2>
@@ -77,10 +66,23 @@ struct KeyValue {
 };
 
 struct KeyInfo {
-  uint64_t keys;
-  uint64_t expires;
-  uint64_t avg_ttl;
-  uint64_t invaild_keys;
+  uint64_t keys = 0;
+  uint64_t expires = 0;
+  uint64_t avg_ttl = 0;
+  uint64_t invaild_keys = 0;
+
+  KeyInfo() : keys(0), expires(0), avg_ttl(0), invaild_keys(0) {}
+
+  KeyInfo(uint64_t k, uint64_t e, uint64_t a, uint64_t i) : keys(k), expires(e), avg_ttl(a), invaild_keys(i) {}
+
+  KeyInfo operator + (const KeyInfo& info) {
+    KeyInfo res;
+    res.keys = keys + info.keys;
+    res.expires = expires + info.expires;
+    res.avg_ttl = avg_ttl + info.avg_ttl;
+    res.invaild_keys = invaild_keys + info.invaild_keys;
+    return res;
+  }
 };
 
 struct ValueStatus {
@@ -97,7 +99,7 @@ struct FieldValue {
 
 struct KeyVersion {
   std::string key;
-  int32_t version;
+  uint64_t version = 0;
   bool operator==(const KeyVersion& kv) const { return (kv.key == key && kv.version == version); }
 };
 
@@ -118,6 +120,7 @@ enum class OptionType {
   kColumnFamily,
 };
 
+// TODO(wangshaoyi): about manual compaction
 enum ColumnFamilyType { kMeta, kData, kMetaAndData };
 
 enum AGGREGATE { SUM, MIN, MAX };
@@ -126,6 +129,7 @@ enum BitOpType { kBitOpAnd = 1, kBitOpOr, kBitOpXor, kBitOpNot, kBitOpDefault };
 
 enum Operation { kNone = 0, kCleanAll, kCleanStrings, kCleanHashes, kCleanZSets, kCleanSets, kCleanLists, kCompactKey };
 
+// TODO(wangshaoyi): about manual compaction
 struct BGTask {
   DataType type;
   Operation operation;
@@ -142,9 +146,13 @@ class Storage {
 
   Status Open(const StorageOptions& storage_options, const std::string& db_path);
 
-  Status GetStartKey(const DataType& dtype, int64_t cursor, std::string* start_key);
+  Status LoadCursorStartKey(const DataType& dtype, int64_t cursor, char* type, std::string* start_key);
 
-  Status StoreCursorStartKey(const DataType& dtype, int64_t cursor, const std::string& next_key);
+  Status StoreCursorStartKey(const DataType& dtype, int64_t cursor, char type, const std::string& next_key);
+
+  std::shared_ptr<Instance> GetDBInstance(const Slice& key);
+
+  std::shared_ptr<Instance> GetDBInstance(const std::string& key);
 
   // Strings Commands
 
@@ -911,13 +919,6 @@ class Storage {
   int64_t Scan(const DataType& dtype, int64_t cursor, const std::string& pattern, int64_t count,
                std::vector<std::string>* keys);
 
-  // Iterate over a collection of elements, obtaining the item which timeout
-  // conforms to the inequality (min_ttl < item_ttl < max_ttl)
-  // return an updated cursor that the user need to use as the cursor argument
-  // in the next call
-  int64_t PKExpireScan(const DataType& dtype, int64_t cursor, int32_t min_ttl, int32_t max_ttl, int64_t count,
-                       std::vector<std::string>* keys);
-
   // Iterate over a collection of elements by specified range
   // return a next_key that the user need to use as the key_start argument
   // in the next call
@@ -1015,25 +1016,37 @@ class Storage {
 
   std::string GetCurrentTaskType();
   Status GetUsage(const std::string& property, uint64_t* result);
-  Status GetUsage(const std::string& property, std::map<std::string, uint64_t>* type_result);
-  uint64_t GetProperty(const std::string& db_type, const std::string& property);
+  Status GetUsage(const std::string& property, std::map<int, uint64_t>* type_result);
+  uint64_t GetProperty(const std::string& property);
 
   Status GetKeyNum(std::vector<KeyInfo>* key_infos);
   Status StopScanKeyNum();
 
-  rocksdb::DB* GetDBByType(const std::string& type);
+  rocksdb::DB* GetDBByIndex(int index);
 
-  Status SetOptions(const OptionType& option_type, const std::string& db_type,
+  Status SetOptions(const OptionType& option_type,
                     const std::unordered_map<std::string, std::string>& options);
   void GetRocksDBInfo(std::string& info);
 
+  // TODO(wangshaoyi): keep pace with codis
+  int GetSlotID(const Slice& key) const {
+    static int seed = 1111;
+    int slot_id = 0;
+    return slot_id;
+  }
+
+  // TODO(wangshaoyi): keep pace with codis
+  int GetSlotID(const std::string& key) const {
+    static int seed = 1111;
+    int slot_id = 0;
+    return int(slot_id);
+  }
+
  private:
-  std::unique_ptr<RedisStrings> strings_db_;
-  std::unique_ptr<RedisHashes> hashes_db_;
-  std::unique_ptr<RedisSets> sets_db_;
-  std::unique_ptr<RedisZSets> zsets_db_;
-  std::unique_ptr<RedisLists> lists_db_;
+  std::vector<std::shared_ptr<Instance>> insts_;
+  std::unique_ptr<SlotIndexer> slot_indexer_;
   std::atomic<bool> is_opened_ = false;
+  int slot_num_;
 
   std::unique_ptr<LRUCache<std::string, std::string>> cursors_store_;
 

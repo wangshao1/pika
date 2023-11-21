@@ -81,7 +81,7 @@ class ParsedInternalValue {
 
   virtual ~ParsedInternalValue() = default;
 
-  rocksdb::Slice user_value() { return user_value_; }
+  rocksdb::Slice UserValue() { return user_value_; }
 
   uint64_t version() { return version_; }
 

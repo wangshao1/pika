@@ -30,7 +30,7 @@ class BaseMetaValue : public InternalValue {
     memcpy(dst, reserve_, sizeof(reserve_));
     dst += sizeof(reserve_);
     EncodeFixed64(dst, ctime_);
-    dst += sizeof(ctime);
+    dst += sizeof(ctime_);
     EncodeFixed64(dst, etime_);
     return usize + 5 * sizeof(int64_t);
   }

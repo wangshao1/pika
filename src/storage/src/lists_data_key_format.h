@@ -111,7 +111,7 @@ class ParsedListsDataKey {
   void decode(const char* ptr, const char* end_ptr) {
     const char* start = ptr;
     // skip reserve1_
-    ptr += siezf(reserve1_);
+    ptr += sizeof(reserve1_);
 
     db_id_ = pstd::DecodeFixed16(ptr);
     ptr += sizeof(db_id_);
@@ -142,10 +142,12 @@ class ParsedListsDataKey {
  private:
   Slice key_;
   Slice meta_key_prefix_;
+  char reserve1_[8] = {0};
   uint16_t slot_id_ = (uint16_t)(-1);
   uint16_t db_id_ = (uint16_t)(-1);
   uint64_t version_ = (uint64_t)(-1);
   uint64_t index_ = 0;
+  char reserve2_[16] = {0};
 };
 
 }  //  namespace storage

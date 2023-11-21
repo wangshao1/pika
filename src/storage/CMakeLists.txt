@@ -23,6 +23,7 @@ add_library(storage STATIC ${DIR_SRCS} )
 add_dependencies(storage rocksdb gtest glog gflags fmt ${LIBUNWIND_NAME} pstd)
 # TODO fix rocksdb include path
 target_include_directories(storage
+    PUBLIC ${CMAKE_SOURCE_DIR}
     PUBLIC ${PROJECT_SOURCE_DIR}
     PUBLIC ${PROJECT_SOURCE_DIR}/include
            ${INSTALL_INCLUDEDIR}

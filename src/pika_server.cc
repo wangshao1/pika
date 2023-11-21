@@ -1600,7 +1600,7 @@ storage::Status PikaServer::RewriteStorageOptions(const storage::OptionType& opt
     std::lock_guard slot_rwl(db_item.second->slots_rw_);
     for (const auto& slot_item : db_item.second->slots_) {
       slot_item.second->DbRWLockWriter();
-      s = slot_item.second->db()->SetOptions(option_type, storage::ALL_DB, options_map);
+      s = slot_item.second->db()->SetOptions(option_type, options_map);
       slot_item.second->DbRWUnLock();
       if (!s.ok()) {
         return s;

@@ -9,6 +9,8 @@
 #include "pstd/include/pstd_coding.h"
 
 namespace storage {
+
+using Slice = rocksdb::Slice;
 /*
 * used for Hash/Set/Zset data key. format:
 * | reserve1 | db_id | slot_id | key_size | key | version | data | reserve2 |
@@ -143,9 +145,11 @@ class ParsedBaseDataKey {
  protected:
   Slice key_;
   Slice meta_key_prefix_;
+  char reserve1_[8] = {0};
   uint64_t version_ = (uint64_t)(-1);
   uint16_t slot_id_ = (uint16_t)(-1);
   uint16_t db_id_ = (uint16_t)(-1);
+  char reserve2_[16] = {0};
   Slice data_;
 };
 

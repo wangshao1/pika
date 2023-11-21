@@ -13,13 +13,16 @@
 #include "rocksdb/comparator.h"
 
 namespace storage {
-
+/* list data key pattern
+* | reserve1 | db_id | slot_id | key size | key | version | index | reserve2 |
+* |    8B    |   2B  |    2B   |    4B    |     |    8B   |  8B   |   16B    |
+*/
 class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
  public:
   ListsDataKeyComparatorImpl() = default;
 
-  // keep compatible with blackwidow
-  const char* Name() const override { return "blackwidow.ListsDataKeyComparator"; }
+  // keep compatible with floyd
+  const char* Name() const override { return "floyd.ListsDataKeyComparator"; }
 
   int Compare(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
     assert(!a.empty() && !b.empty());
@@ -27,10 +30,10 @@ class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
     const char* ptr_b = b.data();
     auto a_size = static_cast<int32_t>(a.size());
     auto b_size = static_cast<int32_t>(b.size());
-    int32_t key_a_len = DecodeFixed32(ptr_a);
-    int32_t key_b_len = DecodeFixed32(ptr_b);
-    ptr_a += sizeof(int32_t);
-    ptr_b += sizeof(int32_t);
+    uint32_t key_a_len = DecodeFixed32(ptr_a + sizeof(uint64_t) + 2 * sizeof(uint16_t));
+    uint32_t key_b_len = DecodeFixed32(ptr_b + sizeof(uint64_t) + 2 * sizeof(uint16_t));
+    ptr_a += sizeof(uint64_t) + 2 * sizeof(uint16_t) + sizeof(uint32_t);
+    ptr_b += sizeof(uint64_t) + 2 * sizeof(uint16_t) + sizeof(uint32_t);
     rocksdb::Slice sets_key_a(ptr_a, key_a_len);
     rocksdb::Slice sets_key_b(ptr_b, key_b_len);
     ptr_a += key_a_len;
@@ -46,10 +49,10 @@ class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
       return 1;
     }
 
-    int32_t version_a = DecodeFixed32(ptr_a);
-    int32_t version_b = DecodeFixed32(ptr_b);
-    ptr_a += sizeof(int32_t);
-    ptr_b += sizeof(int32_t);
+    uint64_t version_a = DecodeFixed64(ptr_a);
+    uint64_t version_b = DecodeFixed64(ptr_b);
+    ptr_a += sizeof(uint64_t);
+    ptr_b += sizeof(uint64_t);
     if (version_a != version_b) {
       return version_a < version_b ? -1 : 1;
     }
@@ -79,30 +82,30 @@ class ListsDataKeyComparatorImpl : public rocksdb::Comparator {
   void FindShortSuccessor(std::string* key) const override {}
 };
 
-/*
- *  |  <Key Size>  |      <Key>      |  <Version>  |  <Score>  | <Member> |
- *       4 Bytes     Key Size Bytes      4 Bytes      8 Bytes
+/* zset score key pattern
+ *  | <Reserve 1> |  <DBID>  | <SlotID> |  <Key Size>  |      <Key>      |  <Version>  |  <Score>  | <Member> | <Reserve2> |
+ *  |   8 Bytes   | 2 Bytes  | 2 Bytes  |   4 Bytes    |  Key Size Bytes |   8 Bytes   |  8 Bytes  |          |     16B    |
  */
 class ZSetsScoreKeyComparatorImpl : public rocksdb::Comparator {
  public:
-  // keep compatible with blackwidow
-  const char* Name() const override { return "blackwidow.ZSetsScoreKeyComparator"; }
+  // keep compatible with floyd
+  const char* Name() const override { return "floyd.ZSetsScoreKeyComparator"; }
   int Compare(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
-    assert(a.size() > sizeof(int32_t));
-    assert(a.size() >= DecodeFixed32(a.data()) + 2 * sizeof(int32_t) + sizeof(uint64_t));
-    assert(b.size() > sizeof(int32_t));
-    assert(b.size() >= DecodeFixed32(b.data()) + 2 * sizeof(int32_t) + sizeof(uint64_t));
+    assert(a.size() > 2 * sizeof(int32_t) + sizeof(uint64_t));
+    assert(a.size() >= DecodeFixed32(a.data() + sizeof(int32_t) + sizeof(uint64_t)) + 2 * sizeof(int32_t) + 3 * sizeof(uint64_t) +  2 * sizeof(uint64_t));
+    assert(b.size() > 2 * sizeof(int32_t) + sizeof(uint64_t));
+    assert(b.size() >= DecodeFixed32(b.data() + sizeof(int32_t) + sizeof(uint64_t)) + 2 * sizeof(int32_t) + 3 * sizeof(uint64_t) +  2 * sizeof(uint64_t));
 
     const char* ptr_a = a.data();
     const char* ptr_b = b.data();
     auto a_size = static_cast<int32_t>(a.size());
     auto b_size = static_cast<int32_t>(b.size());
-    int32_t key_a_len = DecodeFixed32(ptr_a);
-    int32_t key_b_len = DecodeFixed32(ptr_b);
-    rocksdb::Slice key_a_prefix(ptr_a, key_a_len + 2 * sizeof(int32_t));
-    rocksdb::Slice key_b_prefix(ptr_b, key_b_len + 2 * sizeof(int32_t));
-    ptr_a += key_a_len + 2 * sizeof(int32_t);
-    ptr_b += key_b_len + 2 * sizeof(int32_t);
+    int32_t key_a_len = DecodeFixed32(ptr_a + sizeof(uint64_t) + sizeof(int32_t));
+    int32_t key_b_len = DecodeFixed32(ptr_b + sizeof(uint64_t) + sizeof(int32_t));
+    rocksdb::Slice key_a_prefix(ptr_a, key_a_len + 2 * sizeof(int32_t) + 2 * sizeof(uint64_t));
+    rocksdb::Slice key_b_prefix(ptr_b, key_b_len + 2 * sizeof(int32_t) + 2 * sizeof(uint64_t));
+    ptr_a += key_a_len + 2 * sizeof(int32_t) + 2 * sizeof(uint64_t);
+    ptr_b += key_b_len + 2 * sizeof(int32_t) + 2 * sizeof(uint64_t);
     int ret = key_a_prefix.compare(key_b_prefix);
      if (ret) {
       return ret;
@@ -142,21 +145,21 @@ class ZSetsScoreKeyComparatorImpl : public rocksdb::Comparator {
   void ParseAndPrintZSetsScoreKey(const std::string& from, const std::string& str) {
     const char* ptr = str.data();
 
-    uint32_t key_len = DecodeFixed32(ptr);
-    ptr += sizeof(uint32_t);
+    int32_t key_len = DecodeFixed32(ptr + sizeof(int32_t) + sizeof(uint64_t));
+    ptr += sizeof(int32_t) + sizeof(int32_t) + sizeof(uint64_t);
 
     std::string key(ptr, key_len);
     ptr += key_len;
 
-    int32_t version = DecodeFixed32(ptr);
-    ptr += sizeof(int32_t);
+    uint64_t version = DecodeFixed64(ptr);
+    ptr += sizeof(uint64_t);
 
     uint64_t key_score_i = DecodeFixed64(ptr);
     const void* ptr_key_score = reinterpret_cast<const void*>(&key_score_i);
     double score = *reinterpret_cast<const double*>(ptr_key_score);
     ptr += sizeof(uint64_t);
 
-    std::string member(ptr, str.size() - (key_len + 2 * sizeof(int32_t) + sizeof(uint64_t)));
+    std::string member(ptr, str.size() - (key_len + 2 * sizeof(int32_t) + 5 * sizeof(uint64_t)));
     LOG(INFO) << from.data() << ": total_len[" << str.size() << "], key_len[" << key_len << "], key[" << key.data() << "], "
               << "version[ " << version << "], score[" << score << "], member[" << member.data() << "]";
   }
@@ -167,11 +170,13 @@ class ZSetsScoreKeyComparatorImpl : public rocksdb::Comparator {
   // If *start < limit, changes *start to a short string in [start,limit).
   // Simple comparator implementations may return with *start unchanged,
   // i.e., an implementation of this method that does nothing is correct.
+  // TODO(wangshaoyi): need reformat, if pkey differs, why return limit directly?
   void FindShortestSeparator(std::string* start, const rocksdb::Slice& limit) const override {
-    assert(start->size() > sizeof(int32_t));
-    assert(start->size() >= DecodeFixed32(start->data()) + 2 * sizeof(int32_t) + sizeof(uint64_t));
-    assert(limit.size() > sizeof(int32_t));
-    assert(limit.size() >= DecodeFixed32(limit.data()) + 2 * sizeof(int32_t) + sizeof(uint64_t));
+    return;
+    assert(start->size() > 2 * sizeof(int32_t) + sizeof(uint64_t));
+    assert(start->size() >= DecodeFixed32(start->data() + sizeof(int32_t) + sizeof(uint64_t)) + 2 * sizeof(int32_t) + 5 * sizeof(uint64_t));
+    assert(limit.size() > 2 * sizeof(int32_t) + sizeof(uint64_t));
+    assert(limit.size() >= DecodeFixed32(limit.data() + sizeof(int32_t) + sizeof(uint64_t)) + 2 * sizeof(int32_t) + 5 * sizeof(uint64_t));
 
     const char* ptr_start = start->data();
     const char* ptr_limit = limit.data();

@@ -180,35 +180,35 @@ Status Instance::CompactRange(const DataType& dtype, const rocksdb::Slice* begin
       break;
     case DataType::kHashes:
       if (type == kMeta || type == kMetaAndData) {
-        s = db_->CompactRange(default_compact_range_options_, handles_[1], begin, end);
+        s = db_->CompactRange(default_compact_range_options_, handles_[kHashesMetaCF], begin, end);
       }
       if (s.ok() && (type == kData || type == kMetaAndData)) {
-        s = db_->CompactRange(default_compact_range_options_, handles_[2], begin, end);
+        s = db_->CompactRange(default_compact_range_options_, handles_[kHashesDataCF], begin, end);
       }
       break;
     case DataType::kSets:
       if (type == kMeta || type == kMetaAndData) {
-        db_->CompactRange(default_compact_range_options_, handles_[3], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kSetsMetaCF], begin, end);
       }
       if (s.ok() && (type == kData || type == kMetaAndData)) {
-        db_->CompactRange(default_compact_range_options_, handles_[4], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kSetsDataCF], begin, end);
       }
       break;
     case DataType::kLists:
       if (type == kMeta || type == kMetaAndData) {
-        s = db_->CompactRange(default_compact_range_options_, handles_[5], begin, end);
+        s = db_->CompactRange(default_compact_range_options_, handles_[kListsMetaCF], begin, end);
       }
       if (s.ok() && (type == kData || type == kMetaAndData)) {
-        s = db_->CompactRange(default_compact_range_options_, handles_[6], begin, end);
+        s = db_->CompactRange(default_compact_range_options_, handles_[kListsDataCF], begin, end);
       }
       break;
     case DataType::kZSets:
       if (type == kMeta || type == kMetaAndData) {
-        db_->CompactRange(default_compact_range_options_, handles_[7], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsMetaCF], begin, end);
       }
       if (s.ok() && (type == kData || type == kMetaAndData)) {
-        db_->CompactRange(default_compact_range_options_, handles_[8], begin, end);
-        db_->CompactRange(default_compact_range_options_, handles_[9], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsDataCF], begin, end);
+        db_->CompactRange(default_compact_range_options_, handles_[kZsetsScoreCF], begin, end);
       }
       break;
     default:

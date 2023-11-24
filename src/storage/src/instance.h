@@ -14,13 +14,14 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 
-#include "include/pika_codis_slot.h"
+#include "pstd/include/pika_codis_slot.h"
 #include "src/lock_mgr.h"
 #include "src/lru_cache.h"
 #include "src/mutex_impl.h"
 #include "src/custom_comparator.h"
 #include "src/type_iterator.h"
 #include "storage/storage.h"
+#include "storage/storage_define.h"
 #include "pstd/include/env.h"
 #include "src/debug.h"
 
@@ -239,19 +240,19 @@ class Instance {
     options.iterate_upper_bound = upper_bound;
     switch (type) {
       case 'k':
-        return new StringsIterator(options, db_, handles_[0], pattern);
+        return new StringsIterator(options, db_, handles_[kStringsCF], pattern);
         break;
       case 'h':
-        return new HashesIterator(options, db_, handles_[1], pattern);
+        return new HashesIterator(options, db_, handles_[kHashesMetaCF], pattern);
         break;
       case 's':
-        return new SetsIterator(options, db_, handles_[3], pattern);
+        return new SetsIterator(options, db_, handles_[kSetsMetaCF], pattern);
         break;
       case 'l':
-        return new ListsIterator(options, db_, handles_[5], pattern);
+        return new ListsIterator(options, db_, handles_[kListsMetaCF], pattern);
         break;
       case 'z':
-        return new ZsetsIterator(options, db_, handles_[7], pattern);
+        return new ZsetsIterator(options, db_, handles_[kZsetsMetaCF], pattern);
         break;
       default:
         LOG(WARNING) << "Invalid datatype to create iterator";
@@ -265,20 +266,9 @@ private:
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
   rocksdb::DB* db_ = nullptr;
+  //TODO(wangshaoyi): seperate env for each rocksdb instance
   //std::unique_ptr<rocksdb::Env> env_;
 
-  /*
-  * handles_[0] : string
-  * handles_[1] : hash meta
-  * handles_[2] : hash data
-  * handles_[3] : set meta
-  * handles_[4] : set data
-  * handles_[5] : list meta
-  * handles_[6] : list data
-  * handles_[7] : zset meta
-  * handles_[8] : zset data
-  * handles_[9] : zset score
-  */
   std::vector<rocksdb::ColumnFamilyHandle*> handles_;
   rocksdb::WriteOptions default_write_options_;
   rocksdb::ReadOptions default_read_options_;

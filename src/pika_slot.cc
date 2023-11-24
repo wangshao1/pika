@@ -240,7 +240,6 @@ bool Slot::ChangeDb(const std::string& new_path) {
   std::lock_guard l(db_rwlock_);
   LOG(INFO) << "Slot: " << slot_name_ << ", Prepare change db from: " << tmp_path;
   db_.reset();
-  LOG(INFO) << "db_ " << db_.get(); 
 
   if (0 != pstd::RenameFile(db_path_, tmp_path)) {
     LOG(WARNING) << "Slot: " << slot_name_
@@ -248,18 +247,14 @@ bool Slot::ChangeDb(const std::string& new_path) {
     return false;
   }
 
-  LOG(WARNING) << "rename tmp_path success";
-
   if (0 != pstd::RenameFile(new_path, db_path_)) {
     LOG(WARNING) << "Slot: " << slot_name_
                  << ", Failed to rename new db path when change db, error: " << strerror(errno);
     return false;
   }
-  LOG(WARNING) << "rename db_path success";
 
   db_ = std::make_shared<storage::Storage>();
   rocksdb::Status s = db_->Open(g_pika_server->storage_options(), db_path_);
-  LOG(WARNING) << "open db success";
   assert(db_);
   assert(s.ok());
   pstd::DeleteDirIfExist(tmp_path);

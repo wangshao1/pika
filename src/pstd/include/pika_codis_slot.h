@@ -18,15 +18,15 @@ void CRC32TableInit(uint32_t poly);
 
 extern void InitCRC32Table();
 
-extern uint32_t CRC32Update(uint32_t crc, const char *buf, int len);
+extern uint32_t CRC32Update(uint32_t crc, const char* buf, int len);
 
-extern uint32_t CRC32CheckSum(const char *buf, int len);
+extern uint32_t CRC32CheckSum(const char* buf, int len);
 
 // get the slot number by key
-int GetSlotsID(const std::string &str, uint32_t *pcrc, int *phastag);
+int GetSlotsID(const std::string& str, uint32_t* pcrc, int* phastag);
 
 // get slot number of the key
-int GetSlotID(const std::string &str);
+int GetSlotID(const std::string& str);
 
 #endif
 

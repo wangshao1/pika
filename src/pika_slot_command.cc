@@ -8,21 +8,21 @@
 #include <string>
 #include <vector>
 
-#include "pstd/include/pika_codis_slot.h"
 #include "include/pika_slot_command.h"
 #include "include/pika_command.h"
-#include "pstd/include/pika_conf.h"
 #include "include/pika_data_distribution.h"
-#include "pstd/include/pika_define.h"
 #include "include/pika_migrate_thread.h"
 #include "include/pika_server.h"
-#include "pstd/include/pstd_status.h"
-#include "pstd/include/pstd_string.h"
-#include "storage/include/storage/storage.h"
-
 #include "include/pika_admin.h"
 #include "include/pika_cmd_table_manager.h"
 #include "include/pika_rm.h"
+#include "pstd/include/pstd_status.h"
+#include "pstd/include/pstd_string.h"
+#include "pstd/include/pika_conf.h"
+#include "pstd/include/pika_codis_slot.h"
+#include "pstd/include/pika_define.h"
+#include "storage/include/storage/storage.h"
+
 
 #define min(a, b) (((a) > (b)) ? (b) : (a))
 #define MAX_MEMBERS_NUM 512

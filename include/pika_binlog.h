@@ -14,7 +14,6 @@
 #include "pstd/include/noncopyable.h"
 #include "pstd/include/pika_define.h"
 
-
 std::string NewFileName(const std::string& name, uint32_t current);
 
 class Version final : public pstd::noncopyable {

@@ -11,7 +11,7 @@
 
 using namespace storage;
 
-std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
+std::unique_ptr<PikaConf> g_pika_conf;
 
 void Func(LockMgr* mgr, int id, const std::string& key) {
   mgr->TryLock(key);
@@ -22,6 +22,13 @@ void Func(LockMgr* mgr, int id, const std::string& key) {
 }
 
 int main() {
+  std::string pika_conf_path = "./pika.conf";
+#ifdef PIKA_ROOT_DIR
+  pika_conf_path = PIKA_ROOT_DIR;
+  pika_conf_path += "/tests/conf/pika.conf";
+#endif
+  LOG(WARNING) << "pika_conf_path: " << pika_conf_path;
+  g_pika_conf = std::make_unique<PikaConf>(pika_conf_path);
   if (g_pika_conf->Load()) {
     printf("pika load conf error\n");
     return 0;

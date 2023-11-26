@@ -8,6 +8,8 @@ aux_source_directory(../src TEST_SRCS)
 #set(TEST_SRCS ../../pika_codis_slot.cc)
 #set(TEST_SRCS ${TEST_SRCS} ../../pika_conf.cc)
 
+add_compile_definitions(PIKA_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+
 message(STATUS "TEST_SRCS: ${TEST_SRCS}")
 
 # set(EXECUTABLE_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/build)

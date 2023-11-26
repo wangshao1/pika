@@ -15,7 +15,7 @@
 #include "storage/storage.h"
 #include "storage/util.h"
 
-std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
+std::unique_ptr<PikaConf> g_pika_conf;
 
 // using namespace storage;
 using storage::Status;
@@ -31,9 +31,8 @@ class ZSetsTest : public ::testing::Test {
 
   void SetUp() override {
     std::string path = "./db/zsets";
-    if (access(path.c_str(), F_OK) != 0) {
-      mkdir(path.c_str(), 0755);
-    }
+    pstd::DeleteDirIfExist(path);
+    mkdir(path.c_str(), 0755);
     storage_options.options.create_if_missing = true;
     s = db.Open(storage_options, path);
     if (!s.ok()) {
@@ -5242,6 +5241,13 @@ TEST_F(ZSetsTest, ZScanTest) {  // NOLINT
 }
 
 int main(int argc, char** argv) {
+  std::string pika_conf_path = "./pika.conf";
+#ifdef PIKA_ROOT_DIR
+  pika_conf_path = PIKA_ROOT_DIR;
+  pika_conf_path += "/tests/conf/pika.conf";
+#endif
+  LOG(WARNING) << "pika_conf_path: " << pika_conf_path;
+  g_pika_conf = std::make_unique<PikaConf>(pika_conf_path);
   if (!pstd::FileExists(g_pika_conf->log_path())) {
     pstd::CreatePath("./log");
   }

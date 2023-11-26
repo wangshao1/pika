@@ -7,12 +7,9 @@
 #include <iostream>
 #include <thread>
 
-#include "pstd/include/pika_conf.h"
 #include "src/lists_filter.h"
 #include "src/instance.h"
 #include "storage/storage.h"
-
-std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
 
 using storage::EncodeFixed64;
 using storage::ListsDataFilter;
@@ -133,14 +130,14 @@ TEST_F(ListsFilterTest, DataFilterTest) {
   EncodeFixed64(str, 1);
   ListsMetaValue lists_meta_value1(Slice(str, sizeof(uint64_t)));
   version = lists_meta_value1.UpdateVersion();
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value1.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value1.Encode());
   ASSERT_TRUE(s.ok());
 
   ListsDataKey lists_data_key1("FILTER_TEST_KEY", version, 1);
   filter_result =
       lists_data_filter1->Filter(0, lists_data_key1.Encode(), "FILTER_TEST_VALUE", &new_value, &value_changed);
   ASSERT_EQ(filter_result, false);
-  s = meta_db->Delete(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY");
+  s = meta_db->Delete(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY");
   ASSERT_TRUE(s.ok());
 
   // Timeout timestamp is set, but not expired.
@@ -151,13 +148,13 @@ TEST_F(ListsFilterTest, DataFilterTest) {
   ListsMetaValue lists_meta_value2(Slice(str, sizeof(uint64_t)));
   version = lists_meta_value2.UpdateVersion();
   lists_meta_value2.SetRelativeTimestamp(1);
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value2.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value2.Encode());
   ASSERT_TRUE(s.ok());
   ListsDataKey lists_data_key2("FILTER_TEST_KEY", version, 1);
   filter_result =
       lists_data_filter2->Filter(0, lists_data_key2.Encode(), "FILTER_TEST_VALUE", &new_value, &value_changed);
   ASSERT_EQ(filter_result, false);
-  s = meta_db->Delete(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY");
+  s = meta_db->Delete(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY");
   ASSERT_TRUE(s.ok());
 
   // Timeout timestamp is set, already expired.
@@ -168,14 +165,14 @@ TEST_F(ListsFilterTest, DataFilterTest) {
   ListsMetaValue lists_meta_value3(Slice(str, sizeof(uint64_t)));
   version = lists_meta_value3.UpdateVersion();
   lists_meta_value3.SetRelativeTimestamp(1);
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value3.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value3.Encode());
   ASSERT_TRUE(s.ok());
   std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   ListsDataKey lists_data_key3("FILTER_TEST_KEY", version, 1);
   filter_result =
       lists_data_filter3->Filter(0, lists_data_key3.Encode(), "FILTER_TEST_VALUE", &new_value, &value_changed);
   ASSERT_EQ(filter_result, true);
-  s = meta_db->Delete(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY");
+  s = meta_db->Delete(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY");
   ASSERT_TRUE(s.ok());
 
   // Timeout timestamp is not set, the version is invalid
@@ -185,16 +182,16 @@ TEST_F(ListsFilterTest, DataFilterTest) {
   EncodeFixed64(str, 1);
   ListsMetaValue lists_meta_value4(Slice(str, sizeof(uint64_t)));
   version = lists_meta_value4.UpdateVersion();
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value4.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value4.Encode());
   ASSERT_TRUE(s.ok());
   ListsDataKey lists_data_key4("FILTER_TEST_KEY", version, 1);
   version = lists_meta_value4.UpdateVersion();
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value4.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value4.Encode());
   ASSERT_TRUE(s.ok());
   filter_result =
       lists_data_filter4->Filter(0, lists_data_key4.Encode(), "FILTER_TEST_VALUE", &new_value, &value_changed);
   ASSERT_EQ(filter_result, true);
-  s = meta_db->Delete(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY");
+  s = meta_db->Delete(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY");
   ASSERT_TRUE(s.ok());
 
   // Meta data has been clear
@@ -204,10 +201,10 @@ TEST_F(ListsFilterTest, DataFilterTest) {
   EncodeFixed64(str, 1);
   ListsMetaValue lists_meta_value5(Slice(str, sizeof(uint64_t)));
   version = lists_meta_value5.UpdateVersion();
-  s = meta_db->Put(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY", lists_meta_value5.Encode());
+  s = meta_db->Put(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY", lists_meta_value5.Encode());
   ASSERT_TRUE(s.ok());
   ListsDataKey lists_data_value5("FILTER_TEST_KEY", version, 1);
-  s = meta_db->Delete(rocksdb::WriteOptions(), handles_[kListsMetaCF], "FILTER_TEST_KEY");
+  s = meta_db->Delete(rocksdb::WriteOptions(), handles[0], "FILTER_TEST_KEY");
   ASSERT_TRUE(s.ok());
   filter_result =
       lists_data_filter5->Filter(0, lists_data_value5.Encode(), "FILTER_TEST_VALUE", &new_value, &value_changed);
@@ -215,10 +212,6 @@ TEST_F(ListsFilterTest, DataFilterTest) {
 }
 
 int main(int argc, char** argv) {
-  if (g_pika_conf->Load()) {
-    printf("pika load conf error\n");
-    return 0;
-  }
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

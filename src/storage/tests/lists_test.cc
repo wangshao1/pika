@@ -15,7 +15,7 @@
 
 using namespace storage;
 
-std::unique_ptr<PikaConf> g_pika_conf = std::make_unique<PikaConf>("/home/wangshaoyi/work/pika/tests/conf/pika.conf");
+std::unique_ptr<PikaConf> g_pika_conf;
 
 static bool elements_match(storage::Storage* const db, const Slice& key,
                            const std::vector<std::string>& expect_elements) {
@@ -80,9 +80,8 @@ class ListsTest : public ::testing::Test {
 
   void SetUp() override {
     std::string path = "./db/lists";
-    if (access(path.c_str(), F_OK) != 0) {
-      mkdir(path.c_str(), 0755);
-    }
+    pstd::DeleteDirIfExist(path);
+    mkdir(path.c_str(), 0755);
     storage_options.options.create_if_missing = true;
     s = db.Open(storage_options, path);
     if (!s.ok()) {
@@ -2705,10 +2704,17 @@ TEST_F(ListsTest, RPushxTest) {  // NOLINT
 }
 
 int main(int argc, char** argv) {
+  std::string pika_conf_path = "./pika.conf";
+#ifdef PIKA_ROOT_DIR
+  pika_conf_path = PIKA_ROOT_DIR;
+  pika_conf_path += "/tests/conf/pika.conf";
+#endif
+  LOG(WARNING) << "pika_conf_path: " << pika_conf_path;
+  g_pika_conf = std::make_unique<PikaConf>(pika_conf_path);
   if (!pstd::FileExists(g_pika_conf->log_path())) {
-    pstd::CreatePath("./log");
+    pstd::CreatePath(g_pika_conf->log_path());
   }
-  FLAGS_log_dir = "./log";
+  FLAGS_log_dir = g_pika_conf->log_path();
   FLAGS_minloglevel = 0;
   FLAGS_max_log_size = 1800;
   FLAGS_logbufsecs = 0;

@@ -159,6 +159,7 @@ class Instance {
   Status SDiffstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
   Status SInter(const std::vector<std::string>& keys, std::vector<std::string>* members);
   Status SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
+  Status StoreValue(const Slice& destination, const std::vector<std::string>& value_to_dest, int32_t* ret);
   Status SIsmember(const Slice& key, const Slice& member, int32_t* ret);
   Status SMembers(const Slice& key, std::vector<std::string>* members);
   Status SMove(const Slice& source, const Slice& destination, const Slice& member, int32_t* ret);
@@ -204,6 +205,8 @@ class Instance {
   Status ZRevrange(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members);
   Status ZRevrangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close, int64_t count,
                           int64_t offset, std::vector<ScoreMember>* score_members);
+  Status StoreValue(const Slice& destination, std::map<std::string, double>& value_to_dest, int32_t* ret);
+  Status StoreValue(const Slice& destination, std::vector<ScoreMember>& score_members, int32_t* ret);
   Status ZRevrank(const Slice& key, const Slice& member, int32_t* rank);
   Status ZScore(const Slice& key, const Slice& member, double* score);
   Status ZGetAll(const Slice& key, double weight, std::map<std::string, double>* value_to_dest);

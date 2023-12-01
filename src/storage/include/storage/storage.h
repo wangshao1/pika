@@ -405,7 +405,7 @@ class Storage {
   //   key3 = {a, c, e}
   //   SINTER key1 key2 key3 = {c}
   Status SInter(const std::vector<std::string>& keys, std::vector<std::string>* members);
-
+  Status SInterClassicMode(const std::vector<std::string>& keys, std::vector<std::string>* members);
   // This command is equal to SINTER, but instead of returning the resulting
   // set, it is stored in destination.
   // If destination already exists, it is overwritten.
@@ -418,7 +418,7 @@ class Storage {
   //   SINTERSTORE destination key1 key2 key3
   //   destination = {a, c}
   Status SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
-
+  Status SInterstoreClassicMode(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
   // Returns if member is a member of the set stored at key.
   Status SIsmember(const Slice& key, const Slice& member, int32_t* ret);
 
@@ -463,7 +463,7 @@ class Storage {
   //   key3 = {a, c, e}
   //   SUNION key1 key2 key3 = {a, b, c, d, e}
   Status SUnion(const std::vector<std::string>& keys, std::vector<std::string>* members);
-
+  Status SUnionClassicMode(const std::vector<std::string>& keys, std::vector<std::string>* members);
   // This command is equal to SUNION, but instead of returning the resulting
   // set, it is stored in destination.
   // If destination already exists, it is overwritten.
@@ -475,6 +475,7 @@ class Storage {
   //   SUNIONSTORE destination key1 key2 key3
   //   destination = {a, b, c, d, e}
   Status SUnionstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
+  Status SUnionstoreClassicMode(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret);
 
   // See SCAN for SSCAN documentation.
   Status SScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
@@ -829,7 +830,10 @@ class Storage {
   // If destination already exists, it is overwritten.
   Status ZUnionstore(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
                      AGGREGATE agg, std::map<std::string, double>& value_to_dest, int32_t* ret);
-
+  Status ZUnionstoreClassic(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
+                     AGGREGATE agg, std::map<std::string, double>& value_to_dest, int32_t* ret);
+  Status ZUnion(const std::vector<std::string>& keys, const std::vector<double>& weights, AGGREGATE agg, std::map<std::string, double>& value_to_dest);
+  Status ZUnionClassicMode(const std::vector<std::string>& keys, const std::vector<double>& weights, AGGREGATE agg, std::map<std::string, double>& value_to_dest);
   // Computes the intersection of numkeys sorted sets given by the specified
   // keys, and stores the result in destination. It is mandatory to provide the
   // number of input keys (numkeys) before passing the input keys and the other
@@ -844,7 +848,11 @@ class Storage {
   // For a description of the WEIGHTS and AGGREGATE options, see ZUNIONSTORE.
   //
   // If destination already exists, it is overwritten.
+  Status ZInter(const std::vector<std::string>& keys, const std::vector<double>& weights, AGGREGATE agg, std::vector<ScoreMember>& value_to_dest);
+  Status ZInterClassicMode(const std::vector<std::string>& keys, const std::vector<double>& weights, AGGREGATE agg, std::vector<ScoreMember>& value_to_dest);
   Status ZInterstore(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
+                     AGGREGATE agg, std::vector<ScoreMember>& value_to_dest, int32_t* ret);
+  Status ZInterstoreClassic(const Slice& destination, const std::vector<std::string>& keys, const std::vector<double>& weights,
                      AGGREGATE agg, std::vector<ScoreMember>& value_to_dest, int32_t* ret);
 
   // When all the elements in a sorted set are inserted with the same score, in

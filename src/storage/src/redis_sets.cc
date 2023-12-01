@@ -566,6 +566,99 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
   return s;
 }
 
+rocksdb::Status Instance::StoreValue(const Slice& destination, const std::vector<std::string>& value_to_dest, int32_t* ret) {
+  std::string meta_value;
+  ScopeRecordLock l(lock_mgr_, destination);
+  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
+  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, destination);
+  rocksdb::Status s = db_->Get(default_read_options_, handles_[kSetsMetaCF], base_meta_key.Encode(), &meta_value);
+  if (s.ok()) {
+    ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
+    if (parsed_sets_meta_value.IsStale()) {
+      return rocksdb::Status::NotFound("Stale");
+    } else if (parsed_sets_meta_value.count() == 0) {
+      return rocksdb::Status::NotFound();
+    } else {
+      uint32_t statistic = parsed_sets_meta_value.count();
+      parsed_sets_meta_value.InitialMetaValue();
+      s = db_->Put(default_write_options_, handles_[kSetsMetaCF], base_meta_key.Encode(), meta_value);
+      UpdateSpecificKeyStatistics(DataType::kSets, destination.ToString(), statistic);
+    }
+  }
+  if (!s.ok() && !s.IsNotFound()) {
+    return s;
+  }
+  std::unordered_set<std::string> unique;
+  std::vector<std::string> filtered_members;
+  for (const auto& member : value_to_dest) {
+    LOG(WARNING) << "sadd member: " << member;
+    if (unique.find(member) == unique.end()) {
+      unique.insert(member);
+      filtered_members.push_back(member);
+    }
+  }
+
+  rocksdb::WriteBatch batch;
+  int32_t version = 0;
+  s = db_->Get(default_read_options_, handles_[kSetsMetaCF], base_meta_key.Encode(), &meta_value);
+  if (s.ok()) {
+    ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
+    if (parsed_sets_meta_value.IsStale() || parsed_sets_meta_value.count() == 0) {
+      version = parsed_sets_meta_value.InitialMetaValue();
+      parsed_sets_meta_value.set_count(static_cast<int32_t>(filtered_members.size()));
+      batch.Put(handles_[kSetsMetaCF], base_meta_key.Encode(), meta_value);
+      for (const auto& member : filtered_members) {
+        LOG(WARNING) << "sadd empty pkey. member: " << member;
+        SetsMemberKey sets_member_key(0/*db_id*/, slot_id, destination, version, member);
+        InternalValue iter_value(Slice{});
+        batch.Put(handles_[kSetsDataCF], sets_member_key.Encode(), iter_value.Encode());
+      }
+      *ret = static_cast<int32_t>(filtered_members.size());
+    } else {
+      int32_t cnt = 0;
+      std::string member_value;
+      version = parsed_sets_meta_value.version();
+      for (const auto& member : filtered_members) {
+        SetsMemberKey sets_member_key(0/*db_id*/, slot_id, destination, version, member);
+        s = db_->Get(default_read_options_, handles_[kSetsDataCF], sets_member_key.Encode(), &member_value);
+        if (s.ok()) {
+          LOG(WARNING) << "sadd exist pkey. exist member: " << member;
+        } else if (s.IsNotFound()) {
+          cnt++;
+          InternalValue iter_value(Slice{});
+          LOG(WARNING) << "sadd exist pkey. member: " << member;
+          batch.Put(handles_[kSetsDataCF], sets_member_key.Encode(), iter_value.Encode());
+        } else {
+          return s;
+        }
+      }
+      *ret = cnt;
+      if (cnt == 0) {
+        return rocksdb::Status::OK();
+      } else {
+        parsed_sets_meta_value.ModifyCount(cnt);
+        batch.Put(handles_[kSetsMetaCF], base_meta_key.Encode(), meta_value);
+      }
+    }
+  } else if (s.IsNotFound()) {
+    char str[4];
+    EncodeFixed32(str, filtered_members.size());
+    SetsMetaValue sets_meta_value(Slice(str, sizeof(int32_t)));
+    version = sets_meta_value.UpdateVersion();
+    batch.Put(handles_[kSetsMetaCF], base_meta_key.Encode(), sets_meta_value.Encode());
+    for (const auto& member : filtered_members) {
+      SetsMemberKey sets_member_key(0/*db_id*/, slot_id, destination, version, member);
+      InternalValue i_val(Slice{});
+      LOG(WARNING) << "sadd not exist pkey. member: " << member;
+      batch.Put(handles_[kSetsDataCF], sets_member_key.Encode(), i_val.Encode());
+    }
+    *ret = static_cast<int32_t>(filtered_members.size());
+  } else {
+    return s;
+  }
+  return db_->Write(default_write_options_, &batch);
+}
+
 rocksdb::Status Instance::SIsmember(const Slice& key, const Slice& member, int32_t* ret) {
   *ret = 0;
   rocksdb::ReadOptions read_options;

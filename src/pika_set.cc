@@ -197,11 +197,15 @@ void SUnionCmd::DoInitial() {
 
 void SUnionCmd::Do(std::shared_ptr<Slot> slot) {
   std::vector<std::string> members;
-  slot->db()->SUnion(keys_, &members);
-  res_.AppendArrayLenUint64(members.size());
-  for (const auto& member : members) {
-    res_.AppendStringLenUint64(member.size());
-    res_.AppendContent(member);
+  rocksdb::Status s = slot->db()->SUnion(keys_, &members);
+  if (s.ok() || s.IsNotFound()) {
+    res_.AppendArrayLenUint64(members.size());
+    for (const auto& member : members) {
+      res_.AppendStringLenUint64(member.size());
+      res_.AppendContent(member);
+    }
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s.ToString());
   }
 }
 
@@ -277,11 +281,15 @@ void SInterCmd::DoInitial() {
 
 void SInterCmd::Do(std::shared_ptr<Slot> slot) {
   std::vector<std::string> members;
-  slot->db()->SInter(keys_, &members);
-  res_.AppendArrayLenUint64(members.size());
-  for (const auto& member : members) {
-    res_.AppendStringLenUint64(member.size());
-    res_.AppendContent(member);
+  rocksdb::Status s = slot->db()->SInter(keys_, &members);
+  if (s.ok() || s.IsNotFound()) {
+    res_.AppendArrayLenUint64(members.size());
+    for (const auto& member : members) {
+      res_.AppendStringLenUint64(member.size());
+      res_.AppendContent(member);
+    }
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s.ToString());
   }
 }
 

@@ -199,14 +199,11 @@ Status Storage::Setnx(const Slice& key, const Slice& value, int32_t* ret, const 
 // disallowed in codis, only runs in pika classic mode
 Status Storage::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) {
   assert(g_pika_conf->classic_mode());
-  Status s;
+  Status s = Status::OK();
+  std::string value = "";
   for (const auto& kv : kvs) {
     auto inst = GetDBInstance(kv.key);
-    std::string value;
     s = inst->Get(Slice(kv.key), &value);
-    if (s.ok()) {
-      return s;
-    }
     if (!s.IsNotFound()) {
       return s;
     }
@@ -219,7 +216,7 @@ Status Storage::MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret) {
       return s;
     }
   }
-  return s;
+  return Status::OK();
 }
 
 Status Storage::Setvx(const Slice& key, const Slice& value, const Slice& new_value, int32_t* ret, const int32_t ttl) {
@@ -509,71 +506,51 @@ Status Storage::SDiffstore(const Slice& destination, const std::vector<std::stri
   return s;
 }
 
-Status Storage::SInter(const std::vector<std::string>& keys, std::vector<std::string>* members) {
-  Status s;
-  members->clear();
-  
-  // in codis mode, users should garentee keys will be hashed to same slot
-  if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(keys[0]);
-    s = inst->SInter(keys, members);
-    return s;
-  }
-
-  std::vector<std::string> key0_members;
+Status Storage::SInterClassicMode(const std::vector<std::string>& keys, std::vector<std::string>* members) {
   auto inst = GetDBInstance(keys[0]);
-  s = inst->SMembers(keys[0], &key0_members);
-  if (s.IsNotFound()) {
-    return Status::OK();
-  }
+  std::vector<std::string> key0_members = {};
+  Status s = inst->SMembers(keys[0], &key0_members);
   if (!s.ok()) {
     return s;
   }
 
+  int32_t exist = 0;
   for (const auto member : key0_members) {
-    int32_t exist = 1;
-    for (int idx = 1; idx < keys.size(); idx++) {
-      Slice pkey(keys[idx]);
-      auto inst = GetDBInstance(keys[idx]);
+    exist = 0;
+    for (size_t idx = 1; idx < keys.size(); idx++) {
+      inst = GetDBInstance(keys[idx]);
       s = inst->SIsmember(keys[idx], member, &exist);
-      if (s.ok() && exist > 0) {
-        continue;
-      } else if (!s.IsNotFound()) {
+      if (!s.ok()) {
         return s;
-      } else {
-        break;
       }
     }
-    if (exist > 0) {
-      members->push_back(member);
-    }
+    members->emplace_back(member);
   }
   return Status::OK();
 }
 
-Status Storage::SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
-  Status s;
-
+Status Storage::SInter(const std::vector<std::string>& keys, std::vector<std::string>* members) {
   // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(keys[0]);
-    s = inst->SInterstore(destination, keys, value_to_dest, ret);
-    return s;
+    return GetDBInstance(keys[0])->SInter(keys, members);
   }
+  return SInterClassicMode(keys, members);
+}
 
-  s = SInter(keys, &value_to_dest);
+Status Storage::SInterstoreClassicMode(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
+  Status s = SInter(keys, &value_to_dest);
   if (!s.ok()) {
     return s;
   }
+  return GetDBInstance(destination)->StoreValue(destination, value_to_dest, ret);
+}
 
-  auto dest_inst = GetDBInstance(destination);
-  s = dest_inst->SetsDel(destination);
-  if (!s.ok() && !s.IsNotFound()) {
-    return s;
+Status Storage::SInterstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
+    return GetDBInstance(keys[0])->SInterstore(destination, keys, value_to_dest, ret);
   }
-
-  s = dest_inst->SAdd(destination, value_to_dest, ret);
-  return s;
+  SInterstoreClassicMode(destination, keys, value_to_dest, ret);
 }
 
 Status Storage::SIsmember(const Slice& key, const Slice& member, int32_t* ret) {
@@ -634,63 +611,53 @@ Status Storage::SRem(const Slice& key, const std::vector<std::string>& members, 
   return inst->SRem(key, members, ret);
 }
 
-Status Storage::SUnion(const std::vector<std::string>& keys, std::vector<std::string>* members) {
-  Status s;
-  members->clear();
-  // in codis mode, users should garentee keys will be hashed to same slot
-  if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(keys[0]);
-    return inst->SUnion(keys, members);
-  }
-
+Status Storage::SUnionClassicMode(const std::vector<std::string>& keys, std::vector<std::string>* members) {
+  Status s = Status::OK();
   using Iter = std::vector<std::string>::iterator;
   using Uset = std::unordered_set<std::string>;
-  Uset member_set;
+  Uset member_set = {};
+  std::vector<std::string> vec = {};
   for (const auto& key : keys) {
-    std::vector<std::string> vec;
-    auto inst = GetDBInstance(key);
-    s = inst->SMembers(key, &vec);
+    s = GetDBInstance(key)->SMembers(key, &vec);
     if (s.IsNotFound()) {
       continue;
     }
     if (!s.ok()) {
       return s;
     }
-    std::for_each(vec.begin(), vec.end(), [](auto& val) {LOG(WARNING) << val;});
-    std::copy(std::move_iterator<Iter>(vec.begin()),
-              std::move_iterator<Iter>(vec.end()),
+    std::for_each(vec.begin(), vec.end(), [](auto& val) { LOG(WARNING) << val; });
+    std::copy(std::move_iterator<Iter>(vec.begin()), std::move_iterator<Iter>(vec.end()),
               std::insert_iterator<Uset>(member_set, member_set.begin()));
-    std::for_each(vec.begin(), vec.end(), [](auto& val) {LOG(WARNING) << val;});
-    std::for_each(member_set.begin(), member_set.end(), [](auto& val) {LOG(WARNING) << val;});
+    std::for_each(vec.begin(), vec.end(), [](auto& val) { LOG(WARNING) << val; });
+    std::for_each(member_set.begin(), member_set.end(), [](auto& val) { LOG(WARNING) << val; });
   }
 
   std::copy(member_set.begin(), member_set.end(), std::back_inserter(*members));
   return Status::OK();
 }
 
-Status Storage::SUnionstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
-  Status s;
-  value_to_dest.clear();
-
+Status Storage::SUnion(const std::vector<std::string>& keys, std::vector<std::string>* members) {
   // in codis mode, users should garentee keys will be hashed to same slot
   if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(destination);
-    s = inst->SUnionstore(destination, keys, value_to_dest, ret);
-    return s;
+    return GetDBInstance(keys[0])->SUnion(keys, members);
   }
+  return SUnionClassicMode(keys, members);
+}
 
-  s = SUnion(keys, &value_to_dest);
+Status Storage::SUnionstoreClassicMode(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
+  Status s = SUnion(keys, &value_to_dest);
   if (!s.ok()) {
     return s;
   }
-  *ret = value_to_dest.size();
-  auto dest_inst = GetDBInstance(destination);
-  s = dest_inst->SetsDel(destination);
-  if (!s.ok() && !s.IsNotFound()) {
-    return s;
+  return GetDBInstance(destination)->StoreValue(destination, value_to_dest, ret);
+}
+
+Status Storage::SUnionstore(const Slice& destination, const std::vector<std::string>& keys, std::vector<std::string>& value_to_dest, int32_t* ret) {
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
+    return GetDBInstance(destination)->SUnionstore(destination, keys, value_to_dest, ret);
   }
-  int unused_ret;
-  return dest_inst->SAdd(destination, value_to_dest, &unused_ret);
+  return SUnionstoreClassicMode(destination, keys, value_to_dest, ret);
 }
 
 Status Storage::SScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
@@ -905,31 +872,14 @@ Status Storage::ZScore(const Slice& key, const Slice& member, double* ret) {
   return inst->ZScore(key, member, ret);
 }
 
-Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::string>& keys,
-                            const std::vector<double>& weights, const AGGREGATE agg,
-                            std::map<std::string, double>& value_to_dest, int32_t* ret) {
-  value_to_dest.clear();
-  Status s;
-
-  LOG(WARNING) << "destination: " << destination.ToString();
-  for (const auto& key : keys) {
-    LOG(WARNING) << "key: " << key;
-  }
-  // in codis mode, users should garentee keys will be hashed to same slot
-  if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(keys[0]);
-    s = inst->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
-    return s;
-  }
-
-  LOG(WARNING) << "xxxxxxxxxxx";
-
+Status Storage::ZUnionClassicMode(const std::vector<std::string>& keys, const std::vector<double>& weights,
+                                  const AGGREGATE agg, std::map<std::string, double>& value_to_dest) {
+  Status s = Status::OK();
   for (int idx = 0; idx < keys.size(); idx++) {
-    Slice key = Slice(keys[idx]);
-    auto inst = GetDBInstance(key);
-    std::map<std::string, double> member_to_score;
-    double weight = idx >= weights.size() ? 1 : weights[idx]; 
-    s = inst->ZGetAll(key, weight, &member_to_score); 
+    auto inst = GetDBInstance(keys[idx]);
+    std::map<std::string, double> member_to_score = {};
+    double weight = idx >= weights.size() ? 1 : weights[idx];
+    s = inst->ZGetAll(keys[idx], weight, &member_to_score);
     LOG(WARNING) << "ZUnionstore->ZGetAll, key: " << keys[idx] << " status: " << s.ToString();
     for (const auto& mc : member_to_score) {
       LOG(WARNING) << "member: " << mc.first << " score: " << mc.second;
@@ -941,12 +891,12 @@ Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::str
       const std::string& member = key_score.first;
       double score = key_score.second;
       if (value_to_dest.find(member) == value_to_dest.end()) {
-        value_to_dest[member] = score; 
+        value_to_dest[member] = score;
         continue;
       }
       switch (agg) {
         case SUM:
-          score += value_to_dest[member]; 
+          score += value_to_dest[member];
           break;
         case MIN:
           score = std::min(value_to_dest[member], score);
@@ -959,60 +909,57 @@ Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::str
     }
   }
 
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, slot_id, destination);
-  auto inst = GetDBInstance(destination);
-  s = inst->ZsetsDel(destination);
-  if (!s.ok() && !s.IsNotFound()) {
-    return s;
-  }
-  std::vector<ScoreMember> score_members;
-  std::for_each(value_to_dest.begin(), value_to_dest.end(), [&score_members](auto kv) {
-      score_members.emplace_back(kv.second, kv.first);
-      });
-  *ret = score_members.size();
-  int unused_ret;
-  return inst->ZAdd(destination, score_members, &unused_ret);
 }
 
-Status Storage::ZInterstore(const Slice& destination, const std::vector<std::string>& keys,
-                            const std::vector<double>& weights, const AGGREGATE agg,
-                            std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
-  Status s;
-  value_to_dest.clear();
-
-  // in codis mode, users should garentee keys will be hashed to same slot
+Status Storage::ZUnion(const std::vector<std::string>& keys, const std::vector<double>& weights,
+                       const AGGREGATE agg, std::map<std::string, double>& value_to_dest) {
   if (!g_pika_conf->classic_mode()) {
-    auto inst = GetDBInstance(keys[0]);
-    s = inst->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
+
+  }
+  return ZUnionClassicMode(keys, weights, agg, value_to_dest);
+}
+
+Status Storage::ZUnionstoreClassic(const Slice& destination, const std::vector<std::string>& keys,
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::map<std::string, double>& value_to_dest, int32_t* ret) {
+  Status s = ZUnion(keys, weights, agg, value_to_dest);
+  if (!s.ok()) {
     return s;
   }
+  return GetDBInstance(destination)->StoreValue(destination, value_to_dest, ret);
+}
 
-  Slice key = Slice(keys[0]);
-  auto inst = GetDBInstance(key);
-  std::map<std::string, double> member_to_score;
+Status Storage::ZUnionstore(const Slice& destination, const std::vector<std::string>& keys,
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::map<std::string, double>& value_to_dest, int32_t* ret) {
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
+    return GetDBInstance(keys[0])->ZUnionstore(destination, keys, weights, agg, value_to_dest, ret);
+  }
+  return ZUnionstoreClassic(destination, keys, weights, agg, value_to_dest, ret);
+}
+
+Status Storage::ZInterClassicMode(const std::vector<std::string>& keys, const std::vector<double>& weights,
+                                  const AGGREGATE agg, std::vector<ScoreMember>& value_to_dest) {
+  auto inst = GetDBInstance(keys[0]);
+  std::map<std::string, double> member_to_score = {};
   double weight = weights.empty() ? 1 : weights[0];
-  s = inst->ZGetAll(key, weight, &member_to_score);
-  if (!s.ok() && !s.IsNotFound()) {
+  Status s = inst->ZGetAll(keys[0], weight, &member_to_score);
+  if (!s.ok()) {
     return s;
   }
 
   for (const auto member_score : member_to_score) {
     std::string member = member_score.first;
     double score = member_score.second;
-    bool reliable = true;
-    
-    for (int idx = 1; idx < keys.size(); idx++) {
+
+    for (size_t idx = 1; idx < keys.size(); idx++) {
       double weight = idx >= weights.size() ? 1 : weights[idx];
       auto inst = GetDBInstance(keys[idx]);
-      double ret_score;
+      double ret_score = 0.0f;
       s = inst->ZScore(keys[idx], member, &ret_score);
-      if (!s.ok() && !s.IsNotFound()) {
+      if (!s.ok()) {
         return s;
-      }
-      if (s.IsNotFound()) {
-        reliable = false;
-        break;
       }
       switch (agg) {
         case SUM:
@@ -1026,22 +973,36 @@ Status Storage::ZInterstore(const Slice& destination, const std::vector<std::str
           break;
       }
     }
-    if (reliable) {
-      value_to_dest.emplace_back(score, member);
-    }
+    value_to_dest.emplace_back(score, member);
   }
+}
 
-  uint16_t dest_slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
-  BaseMetaKey base_destination(0/*db_id*/, dest_slot_id, destination);
-  inst = GetDBInstance(destination);
+Status Storage::ZInter(const std::vector<std::string>& keys, const std::vector<double>& weights,
+                       const AGGREGATE agg, std::vector<ScoreMember>& value_to_dest) {
+  if (!g_pika_conf->classic_mode()) {
 
-  s = inst->ZsetsDel(destination);
-  if (!s.ok() && !s.IsNotFound()) {
+  }
+  return ZInterClassicMode(keys, weights, agg, value_to_dest);
+}
+
+Status Storage::ZInterstoreClassic(const Slice& destination, const std::vector<std::string>& keys,
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
+  Status s = ZInter(keys, weights, agg, value_to_dest);
+  if (!s.ok()) {
     return s;
   }
-  *ret = value_to_dest.size();
-  int unused_ret;
-  return inst->ZAdd(destination, value_to_dest, &unused_ret);
+  return GetDBInstance(destination)->StoreValue(destination, value_to_dest, ret);
+}
+
+Status Storage::ZInterstore(const Slice& destination, const std::vector<std::string>& keys,
+                            const std::vector<double>& weights, const AGGREGATE agg,
+                            std::vector<ScoreMember>& value_to_dest, int32_t* ret) {
+  // in codis mode, users should garentee keys will be hashed to same slot
+  if (!g_pika_conf->classic_mode()) {
+    return GetDBInstance(keys[0])->ZInterstore(destination, keys, weights, agg, value_to_dest, ret);
+  }
+  return ZInterstoreClassic(destination, keys, weights, agg, value_to_dest, ret);
 }
 
 Status Storage::ZRangebylex(const Slice& key, const Slice& min, const Slice& max, bool left_close,

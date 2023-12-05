@@ -327,129 +327,10 @@ Status Instance::ZCard(const Slice& key, int32_t* card) {
   return s;
 }
 
-Status Instance::StoreValue(const Slice& destination, std::vector<ScoreMember>& score_members, int32_t* ret) {
-  std::string meta_value;
-  ScopeRecordLock l(lock_mgr_, destination);
-  uint16_t slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
-  BaseMetaKey base_meta_key(0/*db_id*/, slot_id, destination);
-  Status s = db_->Get(default_read_options_, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
-  if (s.ok()) {
-    ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale()) {
-      return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
-      return Status::NotFound();
-    } else {
-      uint32_t statistic = parsed_zsets_meta_value.count();
-      parsed_zsets_meta_value.InitialMetaValue();
-      s = db_->Put(default_write_options_, handles_[kZsetsMetaCF], base_meta_key.Encode(), meta_value);
-      UpdateSpecificKeyStatistics(DataType::kZSets, destination.ToString(), statistic);
-    }
-  }
-  if (!s.ok() && !s.IsNotFound()) {
-    return s;
-  }
-  *ret = 0;
-  uint32_t statistic = 0;
-  std::unordered_set<std::string> unique;
-  std::vector<ScoreMember> filtered_score_members;
-  for (const auto& sm : score_members) {
-    if (unique.find(sm.member) == unique.end()) {
-      unique.insert(sm.member);
-      filtered_score_members.push_back(sm);
-    }
-  }
-
-  char score_buf[8];
-  uint64_t version = 0;
-  rocksdb::WriteBatch batch;
-  s = db_->Get(default_read_options_, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
-  LOG(WARNING) << "ZAdd get meta status: " << s.ToString() << " key: " << destination.ToString();
-  if (s.ok()) {
-    bool vaild = true;
-    ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
-      LOG(WARNING) << "ZAdd stale meta ";
-      vaild = false;
-      version = parsed_zsets_meta_value.InitialMetaValue();
-    } else {
-      vaild = true;
-      version = parsed_zsets_meta_value.version();
-      LOG(WARNING) << "ZAdd valid meta, key: " << destination.ToString() << " version: " << version;
-    }
-
-    int32_t cnt = 0;
-    std::string data_value;
-    for (const auto& sm : filtered_score_members) {
-      bool not_found = true;
-      ZSetsMemberKey zsets_member_key(0/*db_id*/, slot_id, destination, version, sm.member);
-      if (vaild) {
-        s = db_->Get(default_read_options_, handles_[kZsetsDataCF], zsets_member_key.Encode(), &data_value);
-        LOG(WARNING) << "zadd get member: " << sm.member << " status: " << s.ToString();
-        if (s.ok()) {
-          ParsedInternalValue parsed_value(&data_value);
-          parsed_value.StripSuffix();
-          not_found = false;
-          uint64_t tmp = DecodeFixed64(data_value.data());
-          const void* ptr_tmp = reinterpret_cast<const void*>(&tmp);
-          double old_score = *reinterpret_cast<const double*>(ptr_tmp);
-          if (old_score == sm.score) {
-            continue;
-          } else {
-            ZSetsScoreKey zsets_score_key(0/*db_id*/, slot_id, destination, version, old_score, sm.member);
-            batch.Delete(handles_[kZsetsScoreCF], zsets_score_key.Encode());
-            // delete old zsets_score_key and overwirte zsets_member_key
-            // but in different column_families so we accumulative 1
-            statistic++;
-          }
-        } else if (!s.IsNotFound()) {
-          return s;
-        }
-      }
-
-      const void* ptr_score = reinterpret_cast<const void*>(&sm.score);
-      EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
-      InternalValue zsets_member_i_val(Slice(score_buf, sizeof(uint64_t)));
-      batch.Put(handles_[kZsetsDataCF], zsets_member_key.Encode(), zsets_member_i_val.Encode());
-
-      ZSetsScoreKey zsets_score_key(0/*db_id*/, slot_id, destination, version, sm.score, sm.member);
-      InternalValue zsets_score_i_val(Slice{});
-      batch.Put(handles_[kZsetsScoreCF], zsets_score_key.Encode(), zsets_score_i_val.Encode());
-      if (not_found) {
-        cnt++;
-      }
-    }
-    parsed_zsets_meta_value.ModifyCount(cnt);
-    batch.Put(handles_[kZsetsMetaCF], base_meta_key.Encode(), meta_value);
-    *ret = cnt;
-  } else if (s.IsNotFound()) {
-    char buf[4];
-    EncodeFixed32(buf, filtered_score_members.size());
-    ZSetsMetaValue zsets_meta_value(Slice(buf, sizeof(int32_t)));
-    version = zsets_meta_value.UpdateVersion();
-    batch.Put(handles_[kZsetsMetaCF], base_meta_key.Encode(), zsets_meta_value.Encode());
-    for (const auto& sm : filtered_score_members) {
-      ZSetsMemberKey zsets_member_key(0/*db_id*/, slot_id, destination, version, sm.member);
-      const void* ptr_score = reinterpret_cast<const void*>(&sm.score);
-      EncodeFixed64(score_buf, *reinterpret_cast<const uint64_t*>(ptr_score));
-      InternalValue zsets_member_i_val(Slice(score_buf, sizeof(uint64_t)));
-      batch.Put(handles_[kZsetsDataCF], zsets_member_key.Encode(), zsets_member_i_val.Encode());
-
-      ZSetsScoreKey zsets_score_key(0/*db_id*/, slot_id, destination, version, sm.score, sm.member);
-      InternalValue zsets_score_i_val(Slice{});
-      batch.Put(handles_[kZsetsScoreCF], zsets_score_key.Encode(), zsets_score_i_val.Encode());
-    }
-    *ret = static_cast<int32_t>(filtered_score_members.size());
-    LOG(WARNING) << "zadd meta key not exist, ret: " << *ret;
-  } else {
-    return s;
-  }
-  s = db_->Write(default_write_options_, &batch);
-  UpdateSpecificKeyStatistics(DataType::kZSets, destination.ToString(), statistic);
-  return s;
-}
-
 Status Instance::StoreValue(const Slice& destination, std::map<std::string, double>& value_to_dest, int32_t* ret) {
+  /*
+   * ZsetsDel(destination)
+   */
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, destination);
   uint16_t slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
@@ -475,6 +356,9 @@ Status Instance::StoreValue(const Slice& destination, std::map<std::string, doub
   std::for_each(value_to_dest.begin(), value_to_dest.end(), [&score_members](auto kv) {
     score_members.emplace_back(kv.second, kv.first);
   });
+  /*
+   * Zadd(destination, value_dest, ret)
+   */
   *ret = 0;
   uint32_t statistic = 0;
   std::unordered_set<std::string> unique;

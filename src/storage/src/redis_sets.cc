@@ -567,6 +567,9 @@ rocksdb::Status Instance::SInterstore(const Slice& destination, const std::vecto
 }
 
 rocksdb::Status Instance::StoreValue(const Slice& destination, const std::vector<std::string>& value_to_dest, int32_t* ret) {
+  /*
+   * SetsDel(destination)
+   */
   std::string meta_value;
   ScopeRecordLock l(lock_mgr_, destination);
   uint16_t slot_id = static_cast<uint16_t>(GetSlotID(destination.ToString()));
@@ -588,6 +591,9 @@ rocksdb::Status Instance::StoreValue(const Slice& destination, const std::vector
   if (!s.ok() && !s.IsNotFound()) {
     return s;
   }
+  /*
+   * SAdd(destination, value_dest, ret)
+   */
   std::unordered_set<std::string> unique;
   std::vector<std::string> filtered_members;
   for (const auto& member : value_to_dest) {

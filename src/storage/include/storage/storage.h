@@ -197,6 +197,7 @@ class Storage {
   // MSETNX will not perform any operation at all even
   // if just a single key already exists.
   Status MSetnx(const std::vector<KeyValue>& kvs, int32_t* ret);
+  Status MSetnxClassicMode(const std::vector<KeyValue>& kvs, int32_t* ret);
 
   // Set key to hold string new_value if key currently hold the give value
   // return 1 if the key currently hold the give value And override success

@@ -590,7 +590,7 @@ void ZInterstoreCmd::DoInitial() {
 void ZInterstoreCmd::Do(std::shared_ptr<Slot> slot) {
   int32_t count = 0;
   rocksdb::Status s = slot->db()->ZInterstore(dest_key_, keys_, weights_, aggregate_, value_to_dest_, &count);
-  if (s.ok() || s.IsNotFound()) {
+  if (s.ok()) {
     res_.AppendInteger(count);
   } else {
     res_.SetRes(CmdRes::kErrOther, s.ToString());

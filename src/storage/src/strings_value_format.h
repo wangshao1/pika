@@ -65,6 +65,8 @@ class ParsedStringsValue : public ParsedInternalValue {
 
   rocksdb::Slice Value() { return user_value_; }
 
+  rocksdb::Slice value() { return user_value_; }
+
   static const size_t kStringsValueSuffixLength = 4 * sizeof(uint64_t);
 };
 

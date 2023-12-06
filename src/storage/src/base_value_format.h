@@ -117,6 +117,8 @@ public:
 
   uint64_t etime() { return etime_; }
 
+  uint64_t timestamp() { return etime_; }
+
   void SetEtime(uint64_t etime) {
     etime_ = etime;
     SetEtimeToValue();

@@ -70,7 +70,7 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
   rocksdb::ColumnFamilyOptions list_meta_cf_ops(storage_options.options);
   rocksdb::ColumnFamilyOptions list_data_cf_ops(storage_options.options);
   list_meta_cf_ops.compaction_filter_factory = std::make_shared<ListsMetaFilterFactory>();
-  list_data_cf_ops.compaction_filter_factory = std::make_shared<ListsDataFilterFactory>(&db_, &handles_);
+  list_data_cf_ops.compaction_filter_factory = std::make_shared<ListsDataFilterFactory>(&db_, &handles_, kListsMetaCF);
   list_data_cf_ops.comparator = ListsDataKeyComparator();
 
   // set column-family options
@@ -85,7 +85,7 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
   rocksdb::ColumnFamilyOptions zset_score_cf_ops(storage_options.options);
   zset_meta_cf_ops.compaction_filter_factory = std::make_shared<ZSetsMetaFilterFactory>();
   zset_data_cf_ops.compaction_filter_factory = std::make_shared<ZSetsDataFilterFactory>(&db_, &handles_, kZsetsMetaCF);
-  zset_score_cf_ops.compaction_filter_factory = std::make_shared<ZSetsScoreFilterFactory>(&db_, &handles_);
+  zset_score_cf_ops.compaction_filter_factory = std::make_shared<ZSetsScoreFilterFactory>(&db_, &handles_, kZsetsMetaCF);
   zset_score_cf_ops.comparator = ZSetsScoreKeyComparator();
 
   rocksdb::BlockBasedTableOptions table_ops(storage_options.table_options);

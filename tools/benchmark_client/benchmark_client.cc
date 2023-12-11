@@ -19,7 +19,7 @@
 using pstd::Status;
 using std::default_random_engine;
 
-Status RunSetCommand(redisContext* c);
+Status RunSetCommand(redisContext* c, int index);
 Status RunSetCommandPipeline(redisContext* c);
 Status RunZAddCommand(redisContext* c);
 
@@ -35,6 +35,8 @@ static int32_t last_seed = 0;
 
 std::string tables_str = "0";
 std::vector<std::string> tables;
+std::string command = "set";
+int key_size = 50;
 
 std::string hostname = "127.0.0.1";
 int port = 9221;
@@ -81,18 +83,43 @@ void Usage() {
   std::cout << "\t-p    -- server port (default 9221)" << std::endl;
   std::cout << "\t-t    -- thread num of each table (default 1)" << std::endl;
   std::cout << "\t-c    -- collection of table names (default db1)" << std::endl;
+  std::cout << "\t-k    -- key size of SET value in bytes (default 50)" << std::endl;
   std::cout << "\t-d    -- data size of SET value in bytes (default 50)" << std::endl;
   std::cout << "\t-n    -- number of requests single thread (default 100000)" << std::endl;
   std::cout << "\t-P    -- pipeline <numreq> requests. (default no pipeline)" << std::endl;
+  std::cout << "\t-C    -- command type. (default set)" << std::endl;
   std::cout << "\texample: ./benchmark_client -t 3 -c db1,db2 -d 1024" << std::endl;
 }
 
 std::vector<ThreadArg> thread_args;
 
+void RunGenerateCommand(int index) {
+  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  FILE* fp = fopen(filename.c_str(), "w+");
+  if (fp == nullptr) {
+    std::cout << "open file error";
+    return;
+  }
+  for (size_t i = 0; i < number_of_request; i++) {
+    std::string key;
+    GenerateRandomString(key_size, &key);
+    key.append("\n");
+    fwrite(key.data(), sizeof(char), key.size(), fp);
+  } 
+
+  fclose(fp);
+}
+
 void* ThreadMain(void* arg) {
   ThreadArg* ta = reinterpret_cast<ThreadArg*>(arg);
   redisContext* c;
   redisReply* res = nullptr;
+
+  if (command == "generate") {
+    RunGenerateCommand(ta->idx);
+    return nullptr;
+  }
+
   struct timeval timeout = {1, 500000};  // 1.5 seconds
   c = redisConnectWithTimeout(hostname.data(), port, timeout);
 
@@ -150,7 +177,7 @@ void* ThreadMain(void* arg) {
   freeReplyObject(res);
 
   if (transmit_mode == kNormal) {
-    Status s = RunSetCommand(c);
+    Status s = RunSetCommand(c, ta->idx);
     if (!s.ok()) {
       std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
       printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
@@ -214,8 +241,17 @@ Status RunSetCommandPipeline(redisContext* c) {
   return Status::OK();
 }
 
-Status RunSetCommand(redisContext* c) {
+Status RunSetCommand(redisContext* c, int index) {
   redisReply* res = nullptr;
+  std::vector<std::string> keys(number_of_request, "");
+  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  FILE* fp = fopen(filename.c_str(), "r");
+  for (size_t idx = 0; idx < number_of_request; ++idx) {
+    char* key = new char[key_size + 2];
+    fgets(key, 1000, fp);
+    key[key_size] = '\0';
+    keys[idx] = std::string(key);
+  }
   for (size_t idx = 0; idx < number_of_request; ++idx) {
     const char* set_argv[3];
     size_t set_argvlen[3];
@@ -226,7 +262,8 @@ Status RunSetCommand(redisContext* c) {
     last_seed = e();
     int32_t rand_num = last_seed % 10 + 1;
 
-    GenerateRandomString(rand_num, &key);
+    //GenerateRandomString(rand_num, &key);
+    key = keys[idx];
     GenerateRandomString(payload_size, &value);
 
     set_argv[0] = "set";
@@ -288,8 +325,10 @@ Status RunZAddCommand(redisContext* c) {
 // ./benchmark_client -b db1:5:10000,db2:3:10000
 int main(int argc, char* argv[]) {
   int opt;
-  while ((opt = getopt(argc, argv, "P:h:p:a:t:c:d:n:")) != -1) {
+  while ((opt = getopt(argc, argv, "C:P:h:p:a:t:c:d:n:")) != -1) {
     switch (opt) {
+      case 'C':
+        command = std::string(optarg);
       case 'h':
         hostname = std::string(optarg);
         break;
@@ -302,6 +341,9 @@ int main(int argc, char* argv[]) {
         break;
       case 'a':
         password = std::string(optarg);
+        break;
+      case 'k':
+        key_size = atoi(optarg);
         break;
       case 't':
         thread_num_each_table = atoi(optarg);

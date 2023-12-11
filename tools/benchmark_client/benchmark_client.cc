@@ -10,6 +10,7 @@
 #include <random>
 #include <vector>
 
+#include "historgram.h"
 #include "hiredis/hiredis.h"
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/pstd_string.h"
@@ -37,6 +38,7 @@ std::string tables_str = "0";
 std::vector<std::string> tables;
 std::string command = "set";
 int key_size = 50;
+std::string command = "generate";
 
 std::string hostname = "127.0.0.1";
 int port = 9221;
@@ -46,6 +48,8 @@ uint32_t number_of_request = 100000;
 uint32_t thread_num_each_table = 1;
 TransmitMode transmit_mode = kNormal;
 int pipeline_num = 0;
+
+Histogram hist;
 
 void GenerateRandomString(int32_t len, std::string* target) {
   target->clear();
@@ -105,7 +109,7 @@ void RunGenerateCommand(int index) {
     GenerateRandomString(key_size, &key);
     key.append("\n");
     fwrite(key.data(), sizeof(char), key.size(), fp);
-  } 
+  }
 
   fclose(fp);
 }
@@ -175,6 +179,16 @@ void* ThreadMain(void* arg) {
     }
   }
   freeReplyObject(res);
+
+  if (command == "get") {
+    Status s = RunGetCommand(c, arg->index);
+    if (!s.ok()) {
+      std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
+      printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
+    }
+    redisFree(c);
+    return nullptr;
+  }
 
   if (transmit_mode == kNormal) {
     Status s = RunSetCommand(c, ta->idx);
@@ -273,8 +287,12 @@ Status RunSetCommand(redisContext* c, int index) {
     set_argv[2] = value.c_str();
     set_argvlen[2] = value.size();
 
+    uint64_t begin = pstd::NowMicros();
+
     res = reinterpret_cast<redisReply*>(
         redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
+    uint64_t cost = pstd::NowMicros() - begin;
+    hist.Add(cost);
     if (!res || strcasecmp(res->str, "OK")) {
       std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
       freeReplyObject(res);
@@ -396,7 +414,9 @@ int main(int argc, char* argv[]) {
   auto minutes = std::chrono::duration_cast<std::chrono::minutes>(end_time - start_time).count();
   auto seconds = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
 
+
   std::cout << "Total Time Cost : " << hours << " hours " << minutes % 60 << " minutes " << seconds % 60 << " seconds "
             << std::endl;
+  std::cout << "stats: " << hist.ToString() << endl;
   return 0;
 }

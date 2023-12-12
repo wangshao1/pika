@@ -11,6 +11,7 @@
 #include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 
+#include "glog/logging.h"
 #include "src/coding.h"
 #include "src/mutex.h"
 #include "pstd/include/pstd_coding.h"
@@ -76,7 +77,7 @@ protected:
   char reserve_[16] = {0};
 
 private:
-  const size_t kDefaultValueSuffixLength = sizeof(reserve_) + sizeof(ctime_);
+  const size_t kDefaultValueSuffixLength = sizeof(reserve_) + sizeof(ctime_) + sizeof(etime_);
 };
 
 class ParsedInternalValue {

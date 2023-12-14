@@ -109,7 +109,7 @@ class ParsedZSetsScoreKey {
   }
 
   Slice key() { return Slice(key_str_); }
-  uint64_t version() const { return version_; }
+  uint64_t Version() const { return version_; }
   double score() const { return score_; }
   Slice member() { return member_; }
 

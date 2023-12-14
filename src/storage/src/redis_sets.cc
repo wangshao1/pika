@@ -18,6 +18,7 @@
 #include "src/base_filter.h"
 #include "src/scope_record_lock.h"
 #include "src/scope_snapshot.h"
+#include "pstd/include/env.h"
 #include "storage/util.h"
 
 namespace storage {

@@ -54,6 +54,8 @@ Status Instance::Open(const StorageOptions& storage_options, const std::string& 
 
   rocksdb::DBOptions db_ops(storage_options.options);
   db_ops.create_missing_column_families = true;
+  db_ops.listeners.emplace_back(new InstanceListener(this));
+
   //db_ops.env = rocksdb::Env::Instance();
 
   // string column-family options

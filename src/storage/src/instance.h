@@ -22,7 +22,6 @@
 #include "src/type_iterator.h"
 #include "storage/storage.h"
 #include "storage/storage_define.h"
-#include "pstd/include/env.h"
 #include "src/debug.h"
 
 #define SPOP_COMPACT_THRESHOLD_COUNT 500
@@ -32,8 +31,12 @@ namespace storage {
 using Status = rocksdb::Status;
 using Slice = rocksdb::Slice;
 
+static thread_local std::unordered_map<std::string ,std::pair<uint64_t, uint64_t>> mem_;
+
+class InstanceListener;
 class Instance {
- public:
+friend InstanceListener;
+public:
   Instance(Storage* storage, int32_t index);
   virtual ~Instance();
 
@@ -287,6 +290,67 @@ private:
 
   Status UpdateSpecificKeyStatistics(const DataType& dtype, const std::string& key, size_t count);
   Status AddCompactKeyTaskIfNeeded(const DataType& dtype, const std::string& key, size_t total);
+};
+
+class InstanceListener : public rocksdb::EventListener {
+public:
+  InstanceListener(void* inst) : inst_(inst) {}
+  virtual void OnCompactionBegin(rocksdb::DB* db, const rocksdb::CompactionJobInfo& info) override {
+    rocksdb::Slice begin = info.smallest_user_key;
+    rocksdb::Slice end = info.largest_user_key;
+    LOG(WARNING) << "begin: " << get_printable_key(begin.ToString()) << " end: " << get_printable_key(end.ToString());
+
+    if (info.cf_id == kStringsCF || info.cf_id == kHashesMetaCF ||
+        info.cf_id == kSetsMetaCF || info.cf_id == kListsMetaCF ||
+        info.cf_id == kZsetsMetaCF) {
+      return;
+    }
+
+    int meta_cf_id = -1;
+    switch (info.cf_id) {
+      case kHashesDataCF:
+        meta_cf_id = kHashesMetaCF;
+        break;
+      case kSetsDataCF:
+        meta_cf_id = kSetsMetaCF;
+        break;
+      case kListsDataCF:
+        meta_cf_id = kListsMetaCF;
+        break;
+      case kZsetsDataCF:
+        meta_cf_id = kZsetsMetaCF;
+        break;
+      case kZsetsScoreCF:
+        meta_cf_id = kZsetsMetaCF;
+        break;
+      default:
+        return;
+    }
+
+    Instance* inst = (Instance*)inst_;
+
+    ParsedBaseMetaKey pbmk_begin(begin);
+    ParsedBaseMetaKey pbmk_end(end);
+    BaseMetaKey bmk_start_begin(pbmk_begin.Key());
+    std::string iterator_upper_bound(pbmk_end.Key().ToString());
+    iterator_upper_bound.append(1, '\u0001');
+    BaseMetaKey bmk_end(iterator_upper_bound);
+    rocksdb::Slice iterate_upper_bound_slice = bmk_end.Encode();
+
+    rocksdb::ReadOptions iterator_options;
+    iterator_options.fill_cache = false;
+    iterator_options.iterate_upper_bound = &iterate_upper_bound_slice;
+
+    auto iter = db->NewIterator(iterator_options, inst->handles_[kHashesMetaCF]);
+    mem_.clear();
+    for (iter->Seek(bmk_start_begin.Encode()); iter->Valid(); iter->Next()) {
+      ParsedBaseMetaKey pbk(iter->key());
+      ParsedBaseMetaValue pbmv(iter->value());
+      mem_[pbk.Key().ToString()] = std::make_pair(pbmv.Version(), pbmv.Etime());
+    }
+  }
+private:
+  void* inst_;
 };
 
 }  //  namespace storage

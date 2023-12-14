@@ -28,7 +28,7 @@ class StringsFilter : public rocksdb::CompactionFilter {
     TRACE("[StringsFilter], key: %s, value = %s, timestamp: %d, cur_time: %d", key.ToString().c_str(),
           parsed_strings_value.value().ToString().c_str(), parsed_strings_value.timestamp(), cur_time);
 
-    if (parsed_strings_value.etime() != 0 && parsed_strings_value.etime() < cur_time) {
+    if (parsed_strings_value.Etime() != 0 && parsed_strings_value.Etime() < cur_time) {
       TRACE("Drop[Stale]");
       return true;
     } else {

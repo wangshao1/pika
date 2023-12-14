@@ -35,13 +35,13 @@ Status Instance::ScanListsKeyNum(KeyInfo* key_info) {
   rocksdb::Iterator* iter = db_->NewIterator(iterator_options, handles_[kListsMetaCF]);
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
     ParsedListsMetaValue parsed_lists_meta_value(iter->value());
-    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.count() == 0) {
+    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.Count() == 0) {
       invaild_keys++;
     } else {
       keys++;
       if (!parsed_lists_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_lists_meta_value.etime() - curtime;
+        ttl_sum += parsed_lists_meta_value.Etime() - curtime;
       }
     }
   }
@@ -72,7 +72,7 @@ Status Instance::ListsPKPatternMatchDel(const std::string& pattern, int32_t* ret
     ParsedBaseMetaKey parsed_meta_key(iter->key().ToString());
     meta_value = iter->value().ToString();
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    if (!parsed_lists_meta_value.IsStale() && (parsed_lists_meta_value.count() != 0U) &&
+    if (!parsed_lists_meta_value.IsStale() && (parsed_lists_meta_value.Count() != 0U) &&
         (StringMatch(pattern.data(), pattern.size(), parsed_meta_key.Key().data(), parsed_meta_key.Key().size(), 0) != 0)) {
       parsed_lists_meta_value.InitialMetaValue();
       batch.Put(handles_[kListsMetaCF], iter->key(), meta_value);
@@ -113,15 +113,15 @@ Status Instance::LIndex(const Slice& key, int64_t index, std::string* element) {
   Status s = db_->Get(read_options, handles_[kListsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    uint64_t version = parsed_lists_meta_value.version();
+    uint64_t version = parsed_lists_meta_value.Version();
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       uint64_t target_index =
-          index >= 0 ? parsed_lists_meta_value.left_index() + index + 1 : parsed_lists_meta_value.right_index() + index;
-      if (parsed_lists_meta_value.left_index() < target_index && target_index < parsed_lists_meta_value.right_index()) {
+          index >= 0 ? parsed_lists_meta_value.LeftIndex() + index + 1 : parsed_lists_meta_value.RightIndex() + index;
+      if (parsed_lists_meta_value.LeftIndex() < target_index && target_index < parsed_lists_meta_value.RightIndex()) {
         ListsDataKey lists_data_key(key, version, target_index);
         s = db_->Get(read_options, handles_[kListsDataCF], lists_data_key.Encode(), element);
         if (s.ok()) {
@@ -149,16 +149,16 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       bool find_pivot = false;
       uint64_t pivot_index = 0;
-      uint64_t version = parsed_lists_meta_value.version();
-      uint64_t current_index = parsed_lists_meta_value.left_index() + 1;
+      uint64_t version = parsed_lists_meta_value.Version();
+      uint64_t current_index = parsed_lists_meta_value.LeftIndex() + 1;
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kListsDataCF]);
       ListsDataKey start_data_key(key, version, current_index);
-      for (iter->Seek(start_data_key.Encode()); iter->Valid() && current_index < parsed_lists_meta_value.right_index();
+      for (iter->Seek(start_data_key.Encode()); iter->Valid() && current_index < parsed_lists_meta_value.RightIndex();
            iter->Next(), current_index++) {
         ParsedBaseDataValue parsed_value(iter->value());
         if (strcmp(parsed_value.UserValue().data(), pivot.data()) == 0) {
@@ -174,11 +174,11 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
       } else {
         uint64_t target_index;
         std::vector<std::string> list_nodes;
-        uint64_t mid_index = parsed_lists_meta_value.left_index() +
-                             (parsed_lists_meta_value.right_index() - parsed_lists_meta_value.left_index()) / 2;
+        uint64_t mid_index = parsed_lists_meta_value.LeftIndex() +
+                             (parsed_lists_meta_value.RightIndex() - parsed_lists_meta_value.LeftIndex()) / 2;
         if (pivot_index <= mid_index) {
           target_index = (before_or_after == Before) ? pivot_index - 1 : pivot_index;
-          current_index = parsed_lists_meta_value.left_index() + 1;
+          current_index = parsed_lists_meta_value.LeftIndex() + 1;
           rocksdb::Iterator* first_half_iter = db_->NewIterator(default_read_options_, handles_[kListsDataCF]);
           ListsDataKey start_data_key(key, version, current_index);
           for (first_half_iter->Seek(start_data_key.Encode()); first_half_iter->Valid() && current_index <= pivot_index;
@@ -194,7 +194,7 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
           }
           delete first_half_iter;
 
-          current_index = parsed_lists_meta_value.left_index();
+          current_index = parsed_lists_meta_value.LeftIndex();
           for (const auto& node : list_nodes) {
             ListsDataKey lists_data_key(key, version, current_index++);
             BaseDataValue i_val(node);
@@ -207,7 +207,7 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
           rocksdb::Iterator* after_half_iter = db_->NewIterator(default_read_options_, handles_[kListsDataCF]);
           ListsDataKey start_data_key(key, version, current_index);
           for (after_half_iter->Seek(start_data_key.Encode());
-               after_half_iter->Valid() && current_index < parsed_lists_meta_value.right_index();
+               after_half_iter->Valid() && current_index < parsed_lists_meta_value.RightIndex();
                after_half_iter->Next(), current_index++) {
             if (current_index == pivot_index && before_or_after == BeforeOrAfter::After) {
               continue;
@@ -230,7 +230,7 @@ Status Instance::LInsert(const Slice& key, const BeforeOrAfter& before_or_after,
         ListsDataKey lists_target_key(key, version, target_index);
         BaseDataValue i_val(value);
         batch.Put(handles_[kListsDataCF], lists_target_key.Encode(), i_val.Encode());
-        *ret = static_cast<int32_t>(parsed_lists_meta_value.count());
+        *ret = static_cast<int32_t>(parsed_lists_meta_value.Count());
         return db_->Write(default_write_options_, &batch);
       }
     }
@@ -250,10 +250,10 @@ Status Instance::LLen(const Slice& key, uint64_t* len) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      *len = parsed_lists_meta_value.count();
+      *len = parsed_lists_meta_value.Count();
       return s;
     }
   }
@@ -275,15 +275,15 @@ Status Instance::LPop(const Slice& key, int64_t count, std::vector<std::string>*
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      auto size = static_cast<int64_t>(parsed_lists_meta_value.count());
-      uint64_t version = parsed_lists_meta_value.version();
+      auto size = static_cast<int64_t>(parsed_lists_meta_value.Count());
+      uint64_t version = parsed_lists_meta_value.Version();
       int32_t start_index = 0;
       auto stop_index = static_cast<int32_t>(count<=size?count-1:size-1);
       int32_t cur_index = 0;
-      ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.left_index()+1);
+      ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.LeftIndex()+1);
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kListsDataCF]);
       for (iter->Seek(lists_data_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         statistic++;
@@ -321,13 +321,13 @@ Status Instance::LPush(const Slice& key, const std::vector<std::string>& values,
   Status s = db_->Get(default_read_options_, handles_[kListsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.count() == 0) {
+    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.Count() == 0) {
       version = parsed_lists_meta_value.InitialMetaValue();
     } else {
-      version = parsed_lists_meta_value.version();
+      version = parsed_lists_meta_value.Version();
     }
     for (const auto& value : values) {
-      index = parsed_lists_meta_value.left_index();
+      index = parsed_lists_meta_value.LeftIndex();
       parsed_lists_meta_value.ModifyLeftIndex(1);
       parsed_lists_meta_value.ModifyCount(1);
       ListsDataKey lists_data_key(key, version, index);
@@ -335,21 +335,21 @@ Status Instance::LPush(const Slice& key, const std::vector<std::string>& values,
       batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
     }
     batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), meta_value);
-    *ret = parsed_lists_meta_value.count();
+    *ret = parsed_lists_meta_value.Count();
   } else if (s.IsNotFound()) {
     char str[8];
     EncodeFixed64(str, values.size());
     ListsMetaValue lists_meta_value(Slice(str, sizeof(uint64_t)));
     version = lists_meta_value.UpdateVersion();
     for (const auto& value : values) {
-      index = lists_meta_value.left_index();
+      index = lists_meta_value.LeftIndex();
       lists_meta_value.ModifyLeftIndex(1);
       ListsDataKey lists_data_key(key, version, index);
       BaseDataValue i_val(value);
       batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
     }
     batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), lists_meta_value.Encode());
-    *ret = lists_meta_value.right_index() - lists_meta_value.left_index() - 1;
+    *ret = lists_meta_value.RightIndex() - lists_meta_value.LeftIndex() - 1;
   } else {
     return s;
   }
@@ -369,12 +369,12 @@ Status Instance::LPushx(const Slice& key, const std::vector<std::string>& values
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_lists_meta_value.version();
+      uint64_t version = parsed_lists_meta_value.Version();
       for (const auto& value : values) {
-        uint64_t index = parsed_lists_meta_value.left_index();
+        uint64_t index = parsed_lists_meta_value.LeftIndex();
         parsed_lists_meta_value.ModifyCount(1);
         parsed_lists_meta_value.ModifyLeftIndex(1);
         ListsDataKey lists_data_key(key, version, index);
@@ -382,7 +382,7 @@ Status Instance::LPushx(const Slice& key, const std::vector<std::string>& values
         batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
       }
       batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), meta_value);
-      *len = parsed_lists_meta_value.count();
+      *len = parsed_lists_meta_value.Count();
       return db_->Write(default_write_options_, &batch);
     }
   }
@@ -403,12 +403,12 @@ Status Instance::LRange(const Slice& key, int64_t start, int64_t stop, std::vect
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_lists_meta_value.version();
-      uint64_t origin_left_index = parsed_lists_meta_value.left_index() + 1;
-      uint64_t origin_right_index = parsed_lists_meta_value.right_index() - 1;
+      uint64_t version = parsed_lists_meta_value.Version();
+      uint64_t origin_left_index = parsed_lists_meta_value.LeftIndex() + 1;
+      uint64_t origin_right_index = parsed_lists_meta_value.RightIndex() - 1;
       uint64_t sublist_left_index = start >= 0 ? origin_left_index + start : origin_right_index + start + 1;
       uint64_t sublist_right_index = stop >= 0 ? origin_left_index + stop : origin_right_index + stop + 1;
 
@@ -451,16 +451,16 @@ Status Instance::LRem(const Slice& key, int64_t count, const Slice& value, uint6
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       uint64_t current_index;
       std::vector<uint64_t> target_index;
       std::vector<uint64_t> delete_index;
       uint64_t rest = (count < 0) ? -count : count;
-      uint64_t version = parsed_lists_meta_value.version();
-      uint64_t start_index = parsed_lists_meta_value.left_index() + 1;
-      uint64_t stop_index = parsed_lists_meta_value.right_index() - 1;
+      uint64_t version = parsed_lists_meta_value.Version();
+      uint64_t start_index = parsed_lists_meta_value.LeftIndex() + 1;
+      uint64_t stop_index = parsed_lists_meta_value.RightIndex() - 1;
       ListsDataKey start_data_key(key, version, start_index);
       ListsDataKey stop_data_key(key, version, stop_index);
       if (count >= 0) {
@@ -519,7 +519,7 @@ Status Instance::LRem(const Slice& key, int64_t count, const Slice& value, uint6
             }
           }
           delete iter;
-          uint64_t left_index = parsed_lists_meta_value.left_index();
+          uint64_t left_index = parsed_lists_meta_value.LeftIndex();
           for (uint64_t idx = 0; idx < target_index.size(); ++idx) {
             delete_index.push_back(left_index + idx + 1);
           }
@@ -540,7 +540,7 @@ Status Instance::LRem(const Slice& key, int64_t count, const Slice& value, uint6
             }
           }
           delete iter;
-          uint64_t right_index = parsed_lists_meta_value.right_index();
+          uint64_t right_index = parsed_lists_meta_value.RightIndex();
           for (uint64_t idx = 0; idx < target_index.size(); ++idx) {
             delete_index.push_back(right_index - idx - 1);
           }
@@ -573,14 +573,14 @@ Status Instance::LSet(const Slice& key, int64_t index, const Slice& value) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_lists_meta_value.version();
+      uint64_t version = parsed_lists_meta_value.Version();
       uint64_t target_index =
-          index >= 0 ? parsed_lists_meta_value.left_index() + index + 1 : parsed_lists_meta_value.right_index() + index;
-      if (target_index <= parsed_lists_meta_value.left_index() ||
-          target_index >= parsed_lists_meta_value.right_index()) {
+          index >= 0 ? parsed_lists_meta_value.LeftIndex() + index + 1 : parsed_lists_meta_value.RightIndex() + index;
+      if (target_index <= parsed_lists_meta_value.LeftIndex() ||
+          target_index >= parsed_lists_meta_value.RightIndex()) {
         return Status::Corruption("index out of range");
       }
       ListsDataKey lists_data_key(key, version, target_index);
@@ -605,14 +605,14 @@ Status Instance::LTrim(const Slice& key, int64_t start, int64_t stop) {
   Status s = db_->Get(default_read_options_, handles_[kListsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    uint64_t version = parsed_lists_meta_value.version();
+    uint64_t version = parsed_lists_meta_value.Version();
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t origin_left_index = parsed_lists_meta_value.left_index() + 1;
-      uint64_t origin_right_index = parsed_lists_meta_value.right_index() - 1;
+      uint64_t origin_left_index = parsed_lists_meta_value.LeftIndex() + 1;
+      uint64_t origin_right_index = parsed_lists_meta_value.RightIndex() - 1;
       uint64_t sublist_left_index = start >= 0 ? origin_left_index + start : origin_right_index + start + 1;
       uint64_t sublist_right_index = stop >= 0 ? origin_left_index + stop : origin_right_index + stop + 1;
 
@@ -670,15 +670,15 @@ Status Instance::RPop(const Slice& key, int64_t count, std::vector<std::string>*
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      auto size = static_cast<int64_t>(parsed_lists_meta_value.count());
-      uint64_t version = parsed_lists_meta_value.version();
+      auto size = static_cast<int64_t>(parsed_lists_meta_value.Count());
+      uint64_t version = parsed_lists_meta_value.Version();
       int32_t start_index = 0;
       auto stop_index = static_cast<int32_t>(count<=size?count-1:size-1);
       int32_t cur_index = 0;
-      ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.right_index()-1);
+      ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.RightIndex()-1);
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kListsDataCF]);
       for (iter->SeekForPrev(lists_data_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Prev(), ++cur_index) {
         statistic++;
@@ -717,22 +717,22 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
       ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
       if (parsed_lists_meta_value.IsStale()) {
         return Status::NotFound("Stale");
-      } else if (parsed_lists_meta_value.count() == 0) {
+      } else if (parsed_lists_meta_value.Count() == 0) {
         return Status::NotFound();
       } else {
         std::string target;
-        uint64_t version = parsed_lists_meta_value.version();
-        uint64_t last_node_index = parsed_lists_meta_value.right_index() - 1;
+        uint64_t version = parsed_lists_meta_value.Version();
+        uint64_t last_node_index = parsed_lists_meta_value.RightIndex() - 1;
         ListsDataKey lists_data_key(source, version, last_node_index);
         s = db_->Get(default_read_options_, handles_[kListsDataCF], lists_data_key.Encode(), &target);
         if (s.ok()) {
           *element = target;
           ParsedBaseDataValue parsed_value(element);
           parsed_value.StripSuffix();
-          if (parsed_lists_meta_value.count() == 1) {
+          if (parsed_lists_meta_value.Count() == 1) {
             return Status::OK();
           } else {
-            uint64_t target_index = parsed_lists_meta_value.left_index();
+            uint64_t target_index = parsed_lists_meta_value.LeftIndex();
             ListsDataKey lists_target_key(source, version, target_index);
             batch.Delete(handles_[kListsDataCF], lists_data_key.Encode());
             batch.Put(handles_[kListsDataCF], lists_target_key.Encode(), target);
@@ -762,11 +762,11 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
     ParsedListsMetaValue parsed_lists_meta_value(&source_meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      version = parsed_lists_meta_value.version();
-      uint64_t last_node_index = parsed_lists_meta_value.right_index() - 1;
+      version = parsed_lists_meta_value.Version();
+      uint64_t last_node_index = parsed_lists_meta_value.RightIndex() - 1;
       ListsDataKey lists_data_key(source, version, last_node_index);
       s = db_->Get(default_read_options_, handles_[kListsDataCF], lists_data_key.Encode(), &target);
       if (s.ok()) {
@@ -788,12 +788,12 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
   s = db_->Get(default_read_options_, handles_[kListsMetaCF], base_destination.Encode(), &destination_meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&destination_meta_value);
-    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.count() == 0) {
+    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.Count() == 0) {
       version = parsed_lists_meta_value.InitialMetaValue();
     } else {
-      version = parsed_lists_meta_value.version();
+      version = parsed_lists_meta_value.Version();
     }
-    uint64_t target_index = parsed_lists_meta_value.left_index();
+    uint64_t target_index = parsed_lists_meta_value.LeftIndex();
     ListsDataKey lists_data_key(destination, version, target_index);
     batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), target);
     parsed_lists_meta_value.ModifyCount(1);
@@ -804,7 +804,7 @@ Status Instance::RPoplpush(const Slice& source, const Slice& destination, std::s
     EncodeFixed64(str, 1);
     ListsMetaValue lists_meta_value(Slice(str, sizeof(uint64_t)));
     version = lists_meta_value.UpdateVersion();
-    uint64_t target_index = lists_meta_value.left_index();
+    uint64_t target_index = lists_meta_value.LeftIndex();
     ListsDataKey lists_data_key(destination, version, target_index);
     batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), target);
     lists_meta_value.ModifyLeftIndex(1);
@@ -835,13 +835,13 @@ Status Instance::RPush(const Slice& key, const std::vector<std::string>& values,
   Status s = db_->Get(default_read_options_, handles_[kListsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.count() == 0) {
+    if (parsed_lists_meta_value.IsStale() || parsed_lists_meta_value.Count() == 0) {
       version = parsed_lists_meta_value.InitialMetaValue();
     } else {
-      version = parsed_lists_meta_value.version();
+      version = parsed_lists_meta_value.Version();
     }
     for (const auto& value : values) {
-      index = parsed_lists_meta_value.right_index();
+      index = parsed_lists_meta_value.RightIndex();
       parsed_lists_meta_value.ModifyRightIndex(1);
       parsed_lists_meta_value.ModifyCount(1);
       ListsDataKey lists_data_key(key, version, index);
@@ -849,21 +849,21 @@ Status Instance::RPush(const Slice& key, const std::vector<std::string>& values,
       batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
     }
     batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), meta_value);
-    *ret = parsed_lists_meta_value.count();
+    *ret = parsed_lists_meta_value.Count();
   } else if (s.IsNotFound()) {
     char str[8];
     EncodeFixed64(str, values.size());
     ListsMetaValue lists_meta_value(Slice(str, sizeof(uint64_t)));
     version = lists_meta_value.UpdateVersion();
     for (const auto& value : values) {
-      index = lists_meta_value.right_index();
+      index = lists_meta_value.RightIndex();
       lists_meta_value.ModifyRightIndex(1);
       ListsDataKey lists_data_key(key, version, index);
       BaseDataValue i_val(value);
       batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
     }
     batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), lists_meta_value.Encode());
-    *ret = lists_meta_value.right_index() - lists_meta_value.left_index() - 1;
+    *ret = lists_meta_value.RightIndex() - lists_meta_value.LeftIndex() - 1;
   } else {
     return s;
   }
@@ -883,12 +883,12 @@ Status Instance::RPushx(const Slice& key, const std::vector<std::string>& values
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_lists_meta_value.version();
+      uint64_t version = parsed_lists_meta_value.Version();
       for (const auto& value : values) {
-        uint64_t index = parsed_lists_meta_value.right_index();
+        uint64_t index = parsed_lists_meta_value.RightIndex();
         parsed_lists_meta_value.ModifyCount(1);
         parsed_lists_meta_value.ModifyRightIndex(1);
         ListsDataKey lists_data_key(key, version, index);
@@ -896,7 +896,7 @@ Status Instance::RPushx(const Slice& key, const std::vector<std::string>& values
         batch.Put(handles_[kListsDataCF], lists_data_key.Encode(), i_val.Encode());
       }
       batch.Put(handles_[kListsMetaCF], base_meta_key.Encode(), meta_value);
-      *len = parsed_lists_meta_value.count();
+      *len = parsed_lists_meta_value.Count();
       return db_->Write(default_write_options_, &batch);
     }
   }
@@ -913,7 +913,7 @@ Status Instance::ListsExpire(const Slice& key, int32_t ttl) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     }
 
@@ -938,10 +938,10 @@ Status Instance::ListsDel(const Slice& key) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint32_t statistic = parsed_lists_meta_value.count();
+      uint32_t statistic = parsed_lists_meta_value.Count();
       parsed_lists_meta_value.InitialMetaValue();
       s = db_->Put(default_write_options_, handles_[kListsMetaCF], base_meta_key.Encode(), meta_value);
       UpdateSpecificKeyStatistics(DataType::kLists, key.ToString(), statistic);
@@ -960,7 +960,7 @@ Status Instance::ListsExpireat(const Slice& key, int32_t timestamp) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
@@ -983,10 +983,10 @@ Status Instance::ListsPersist(const Slice& key) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
     if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_lists_meta_value.etime();
+      int32_t timestamp = parsed_lists_meta_value.Etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
@@ -1008,11 +1008,11 @@ Status Instance::ListsTTL(const Slice& key, int64_t* timestamp) {
     if (parsed_lists_meta_value.IsStale()) {
       *timestamp = -2;
       return Status::NotFound("Stale");
-    } else if (parsed_lists_meta_value.count() == 0) {
+    } else if (parsed_lists_meta_value.Count() == 0) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_lists_meta_value.etime();
+      *timestamp = parsed_lists_meta_value.Etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1041,17 +1041,17 @@ void Instance::ScanLists() {
     ParsedListsMetaValue parsed_lists_meta_value(meta_iter->value());
     ParsedBaseMetaKey parsed_meta_key(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_lists_meta_value.etime() != 0) {
-      survival_time = parsed_lists_meta_value.etime() - current_time > 0
-                          ? parsed_lists_meta_value.etime() - current_time
+    if (parsed_lists_meta_value.Etime() != 0) {
+      survival_time = parsed_lists_meta_value.Etime() - current_time > 0
+                          ? parsed_lists_meta_value.Etime() - current_time
                           : -1;
     }
 
     LOG(INFO) << fmt::format(
         "[key : {:<30}] [count : {:<10}] [left index : {:<10}] [right index : {:<10}] [timestamp : {:<10}] [version : "
         "{}] [survival_time : {}]",
-        parsed_meta_key.Key().ToString(), parsed_lists_meta_value.count(), parsed_lists_meta_value.left_index(),
-        parsed_lists_meta_value.right_index(), parsed_lists_meta_value.etime(), parsed_lists_meta_value.version(),
+        parsed_meta_key.Key().ToString(), parsed_lists_meta_value.Count(), parsed_lists_meta_value.LeftIndex(),
+        parsed_lists_meta_value.RightIndex(), parsed_lists_meta_value.Etime(), parsed_lists_meta_value.Version(),
         survival_time);
   }
   delete meta_iter;
@@ -1064,7 +1064,7 @@ void Instance::ScanLists() {
 
     LOG(INFO) << fmt::format("[key : {:<30}] [index : {:<10}] [data : {:<20}] [version : {}]",
                              parsed_lists_data_key.key().ToString(), parsed_lists_data_key.index(),
-                             parsed_value.UserValue().ToString(), parsed_lists_data_key.version());
+                             parsed_value.UserValue().ToString(), parsed_lists_data_key.Version());
   }
   delete data_iter;
 }

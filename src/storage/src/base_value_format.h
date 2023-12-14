@@ -81,14 +81,14 @@ public:
 
   rocksdb::Slice UserValue() { return user_value_; }
 
-  uint64_t version() { return version_; }
+  uint64_t Version() { return version_; }
 
-  void set_version(uint64_t version) {
+  void SetVersion(uint64_t version) {
     version_ = version;
     SetVersionToValue();
   }
 
-  uint64_t etime() { return etime_; }
+  uint64_t Etime() { return etime_; }
 
   void SetEtime(uint64_t etime) {
     etime_ = etime;

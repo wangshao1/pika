@@ -42,13 +42,13 @@ Status Instance::ScanZsetsKeyNum(KeyInfo* key_info) {
   rocksdb::Iterator* iter = db_->NewIterator(iterator_options, handles_[kZsetsMetaCF]);
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(iter->value());
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       invaild_keys++;
     } else {
       keys++;
       if (!parsed_zsets_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_zsets_meta_value.etime() - curtime;
+        ttl_sum += parsed_zsets_meta_value.Etime() - curtime;
       }
     }
   }
@@ -79,7 +79,7 @@ Status Instance::ZsetsPKPatternMatchDel(const std::string& pattern, int32_t* ret
     ParsedBaseMetaKey meta_key(iter->key().ToString());
     meta_value = iter->value().ToString();
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (!parsed_zsets_meta_value.IsStale() && (parsed_zsets_meta_value.count() != 0) &&
+    if (!parsed_zsets_meta_value.IsStale() && (parsed_zsets_meta_value.Count() != 0) &&
         (StringMatch(pattern.data(), pattern.size(), meta_key.Key().data(), meta_key.Key().size(), 0) != 0)) {
       parsed_zsets_meta_value.InitialMetaValue();
       batch.Put(handles_[kZsetsMetaCF], key, meta_value);
@@ -121,12 +121,12 @@ Status Instance::ZPopMax(const Slice& key, const int64_t count, std::vector<Scor
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int64_t num = parsed_zsets_meta_value.count();
+      int64_t num = parsed_zsets_meta_value.Count();
       num = num <= count ? num : count;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       int32_t del_cnt = 0;
@@ -165,12 +165,12 @@ Status Instance::ZPopMin(const Slice& key, const int64_t count, std::vector<Scor
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int64_t num = parsed_zsets_meta_value.count();
+      int64_t num = parsed_zsets_meta_value.Count();
       num = num <= count ? num : count;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       int32_t del_cnt = 0;
@@ -219,12 +219,12 @@ Status Instance::ZAdd(const Slice& key, const std::vector<ScoreMember>& score_me
   if (s.ok()) {
     bool vaild = true;
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       vaild = false;
       version = parsed_zsets_meta_value.InitialMetaValue();
     } else {
       vaild = true;
-      version = parsed_zsets_meta_value.version();
+      version = parsed_zsets_meta_value.Version();
     }
 
     int32_t cnt = 0;
@@ -308,11 +308,11 @@ Status Instance::ZCard(const Slice& key, int32_t* card) {
     if (parsed_zsets_meta_value.IsStale()) {
       *card = 0;
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       *card = 0;
       return Status::NotFound();
     } else {
-      *card = parsed_zsets_meta_value.count();
+      *card = parsed_zsets_meta_value.Count();
     }
   }
   return s;
@@ -334,13 +334,13 @@ Status Instance::ZCount(const Slice& key, double min, double max, bool left_clos
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t cnt = 0;
       int32_t cur_index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
@@ -351,7 +351,7 @@ Status Instance::ZCount(const Slice& key, double min, double max, bool left_clos
         if (parsed_zsets_score_key.key() != key) {
           break;
         }
-        if (parsed_zsets_score_key.version() != version) {
+        if (parsed_zsets_score_key.Version() != version) {
           break;
         }
         if ((left_close && min <= parsed_zsets_score_key.score()) ||
@@ -389,10 +389,10 @@ Status Instance::ZIncrby(const Slice& key, const Slice& member, double increment
   Status s = db_->Get(default_read_options_, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       version = parsed_zsets_meta_value.InitialMetaValue();
     } else {
-      version = parsed_zsets_meta_value.version();
+      version = parsed_zsets_meta_value.Version();
     }
     std::string data_value;
     ZSetsMemberKey zsets_member_key(key, version, member);
@@ -457,11 +457,11 @@ Status Instance::ZRange(const Slice& key, int32_t start, int32_t stop, std::vect
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t count = parsed_zsets_meta_value.count();
-      uint64_t version = parsed_zsets_meta_value.version();
+      int32_t count = parsed_zsets_meta_value.Count();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t start_index = start >= 0 ? start : count + start;
       int32_t stop_index = stop >= 0 ? stop : count + stop;
       start_index = start_index <= 0 ? 0 : start_index;
@@ -504,12 +504,12 @@ Status Instance::ZRangebyscore(const Slice& key, double min, double max, bool le
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (offset >= 0 && count != 0) {
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       int64_t skipped = 0;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
@@ -521,7 +521,7 @@ Status Instance::ZRangebyscore(const Slice& key, double min, double max, bool le
         if (parsed_zsets_score_key.key() != key) {
           break;
         }
-        if (parsed_zsets_score_key.version() != version) {
+        if (parsed_zsets_score_key.Version() != version) {
           break;
         }
         if ((left_close && min <= parsed_zsets_score_key.score()) ||
@@ -570,13 +570,13 @@ Status Instance::ZRank(const Slice& key, const Slice& member, int32_t* rank) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       bool found = false;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
@@ -621,12 +621,12 @@ Status Instance::ZRem(const Slice& key, const std::vector<std::string>& members,
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       int32_t del_cnt = 0;
       std::string data_value;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       for (const auto& member : filtered_members) {
         ZSetsMemberKey zsets_member_key(key, version, member);
         s = db_->Get(default_read_options_, handles_[kZsetsDataCF], zsets_member_key.Encode(), &data_value);
@@ -671,14 +671,14 @@ Status Instance::ZRemrangebyrank(const Slice& key, int32_t start, int32_t stop, 
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       std::string member;
       int32_t del_cnt = 0;
       int32_t cur_index = 0;
-      int32_t count = parsed_zsets_meta_value.count();
-      uint64_t version = parsed_zsets_meta_value.version();
+      int32_t count = parsed_zsets_meta_value.Count();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t start_index = start >= 0 ? start : count + start;
       int32_t stop_index = stop >= 0 ? stop : count + stop;
       start_index = start_index <= 0 ? 0 : start_index;
@@ -725,14 +725,14 @@ Status Instance::ZRemrangebyscore(const Slice& key, double min, double max, bool
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       std::string member;
       int32_t del_cnt = 0;
       int32_t cur_index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
-      uint64_t version = parsed_zsets_meta_value.version();
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
+      uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
@@ -742,7 +742,7 @@ Status Instance::ZRemrangebyscore(const Slice& key, double min, double max, bool
         if (parsed_zsets_score_key.key() != key) {
           break;
         }
-        if (parsed_zsets_score_key.version() != version) {
+        if (parsed_zsets_score_key.Version() != version) {
           break;
         }
         if ((left_close && min <= parsed_zsets_score_key.score()) ||
@@ -793,11 +793,11 @@ Status Instance::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::v
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t count = parsed_zsets_meta_value.count();
-      uint64_t version = parsed_zsets_meta_value.version();
+      int32_t count = parsed_zsets_meta_value.Count();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t start_index = stop >= 0 ? count - stop - 1 : -stop - 1;
       int32_t stop_index = start >= 0 ? count - start - 1 : -start - 1;
       start_index = start_index <= 0 ? 0 : start_index;
@@ -840,11 +840,11 @@ Status Instance::ZRevrangebyscore(const Slice& key, double min, double max, bool
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (offset >= 0 && count != 0) {
-      uint64_t version = parsed_zsets_meta_value.version();
-      int32_t left = parsed_zsets_meta_value.count();
+      uint64_t version = parsed_zsets_meta_value.Version();
+      int32_t left = parsed_zsets_meta_value.Count();
       int64_t skipped = 0;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, std::nextafter(max, std::numeric_limits<double>::max()), Slice());
@@ -856,7 +856,7 @@ Status Instance::ZRevrangebyscore(const Slice& key, double min, double max, bool
         if (parsed_zsets_score_key.key() != key) {
           break;
         }
-        if (parsed_zsets_score_key.version() != version) {
+        if (parsed_zsets_score_key.Version() != version) {
           break;
         }
         if ((left_close && min <= parsed_zsets_score_key.score()) ||
@@ -906,13 +906,13 @@ Status Instance::ZRevrank(const Slice& key, const Slice& member, int32_t* rank) 
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       bool found = false;
       int32_t rev_index = 0;
-      int32_t left = parsed_zsets_meta_value.count();
-      uint64_t version = parsed_zsets_meta_value.version();
+      int32_t left = parsed_zsets_meta_value.Count();
+      uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && left >= 0; iter->Prev(), --left, ++rev_index) {
@@ -947,10 +947,10 @@ Status Instance::ZScore(const Slice& key, const Slice& member, double* score) {
   Status s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    uint64_t version = parsed_zsets_meta_value.version();
+    uint64_t version = parsed_zsets_meta_value.Version();
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       std::string data_value;
@@ -984,11 +984,11 @@ Status Instance::ZGetAll(const Slice& key, double weight, std::map<std::string, 
   s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (!parsed_zsets_meta_value.IsStale() && parsed_zsets_meta_value.count() != 0) {
+    if (!parsed_zsets_meta_value.IsStale() && parsed_zsets_meta_value.Count() != 0) {
       int32_t cur_index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       double score = 0.0;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key.ToString(), version, std::numeric_limits<double>::lowest(), Slice());
       Slice seek_key = zsets_score_key.Encode();
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
@@ -1026,12 +1026,12 @@ Status Instance::ZUnionstore(const Slice& destination, const std::vector<std::st
     s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
       ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-      if (!parsed_zsets_meta_value.IsStale() && parsed_zsets_meta_value.count() != 0) {
+      if (!parsed_zsets_meta_value.IsStale() && parsed_zsets_meta_value.Count() != 0) {
         int32_t cur_index = 0;
-        int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+        int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
         double score = 0;
         double weight = idx < weights.size() ? weights[idx] : 1;
-        version = parsed_zsets_meta_value.version();
+        version = parsed_zsets_meta_value.Version();
         ZSetsScoreKey zsets_score_key(keys[idx], version, std::numeric_limits<double>::lowest(), Slice());
         rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
         for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index;
@@ -1069,9 +1069,9 @@ Status Instance::ZUnionstore(const Slice& destination, const std::vector<std::st
   s = db_->Get(read_options, handles_[kZsetsMetaCF], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    statistic = parsed_zsets_meta_value.count();
+    statistic = parsed_zsets_meta_value.Count();
     version = parsed_zsets_meta_value.InitialMetaValue();
-    parsed_zsets_meta_value.set_count(static_cast<int32_t>(member_score_map.size()));
+    parsed_zsets_meta_value.SetCount(static_cast<int32_t>(member_score_map.size()));
     batch.Put(handles_[kZsetsMetaCF], base_destination.Encode(), meta_value);
   } else {
     char buf[4];
@@ -1132,12 +1132,12 @@ Status Instance::ZInterstore(const Slice& destination, const std::vector<std::st
     s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
     if (s.ok()) {
       ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-      if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+      if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
         have_invalid_zsets = true;
       } else {
-        valid_zsets.push_back({keys[idx], parsed_zsets_meta_value.version()});
+        valid_zsets.push_back({keys[idx], parsed_zsets_meta_value.Version()});
         if (idx == 0) {
-          stop_index = parsed_zsets_meta_value.count() - 1;
+          stop_index = parsed_zsets_meta_value.Count() - 1;
         }
       }
     } else if (s.IsNotFound()) {
@@ -1201,9 +1201,9 @@ Status Instance::ZInterstore(const Slice& destination, const std::vector<std::st
   s = db_->Get(read_options, handles_[kZsetsMetaCF], base_destination.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    statistic = parsed_zsets_meta_value.count();
+    statistic = parsed_zsets_meta_value.Count();
     version = parsed_zsets_meta_value.InitialMetaValue();
-    parsed_zsets_meta_value.set_count(static_cast<int32_t>(final_score_members.size()));
+    parsed_zsets_meta_value.SetCount(static_cast<int32_t>(final_score_members.size()));
     batch.Put(handles_[kZsetsMetaCF], base_destination.Encode(), meta_value);
   } else {
     char buf[4];
@@ -1250,12 +1250,12 @@ Status Instance::ZRangebylex(const Slice& key, const Slice& min, const Slice& ma
   Status s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t cur_index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ZSetsMemberKey zsets_member_key(key, version, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsDataCF]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
@@ -1312,12 +1312,12 @@ Status Instance::ZRemrangebylex(const Slice& key, const Slice& min, const Slice&
   Status s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t cur_index = 0;
-      int32_t stop_index = parsed_zsets_meta_value.count() - 1;
+      int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ZSetsMemberKey zsets_member_key(key, version, Slice());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsDataCF]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
@@ -1372,7 +1372,7 @@ Status Instance::ZsetsExpire(const Slice& key, int32_t ttl) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     }
 
@@ -1396,10 +1396,10 @@ Status Instance::ZsetsDel(const Slice& key) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint32_t statistic = parsed_zsets_meta_value.count();
+      uint32_t statistic = parsed_zsets_meta_value.Count();
       parsed_zsets_meta_value.InitialMetaValue();
       s = db_->Put(default_write_options_, handles_[kZsetsMetaCF], base_meta_key.Encode(), meta_value);
       UpdateSpecificKeyStatistics(DataType::kZSets, key.ToString(), statistic);
@@ -1418,7 +1418,7 @@ Status Instance::ZsetsExpireat(const Slice& key, int32_t timestamp) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
@@ -1454,13 +1454,13 @@ Status Instance::ZScan(const Slice& key, int64_t cursor, const std::string& patt
   Status s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.IsStale() || parsed_zsets_meta_value.Count() == 0) {
       *next_cursor = 0;
       return Status::NotFound();
     } else {
       std::string sub_member;
       std::string start_point;
-      uint64_t version = parsed_zsets_meta_value.version();
+      uint64_t version = parsed_zsets_meta_value.Version();
       s = GetScanStartPoint(DataType::kZSets, key, pattern, cursor, &start_point);
       if (s.IsNotFound()) {
         cursor = 0;
@@ -1517,10 +1517,10 @@ Status Instance::ZsetsPersist(const Slice& key) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
     if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_zsets_meta_value.etime();
+      int32_t timestamp = parsed_zsets_meta_value.Etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
@@ -1542,11 +1542,11 @@ Status Instance::ZsetsTTL(const Slice& key, int64_t* timestamp) {
     if (parsed_zsets_meta_value.IsStale()) {
       *timestamp = -2;
       return Status::NotFound("Stale");
-    } else if (parsed_zsets_meta_value.count() == 0) {
+    } else if (parsed_zsets_meta_value.Count() == 0) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_zsets_meta_value.etime();
+      *timestamp = parsed_zsets_meta_value.Etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1575,15 +1575,15 @@ void Instance::ScanZsets() {
     ParsedBaseMetaKey parsed_meta_key(meta_iter->key());
     ParsedZSetsMetaValue parsed_zsets_meta_value(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_zsets_meta_value.etime() != 0) {
-      survival_time = parsed_zsets_meta_value.etime() - current_time > 0
-                          ? parsed_zsets_meta_value.etime() - current_time
+    if (parsed_zsets_meta_value.Etime() != 0) {
+      survival_time = parsed_zsets_meta_value.Etime() - current_time > 0
+                          ? parsed_zsets_meta_value.Etime() - current_time
                           : -1;
     }
 
     LOG(INFO) << fmt::format("[key : {:<30}] [count : {:<10}] [timestamp : {:<10}] [version : {}] [survival_time : {}]",
-                             parsed_meta_key.Key().ToString(), parsed_zsets_meta_value.count(), parsed_zsets_meta_value.etime(),
-                             parsed_zsets_meta_value.version(), survival_time);
+                             parsed_meta_key.Key().ToString(), parsed_zsets_meta_value.Count(), parsed_zsets_meta_value.Etime(),
+                             parsed_zsets_meta_value.Version(), survival_time);
   }
   delete meta_iter;
 
@@ -1610,7 +1610,7 @@ void Instance::ScanZsets() {
 
     LOG(INFO) << fmt::format("[key : {:<30}] [score : {:<20}] [member : {:<20}] [version : {}]",
                              parsed_zsets_score_key.key().ToString(), parsed_zsets_score_key.score(),
-                              parsed_zsets_score_key.member().ToString(), parsed_zsets_score_key.version());
+                              parsed_zsets_score_key.member().ToString(), parsed_zsets_score_key.Version());
   }
   delete score_iter;
 }

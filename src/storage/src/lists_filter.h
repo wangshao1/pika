@@ -29,15 +29,15 @@ class ListsMetaFilter : public rocksdb::CompactionFilter {
     ParsedListsMetaValue parsed_lists_meta_value(value);
     TRACE("==========================START==========================");
     TRACE("[ListMetaFilter], key: %s, count = %llu, timestamp: %d, cur_time: %d, version: %d", key.ToString().c_str(),
-          parsed_lists_meta_value.count(), parsed_lists_meta_value.timestamp(), cur_time,
-          parsed_lists_meta_value.version());
+          parsed_lists_meta_value.Count(), parsed_lists_meta_value.timestamp(), cur_time,
+          parsed_lists_meta_value.Version());
 
-    if (parsed_lists_meta_value.etime() != 0 && parsed_lists_meta_value.etime() < cur_time &&
-        parsed_lists_meta_value.version() < cur_time) {
+    if (parsed_lists_meta_value.Etime() != 0 && parsed_lists_meta_value.Etime() < cur_time &&
+        parsed_lists_meta_value.Version() < cur_time) {
       TRACE("Drop[Stale & version < cur_time]");
       return true;
     }
-    if (parsed_lists_meta_value.count() == 0 && parsed_lists_meta_value.version() < cur_time) {
+    if (parsed_lists_meta_value.Count() == 0 && parsed_lists_meta_value.Version() < cur_time) {
       TRACE("Drop[Empty & version < cur_time]");
       return true;
     }
@@ -71,7 +71,7 @@ class ListsDataFilter : public rocksdb::CompactionFilter {
     ParsedListsDataKey parsed_lists_data_key(key);
     TRACE("==========================START==========================");
     TRACE("[DataFilter], key: %s, index = %llu, data = %s, version = %d", parsed_lists_data_key.key().ToString().c_str(),
-          parsed_lists_data_key.index(), value.ToString().c_str(), parsed_lists_data_key.version());
+          parsed_lists_data_key.index(), value.ToString().c_str(), parsed_lists_data_key.Version());
 
     const char* ptr = key.data();
     int key_size = key.size();
@@ -90,8 +90,8 @@ class ListsDataFilter : public rocksdb::CompactionFilter {
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-        cur_meta_version_ = parsed_lists_meta_value.version();
-        cur_meta_etime_ = parsed_lists_meta_value.etime();
+        cur_meta_version_ = parsed_lists_meta_value.Version();
+        cur_meta_etime_ = parsed_lists_meta_value.Etime();
       } else if (s.IsNotFound()) {
         meta_not_found_ = true;
       } else {
@@ -113,7 +113,7 @@ class ListsDataFilter : public rocksdb::CompactionFilter {
       return true;
     }
 
-    if (cur_meta_version_ > parsed_lists_data_key.version()) {
+    if (cur_meta_version_ > parsed_lists_data_key.Version()) {
       TRACE("Drop[list_data_key_version < cur_meta_version]");
       return true;
     } else {

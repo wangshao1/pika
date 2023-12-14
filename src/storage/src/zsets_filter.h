@@ -29,7 +29,7 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
     TRACE("==========================START==========================");
     TRACE("[ScoreFilter], key: %s, score = %lf, member = %s, version = %ld",
           parsed_zsets_score_key.key().ToString().c_str(), parsed_zsets_score_key.score(),
-          parsed_zsets_score_key.member().ToString().c_str(), parsed_zsets_score_key.version());
+          parsed_zsets_score_key.member().ToString().c_str(), parsed_zsets_score_key.Version());
 
     const char* ptr = key.data();
     int key_size = key.size();
@@ -48,8 +48,8 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-        cur_meta_version_ = parsed_zsets_meta_value.version();
-        cur_meta_etime_ = parsed_zsets_meta_value.etime();
+        cur_meta_version_ = parsed_zsets_meta_value.Version();
+        cur_meta_etime_ = parsed_zsets_meta_value.Etime();
       } else if (s.IsNotFound()) {
         meta_not_found_ = true;
       } else {
@@ -70,7 +70,7 @@ class ZSetsScoreFilter : public rocksdb::CompactionFilter {
       TRACE("Drop[Timeout]");
       return true;
     }
-    if (cur_meta_version_ > parsed_zsets_score_key.version()) {
+    if (cur_meta_version_ > parsed_zsets_score_key.Version()) {
       TRACE("Drop[score_key_version < cur_meta_version]");
       return true;
     } else {

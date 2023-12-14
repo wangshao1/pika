@@ -59,11 +59,11 @@ class ListsMetaValue : public InternalValue {
     return version_;
   }
 
-  uint64_t left_index() { return left_index_; }
+  uint64_t LeftIndex() { return left_index_; }
 
   void ModifyLeftIndex(uint64_t index) { left_index_ -= index; }
 
-  uint64_t right_index() { return right_index_; }
+  uint64_t RightIndex() { return right_index_; }
 
   void ModifyRightIndex(uint64_t index) { right_index_ += index; }
 
@@ -159,7 +159,7 @@ class ParsedListsMetaValue : public ParsedInternalValue {
   }
 
   uint64_t InitialMetaValue() {
-    this->set_count(0);
+    this->SetCount(0);
     this->set_left_index(InitalLeftIndex);
     this->set_right_index(InitalRightIndex);
     this->SetEtime(0);
@@ -168,12 +168,12 @@ class ParsedListsMetaValue : public ParsedInternalValue {
   }
 
   bool IsValid() override {
-    return !IsStale() && count() != 0;
+    return !IsStale() && Count() != 0;
   }
 
-  uint64_t count() { return count_; }
+  uint64_t Count() { return count_; }
 
-  void set_count(uint64_t count) {
+  void SetCount(uint64_t count) {
     count_ = count;
     if (value_) {
       char* dst = const_cast<char*>(value_->data());
@@ -201,7 +201,7 @@ class ParsedListsMetaValue : public ParsedInternalValue {
     return version_;
   }
 
-  uint64_t left_index() { return left_index_; }
+  uint64_t LeftIndex() { return left_index_; }
 
   void set_left_index(uint64_t index) {
     left_index_ = index;
@@ -219,7 +219,7 @@ class ParsedListsMetaValue : public ParsedInternalValue {
     }
   }
 
-  uint64_t right_index() { return right_index_; }
+  uint64_t RightIndex() { return right_index_; }
 
   void set_right_index(uint64_t index) {
     right_index_ = index;

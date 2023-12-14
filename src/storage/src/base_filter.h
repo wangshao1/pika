@@ -29,15 +29,15 @@ class BaseMetaFilter : public rocksdb::CompactionFilter {
     ParsedBaseMetaValue parsed_base_meta_value(value);
     TRACE("==========================START==========================");
     TRACE("[MetaFilter], key: %s, count = %d, timestamp: %d, cur_time: %d, version: %d", key.ToString().c_str(),
-          parsed_base_meta_value.count(), parsed_base_meta_value.timestamp(), cur_time,
-          parsed_base_meta_value.version());
+          parsed_base_meta_value.Count(), parsed_base_meta_value.timestamp(), cur_time,
+          parsed_base_meta_value.Version());
 
-    if (parsed_base_meta_value.etime() != 0 && parsed_base_meta_value.etime() < cur_time &&
-        parsed_base_meta_value.version() < cur_time) {
+    if (parsed_base_meta_value.Etime() != 0 && parsed_base_meta_value.Etime() < cur_time &&
+        parsed_base_meta_value.Version() < cur_time) {
       TRACE("Drop[Stale & version < cur_time]");
       return true;
     }
-    if (parsed_base_meta_value.count() == 0 && parsed_base_meta_value.version() < cur_time) {
+    if (parsed_base_meta_value.Count() == 0 && parsed_base_meta_value.Version() < cur_time) {
       TRACE("Drop[Empty & version < cur_time]");
       return true;
     }
@@ -90,8 +90,8 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
       if (s.ok()) {
         meta_not_found_ = false;
         ParsedBaseMetaValue parsed_base_meta_value(&meta_value);
-        cur_meta_version_ = parsed_base_meta_value.version();
-        cur_meta_etime_ = parsed_base_meta_value.etime();
+        cur_meta_version_ = parsed_base_meta_value.Version();
+        cur_meta_etime_ = parsed_base_meta_value.Etime();
       } else if (s.IsNotFound()) {
         meta_not_found_ = true;
       } else {

@@ -48,7 +48,7 @@ Status Instance::ScanStringsKeyNum(KeyInfo* key_info) {
       keys++;
       if (!parsed_strings_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_strings_value.etime() - curtime;
+        ttl_sum += parsed_strings_value.Etime() - curtime;
       }
     }
   }
@@ -121,7 +121,7 @@ Status Instance::Append(const Slice& key, const Slice& value, int32_t* ret) {
       StringsValue strings_value(value);
       return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     } else {
-      uint64_t timestamp = parsed_strings_value.etime();
+      uint64_t timestamp = parsed_strings_value.Etime();
       std::string old_user_value = parsed_strings_value.UserValue().ToString();
       std::string new_value = old_user_value + value.ToString();
       StringsValue strings_value(new_value);
@@ -300,7 +300,7 @@ Status Instance::Decrby(const Slice& key, int64_t value, int64_t* ret) {
       StringsValue strings_value(new_value);
       return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     } else {
-      uint64_t timestamp = parsed_strings_value.etime();
+      uint64_t timestamp = parsed_strings_value.Etime();
       std::string old_user_value = parsed_strings_value.UserValue().ToString();
       char* end = nullptr;
       int64_t ival = strtoll(old_user_value.c_str(), &end, 10);
@@ -442,7 +442,7 @@ Status Instance::Incrby(const Slice& key, int64_t value, int64_t* ret) {
       StringsValue strings_value(buf);
       return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     } else {
-      uint64_t timestamp = parsed_strings_value.etime();
+      uint64_t timestamp = parsed_strings_value.Etime();
       std::string old_user_value = parsed_strings_value.UserValue().ToString();
       char* end = nullptr;
       int64_t ival = strtoll(old_user_value.c_str(), &end, 10);
@@ -487,7 +487,7 @@ Status Instance::Incrbyfloat(const Slice& key, const Slice& value, std::string* 
       StringsValue strings_value(new_value);
       return db_->Put(default_write_options_, base_key.Encode(), strings_value.Encode());
     } else {
-      uint64_t timestamp = parsed_strings_value.etime();
+      uint64_t timestamp = parsed_strings_value.Etime();
       std::string old_user_value = parsed_strings_value.UserValue().ToString();
       long double total;
       long double old_number;
@@ -1074,7 +1074,7 @@ Status Instance::StringsPersist(const Slice& key) {
     if (parsed_strings_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
-      int32_t timestamp = parsed_strings_value.etime();
+      int32_t timestamp = parsed_strings_value.Etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
@@ -1098,7 +1098,7 @@ Status Instance::StringsTTL(const Slice& key, int64_t* timestamp) {
       *timestamp = -2;
       return Status::NotFound("Stale");
     } else {
-      *timestamp = parsed_strings_value.etime();
+      *timestamp = parsed_strings_value.Etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1127,12 +1127,12 @@ void Instance::ScanStrings() {
     ParsedBaseKey parsed_strings_key(iter->key());
     ParsedStringsValue parsed_strings_value(iter->value());
     int32_t survival_time = 0;
-    if (parsed_strings_value.etime() != 0) {
+    if (parsed_strings_value.Etime() != 0) {
       survival_time =
-          parsed_strings_value.etime() - current_time > 0 ? parsed_strings_value.etime() - current_time : -1;
+          parsed_strings_value.Etime() - current_time > 0 ? parsed_strings_value.Etime() - current_time : -1;
     }
     LOG(INFO) << fmt::format("[key : {:<30}] [value : {:<30}] [timestamp : {:<10}] [version : {}] [survival_time : {}]", parsed_strings_key.Key().ToString(),
-                             parsed_strings_value.UserValue().ToString(), parsed_strings_value.etime(), parsed_strings_value.version(),
+                             parsed_strings_value.UserValue().ToString(), parsed_strings_value.Etime(), parsed_strings_value.Version(),
                              survival_time);
 
   }

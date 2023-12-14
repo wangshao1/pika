@@ -123,7 +123,7 @@ public:
 
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_value.UserValue().ToString();
-    return false; 
+    return false;
   }
 private:
   std::string pattern_;
@@ -139,7 +139,7 @@ public:
 
   bool ShouldSkip() override {
     ParsedHashesMetaValue parsed_meta_value(raw_iter_->value());
-    if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+    if (parsed_meta_value.IsStale() || parsed_meta_value.Count() == 0) {
       return true;
     }
 
@@ -150,7 +150,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false; 
+    return false;
   }
 private:
   std::string pattern_;
@@ -166,7 +166,7 @@ public:
 
   bool ShouldSkip() override {
     ParsedListsMetaValue parsed_meta_value(raw_iter_->value());
-    if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+    if (parsed_meta_value.IsStale() || parsed_meta_value.Count() == 0) {
       return true;
     }
 
@@ -177,7 +177,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false; 
+    return false;
   }
 private:
   std::string pattern_;
@@ -193,7 +193,7 @@ public:
 
   bool ShouldSkip() override {
     ParsedSetsMetaValue parsed_meta_value(raw_iter_->value());
-    if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+    if (parsed_meta_value.IsStale() || parsed_meta_value.Count() == 0) {
       return true;
     }
 
@@ -204,7 +204,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false; 
+    return false;
   }
 private:
   std::string pattern_;
@@ -220,7 +220,7 @@ public:
 
   bool ShouldSkip() override {
     ParsedZSetsMetaValue parsed_meta_value(raw_iter_->value());
-    if (parsed_meta_value.IsStale() || parsed_meta_value.count() == 0) {
+    if (parsed_meta_value.IsStale() || parsed_meta_value.Count() == 0) {
       return true;
     }
 
@@ -231,7 +231,7 @@ public:
     }
     user_key_ = parsed_key.Key().ToString();
     user_value_ = parsed_meta_value.UserValue().ToString();
-    return false; 
+    return false;
   }
 private:
   std::string pattern_;

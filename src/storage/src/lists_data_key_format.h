@@ -101,7 +101,7 @@ class ParsedListsDataKey {
 
   Slice key() { return Slice(key_str_); }
 
-  uint64_t version() { return version_; }
+  uint64_t Version() { return version_; }
 
   uint64_t index() { return index_; }
 

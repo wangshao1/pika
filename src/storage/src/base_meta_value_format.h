@@ -117,19 +117,19 @@ class ParsedBaseMetaValue : public ParsedInternalValue {
   }
 
   uint64_t InitialMetaValue() {
-    this->set_count(0);
+    this->SetCount(0);
     this->SetEtime(0);
     this->SetCtime(0);
     return this->UpdateVersion();
   }
 
   bool IsValid() override {
-    return !IsStale() && count() != 0;
+    return !IsStale() && Count() != 0;
   }
 
-  int32_t count() { return count_; }
+  int32_t Count() { return count_; }
 
-  void set_count(int32_t count) {
+  void SetCount(int32_t count) {
     count_ = count;
     if (value_) {
       char* dst = const_cast<char*>(value_->data());

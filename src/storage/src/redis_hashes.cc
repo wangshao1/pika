@@ -37,13 +37,13 @@ Status Instance::ScanHashesKeyNum(KeyInfo* key_info) {
   rocksdb::Iterator* iter = db_->NewIterator(iterator_options, handles_[kHashesDataCF]);
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(iter->value());
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       invaild_keys++;
     } else {
       keys++;
       if (!parsed_hashes_meta_value.IsPermanentSurvival()) {
         expires++;
-        ttl_sum += parsed_hashes_meta_value.etime() - curtime;
+        ttl_sum += parsed_hashes_meta_value.Etime() - curtime;
       }
     }
   }
@@ -74,7 +74,7 @@ Status Instance::HashesPKPatternMatchDel(const std::string& pattern, int32_t* re
     key = iter->key().ToString();
     meta_value = iter->value().ToString();
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (!parsed_hashes_meta_value.IsStale() && (parsed_hashes_meta_value.count() != 0) &&
+    if (!parsed_hashes_meta_value.IsStale() && (parsed_hashes_meta_value.Count() != 0) &&
         (StringMatch(pattern.data(), pattern.size(), key.data(), key.size(), 0) != 0)) {
       parsed_hashes_meta_value.InitialMetaValue();
       batch.Put(handles_[kHashesMetaCF], key, meta_value);
@@ -130,12 +130,12 @@ Status Instance::HDel(const Slice& key, const std::vector<std::string>& fields, 
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       *ret = 0;
       return Status::OK();
     } else {
       std::string data_value;
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       for (const auto& field : filtered_fields) {
         HashesDataKey hashes_data_key(key, version, field);
         s = db_->Get(read_options, handles_[kHashesDataCF], hashes_data_key.Encode(), &data_value);
@@ -183,10 +183,10 @@ Status Instance::HGet(const Slice& key, const Slice& field, std::string* value) 
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey data_key(key, version, field);
       s = db_->Get(read_options, handles_[kHashesDataCF], data_key.Encode(), value);
       if (s.ok()) {
@@ -213,10 +213,10 @@ Status Instance::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
@@ -248,9 +248,9 @@ Status Instance::HIncrby(const Slice& key, const Slice& field, int64_t value, in
   char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       version = parsed_hashes_meta_value.UpdateVersion();
-      parsed_hashes_meta_value.set_count(1);
+      parsed_hashes_meta_value.SetCount(1);
       parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       HashesDataKey hashes_data_key(key, version, field);
@@ -258,7 +258,7 @@ Status Instance::HIncrby(const Slice& key, const Slice& field, int64_t value, in
       batch.Put(handles_[kHashesDataCF], hashes_data_key.Encode(), value_buf);
       *ret = value;
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, field);
       s = db_->Get(default_read_options_, handles_[kHashesDataCF], hashes_data_key.Encode(), &old_value);
       if (s.ok()) {
@@ -327,9 +327,9 @@ Status Instance::HIncrbyfloat(const Slice& key, const Slice& field, const Slice&
   char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       version = parsed_hashes_meta_value.UpdateVersion();
-      parsed_hashes_meta_value.set_count(1);
+      parsed_hashes_meta_value.SetCount(1);
       parsed_hashes_meta_value.SetEtime(0);
       batch.Put(handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       HashesDataKey hashes_data_key(key, version, field);
@@ -338,7 +338,7 @@ Status Instance::HIncrbyfloat(const Slice& key, const Slice& field, const Slice&
       BaseDataValue inter_value(*new_value);
       batch.Put(handles_[kHashesDataCF], hashes_data_key.Encode(), inter_value.Encode());
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, field);
       s = db_->Get(default_read_options_, handles_[kHashesDataCF], hashes_data_key.Encode(), &old_value_str);
       if (s.ok()) {
@@ -401,10 +401,10 @@ Status Instance::HKeys(const Slice& key, std::vector<std::string>* fields) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
@@ -429,10 +429,10 @@ Status Instance::HLen(const Slice& key, int32_t* ret) {
     if (parsed_hashes_meta_value.IsStale()) {
       *ret = 0;
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      *ret = parsed_hashes_meta_value.count();
+      *ret = parsed_hashes_meta_value.Count();
     }
   } else if (s.IsNotFound()) {
     *ret = 0;
@@ -455,13 +455,13 @@ Status Instance::HMGet(const Slice& key, const std::vector<std::string>& fields,
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if ((is_stale = parsed_hashes_meta_value.IsStale()) || parsed_hashes_meta_value.count() == 0) {
+    if ((is_stale = parsed_hashes_meta_value.IsStale()) || parsed_hashes_meta_value.Count() == 0) {
       for (size_t idx = 0; idx < fields.size(); ++idx) {
         vss->push_back({std::string(), Status::NotFound()});
       }
       return Status::NotFound(is_stale ? "Stale" : "");
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       for (const auto& field : fields) {
         HashesDataKey hashes_data_key(key, version, field);
         s = db_->Get(read_options, handles_[kHashesDataCF], hashes_data_key.Encode(), &value);
@@ -509,9 +509,9 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
   char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       version = parsed_hashes_meta_value.InitialMetaValue();
-      parsed_hashes_meta_value.set_count(static_cast<int32_t>(filtered_fvs.size()));
+      parsed_hashes_meta_value.SetCount(static_cast<int32_t>(filtered_fvs.size()));
       batch.Put(handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       for (const auto& fv : filtered_fvs) {
         HashesDataKey hashes_data_key(key, version, fv.field);
@@ -521,7 +521,7 @@ Status Instance::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) {
     } else {
       int32_t count = 0;
       std::string data_value;
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       for (const auto& fv : filtered_fvs) {
         HashesDataKey hashes_data_key(key, version, fv.field);
         BaseDataValue inter_value(fv.value);
@@ -568,16 +568,16 @@ Status Instance::HSet(const Slice& key, const Slice& field, const Slice& value, 
   char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       version = parsed_hashes_meta_value.InitialMetaValue();
-      parsed_hashes_meta_value.set_count(1);
+      parsed_hashes_meta_value.SetCount(1);
       batch.Put(handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       HashesDataKey data_key(key, version, field);
       BaseDataValue internal_value(value);
       batch.Put(handles_[kHashesDataCF], data_key.Encode(), internal_value.Encode());
       *res = 1;
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       std::string data_value;
       HashesDataKey hashes_data_key(key, version, field);
       s = db_->Get(default_read_options_, handles_[kHashesDataCF], hashes_data_key.Encode(), &data_value);
@@ -630,15 +630,15 @@ Status Instance::HSetnx(const Slice& key, const Slice& field, const Slice& value
   char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       version = parsed_hashes_meta_value.InitialMetaValue();
-      parsed_hashes_meta_value.set_count(1);
+      parsed_hashes_meta_value.SetCount(1);
       batch.Put(handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       HashesDataKey hashes_data_key(key, version, field);
       batch.Put(handles_[kHashesDataCF], hashes_data_key.Encode(), internal_value.Encode());
       *ret = 1;
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, field);
       std::string data_value;
       s = db_->Get(default_read_options_, handles_[kHashesDataCF], hashes_data_key.Encode(), &data_value);
@@ -682,10 +682,10 @@ Status Instance::HVals(const Slice& key, std::vector<std::string>* values) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
@@ -732,13 +732,13 @@ Status Instance::HScan(const Slice& key, int64_t cursor, const std::string& patt
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       *next_cursor = 0;
       return Status::NotFound();
     } else {
       std::string sub_field;
       std::string start_point;
-      uint64_t version = parsed_hashes_meta_value.version();
+      uint64_t version = parsed_hashes_meta_value.Version();
       s = GetScanStartPoint(DataType::kHashes, key, pattern, cursor, &start_point);
       if (s.IsNotFound()) {
         cursor = 0;
@@ -798,11 +798,11 @@ Status Instance::HScanx(const Slice& key, const std::string& start_field, const 
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       *next_field = "";
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_hashes_meta_value.version();
+      uint64_t version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, start_field);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
@@ -858,10 +858,10 @@ Status Instance::PKHScanRange(const Slice& key, const Slice& field_start, const 
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_hashes_meta_value.version();
+      uint64_t version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, field_start);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
@@ -919,10 +919,10 @@ Status Instance::PKHRScanRange(const Slice& key, const Slice& field_start, const
   Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t version = parsed_hashes_meta_value.version();
+      uint64_t version = parsed_hashes_meta_value.Version();
       int32_t start_key_version = start_no_limit ? version + 1 : version;
       std::string start_key_field = start_no_limit ? "" : field_start.ToString();
       HashesDataKey hashes_data_prefix(key, version, Slice());
@@ -967,7 +967,7 @@ Status Instance::HashesExpire(const Slice& key, int32_t ttl) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     }
 
@@ -992,10 +992,10 @@ Status Instance::HashesDel(const Slice& key) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      uint32_t statistic = parsed_hashes_meta_value.count();
+      uint32_t statistic = parsed_hashes_meta_value.Count();
       parsed_hashes_meta_value.InitialMetaValue();
       s = db_->Put(default_write_options_, handles_[kHashesMetaCF], base_meta_key.Encode(), meta_value);
       UpdateSpecificKeyStatistics(DataType::kHashes, key.ToString(), statistic);
@@ -1014,7 +1014,7 @@ Status Instance::HashesExpireat(const Slice& key, int32_t timestamp) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
       if (timestamp > 0) {
@@ -1038,10 +1038,10 @@ Status Instance::HashesPersist(const Slice& key) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else {
-      int32_t timestamp = parsed_hashes_meta_value.etime();
+      int32_t timestamp = parsed_hashes_meta_value.Etime();
       if (timestamp == 0) {
         return Status::NotFound("Not have an associated timeout");
       } else {
@@ -1063,11 +1063,11 @@ Status Instance::HashesTTL(const Slice& key, int64_t* timestamp) {
     if (parsed_hashes_meta_value.IsStale()) {
       *timestamp = -2;
       return Status::NotFound("Stale");
-    } else if (parsed_hashes_meta_value.count() == 0) {
+    } else if (parsed_hashes_meta_value.Count() == 0) {
       *timestamp = -2;
       return Status::NotFound();
     } else {
-      *timestamp = parsed_hashes_meta_value.etime();
+      *timestamp = parsed_hashes_meta_value.Etime();
       if (*timestamp == 0) {
         *timestamp = -1;
       } else {
@@ -1095,16 +1095,16 @@ void Instance::ScanHashes() {
   for (meta_iter->SeekToFirst(); meta_iter->Valid(); meta_iter->Next()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(meta_iter->value());
     int32_t survival_time = 0;
-    if (parsed_hashes_meta_value.etime() != 0) {
-      survival_time = parsed_hashes_meta_value.etime() - current_time > 0
-                          ? parsed_hashes_meta_value.etime() - current_time
+    if (parsed_hashes_meta_value.Etime() != 0) {
+      survival_time = parsed_hashes_meta_value.Etime() - current_time > 0
+                          ? parsed_hashes_meta_value.Etime() - current_time
                           : -1;
     }
     ParsedBaseMetaKey parsed_meta_key(meta_iter->key());
 
     LOG(INFO) << fmt::format("[key : {:<30}] [count : {:<10}] [timestamp : {:<10}] [version : {}] [survival_time : {}]",
-                             parsed_meta_key.Key().ToString(), parsed_hashes_meta_value.count(),
-                             parsed_hashes_meta_value.etime(), parsed_hashes_meta_value.version(), survival_time);
+                             parsed_meta_key.Key().ToString(), parsed_hashes_meta_value.Count(),
+                             parsed_hashes_meta_value.Etime(), parsed_hashes_meta_value.Version(), survival_time);
   }
   delete meta_iter;
 

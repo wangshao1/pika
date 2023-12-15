@@ -10,9 +10,10 @@ aux_source_directory(${SRC_DIR} BASE_OBJS)
 
 add_executable(benchmark_client ${BASE_OBJS})
 
-target_include_directories(benchmark_client PRIVATE ${INSTALL_INCLUDEDIR} PRIVATE ${PROJECT_SOURCE_DIR})
+target_include_directories(benchmark_client PRIVATE ${INSTALL_INCLUDEDIR} PRIVATE ${PROJECT_SOURCE_DIR} ${ROCKSDB_SOURCE_DIR})
 
 target_link_libraries(benchmark_client pthread)
+target_link_libraries(benchmark_client ${ROCKSDB_LIBRARY})
 target_link_libraries(benchmark_client ${SNAPPY_LIBRARY})
 target_link_libraries(benchmark_client pstd)
 target_link_libraries(benchmark_client ${HIREDIS_LIBRARY})

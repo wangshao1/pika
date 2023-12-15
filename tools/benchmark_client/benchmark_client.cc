@@ -10,16 +10,33 @@
 #include <random>
 #include <vector>
 
-#include "historgram.h"
+#include "gflags/gflags.h"
+#include "monitoring/histogram.h"
 #include "hiredis/hiredis.h"
+
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/pstd_string.h"
+#include "pstd/include/env.h"
+
+DEFINE_string(command, "generate", "command to execute, eg: generate/get/set/zadd");
+DEFINE_string(host, "127.0.0.1", "target server's host");
+DEFINE_int32(port, 9221, "target server's listen port");
+DEFINE_bool(pipeline, false, "whether to enable pipeline");
+DEFINE_string(password, "", "password");
+DEFINE_int32(key_size, 50, "key size int bytes");
+DEFINE_int32(value_size, 100, "value size in bytes");
+DEFINE_int32(count, 100000, "request counts");
+DEFINE_int32(thread_num, 10, "concurrent thread num");
+DEFINE_string(dbs, "0", "dbs name, eg: 0,1,2");
+
+DEFINE_int32(element_count, 1, "elements number in hash/list/set/zset");
 
 #define TIME_OF_LOOP 1000000
 
 using pstd::Status;
 using std::default_random_engine;
 
+Status RunGetCommand(redisContext* c, int index);
 Status RunSetCommand(redisContext* c, int index);
 Status RunSetCommandPipeline(redisContext* c);
 Status RunZAddCommand(redisContext* c);
@@ -32,24 +49,11 @@ struct ThreadArg {
 
 enum TransmitMode { kNormal = 0, kPipeline = 1 };
 
-static int32_t last_seed = 0;
-
-std::string tables_str = "0";
+thread_local int last_seed = 0;
 std::vector<std::string> tables;
-std::string command = "set";
-int key_size = 50;
-std::string command = "generate";
-
-std::string hostname = "127.0.0.1";
-int port = 9221;
-std::string password = "";
-uint32_t payload_size = 50;
-uint32_t number_of_request = 100000;
-uint32_t thread_num_each_table = 1;
 TransmitMode transmit_mode = kNormal;
 int pipeline_num = 0;
-
-Histogram hist;
+rocksdb::HistogramImpl hist;
 
 void GenerateRandomString(int32_t len, std::string* target) {
   target->clear();
@@ -69,13 +73,14 @@ void GenerateRandomString(int32_t len, std::string* target) {
 
 void PrintInfo(const std::time_t& now) {
   std::cout << "=================== Benchmark Client ===================" << std::endl;
-  std::cout << "Server host name: " << hostname << std::endl;
-  std::cout << "Server port: " << port << std::endl;
-  std::cout << "Thread num : " << thread_num_each_table << std::endl;
-  std::cout << "Payload size : " << payload_size << std::endl;
-  std::cout << "Number of request : " << number_of_request << std::endl;
+  std::cout << "Server host name: " << FLAGS_host << std::endl;
+  std::cout << "Server port: " << FLAGS_port << std::endl;
+  std::cout << "command: " << FLAGS_count << std::endl;
+  std::cout << "Thread num : " << FLAGS_thread_num << std::endl;
+  std::cout << "Payload size : " << FLAGS_value_size << std::endl;
+  std::cout << "Number of request : " << FLAGS_count << std::endl;
   std::cout << "Transmit mode: " << (transmit_mode == kNormal ? "No Pipeline" : "Pipeline") << std::endl;
-  std::cout << "Collection of tables: " << tables_str << std::endl;
+  std::cout << "Collection of dbs: " << FLAGS_dbs << std::endl;
   std::cout << "Startup Time : " << asctime(localtime(&now));
   std::cout << "========================================================" << std::endl;
 }
@@ -104,9 +109,9 @@ void RunGenerateCommand(int index) {
     std::cout << "open file error";
     return;
   }
-  for (size_t i = 0; i < number_of_request; i++) {
+  for (size_t i = 0; i < FLAGS_count; i++) {
     std::string key;
-    GenerateRandomString(key_size, &key);
+    GenerateRandomString(FLAGS_key_size, &key);
     key.append("\n");
     fwrite(key.data(), sizeof(char), key.size(), fp);
   }
@@ -118,14 +123,14 @@ void* ThreadMain(void* arg) {
   ThreadArg* ta = reinterpret_cast<ThreadArg*>(arg);
   redisContext* c;
   redisReply* res = nullptr;
-
-  if (command == "generate") {
+  last_seed = (int)pthread_self();
+  if (FLAGS_command == "generate") {
     RunGenerateCommand(ta->idx);
     return nullptr;
   }
 
   struct timeval timeout = {1, 500000};  // 1.5 seconds
-  c = redisConnectWithTimeout(hostname.data(), port, timeout);
+  c = redisConnectWithTimeout(FLAGS_host.data(), FLAGS_port, timeout);
 
   if (!c || c->err) {
     if (c) {
@@ -137,9 +142,9 @@ void* ThreadMain(void* arg) {
     return nullptr;
   }
 
-  if (!password.empty()) {
-    const char* auth_argv[2] = {"AUTH", password.data()};
-    size_t auth_argv_len[2] = {4, password.size()};
+  if (!FLAGS_password.empty()) {
+    const char* auth_argv[2] = {"AUTH", FLAGS_password.data()};
+    size_t auth_argv_len[2] = {4, FLAGS_password.size()};
     res = reinterpret_cast<redisReply*>(redisCommandArgv(c, 2, reinterpret_cast<const char**>(auth_argv),
                                                          reinterpret_cast<const size_t*>(auth_argv_len)));
     if (!res) {
@@ -180,8 +185,8 @@ void* ThreadMain(void* arg) {
   }
   freeReplyObject(res);
 
-  if (command == "get") {
-    Status s = RunGetCommand(c, arg->index);
+  if (FLAGS_command == "get") {
+    Status s = RunGetCommand(c, ta->idx);
     if (!s.ok()) {
       std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
       printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
@@ -214,7 +219,7 @@ void* ThreadMain(void* arg) {
 
 Status RunSetCommandPipeline(redisContext* c) {
   redisReply* res = nullptr;
-  for (size_t idx = 0; idx < number_of_request; (idx += pipeline_num)) {
+  for (size_t idx = 0; idx < FLAGS_count; (idx += pipeline_num)) {
     const char* argv[3] = {"SET", nullptr, nullptr};
     size_t argv_len[3] = {3, 0, 0};
     for (int32_t batch_idx = 0; batch_idx < pipeline_num; ++batch_idx) {
@@ -226,7 +231,7 @@ Status RunSetCommandPipeline(redisContext* c) {
       last_seed = e();
       int32_t rand_num = last_seed % 10 + 1;
       GenerateRandomString(rand_num, &key);
-      GenerateRandomString(payload_size, &value);
+      GenerateRandomString(FLAGS_value_size, &value);
 
       argv[1] = key.c_str();
       argv_len[1] = key.size();
@@ -255,18 +260,62 @@ Status RunSetCommandPipeline(redisContext* c) {
   return Status::OK();
 }
 
-Status RunSetCommand(redisContext* c, int index) {
+Status RunGetCommand(redisContext* c, int index) {
   redisReply* res = nullptr;
-  std::vector<std::string> keys(number_of_request, "");
+  std::vector<std::string> keys(FLAGS_count, "");
   std::string filename = "benchmark_keyfile_" + std::to_string(index);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (size_t idx = 0; idx < number_of_request; ++idx) {
-    char* key = new char[key_size + 2];
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+    char* key = new char[FLAGS_key_size + 2];
     fgets(key, 1000, fp);
-    key[key_size] = '\0';
+    key[FLAGS_key_size] = '\0';
     keys[idx] = std::string(key);
   }
-  for (size_t idx = 0; idx < number_of_request; ++idx) {
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+    const char* set_argv[2];
+    size_t set_argvlen[2];
+    std::string key;
+    std::string value;
+    default_random_engine e;
+    e.seed(last_seed);
+    last_seed = e();
+    int32_t rand_num = last_seed % 10 + 1;
+
+    key = keys[idx];
+
+    set_argv[0] = "get";
+    set_argvlen[0] = 3;
+    set_argv[1] = key.c_str();
+    set_argvlen[1] = key.size();
+
+    uint64_t begin = pstd::NowMicros();
+
+    res = reinterpret_cast<redisReply*>(
+        redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
+    uint64_t cost = pstd::NowMicros() - begin;
+    hist.Add(cost);
+    if (!res || strcasecmp(res->str, "OK")) {
+      std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
+      freeReplyObject(res);
+      return Status::Corruption(res_str);
+    }
+    freeReplyObject(res);
+  }
+  return Status::OK();
+}
+
+Status RunSetCommand(redisContext* c, int index) {
+  redisReply* res = nullptr;
+  std::vector<std::string> keys(FLAGS_count, "");
+  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  FILE* fp = fopen(filename.c_str(), "r");
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+    char* key = new char[FLAGS_key_size + 2];
+    fgets(key, 1000, fp);
+    key[FLAGS_key_size] = '\0';
+    keys[idx] = std::string(key);
+  }
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
     const char* set_argv[3];
     size_t set_argvlen[3];
     std::string key;
@@ -278,7 +327,7 @@ Status RunSetCommand(redisContext* c, int index) {
 
     //GenerateRandomString(rand_num, &key);
     key = keys[idx];
-    GenerateRandomString(payload_size, &value);
+    GenerateRandomString(FLAGS_value_size, &value);
 
     set_argv[0] = "set";
     set_argvlen[0] = 3;
@@ -319,7 +368,7 @@ Status RunZAddCommand(redisContext* c) {
     zadd_argvlen[1] = key.size();
     for (size_t sidx = 0; sidx < 10000; ++sidx) {
       score = std::to_string(sidx * 2);
-      GenerateRandomString(payload_size, &member);
+      GenerateRandomString(FLAGS_key_size, &member);
       zadd_argv[2] = score.c_str();
       zadd_argvlen[2] = score.size();
       zadd_argv[3] = member.c_str();
@@ -342,46 +391,9 @@ Status RunZAddCommand(redisContext* c) {
 // ./benchmark_client -h
 // ./benchmark_client -b db1:5:10000,db2:3:10000
 int main(int argc, char* argv[]) {
-  int opt;
-  while ((opt = getopt(argc, argv, "C:P:h:p:a:t:c:d:n:")) != -1) {
-    switch (opt) {
-      case 'C':
-        command = std::string(optarg);
-      case 'h':
-        hostname = std::string(optarg);
-        break;
-      case 'p':
-        port = atoi(optarg);
-        break;
-      case 'P':
-        transmit_mode = kPipeline;
-        pipeline_num = atoi(optarg);
-        break;
-      case 'a':
-        password = std::string(optarg);
-        break;
-      case 'k':
-        key_size = atoi(optarg);
-        break;
-      case 't':
-        thread_num_each_table = atoi(optarg);
-        break;
-      case 'c':
-        tables_str = std::string(optarg);
-        break;
-      case 'd':
-        payload_size = atoi(optarg);
-        break;
-      case 'n':
-        number_of_request = atoi(optarg);
-        break;
-      default:
-        Usage();
-        exit(-1);
-    }
-  }
 
-  pstd::StringSplit(tables_str, ',', tables);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  pstd::StringSplit(FLAGS_dbs, ',', tables);
 
   if (tables.empty()) {
     Usage();
@@ -393,7 +405,7 @@ int main(int argc, char* argv[]) {
   PrintInfo(now);
 
   for (const auto& table : tables) {
-    for (size_t idx = 0; idx < thread_num_each_table; ++idx) {
+    for (size_t idx = 0; idx < FLAGS_thread_num; ++idx) {
       thread_args.push_back({0, table, idx});
     }
   }
@@ -417,6 +429,6 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Total Time Cost : " << hours << " hours " << minutes % 60 << " minutes " << seconds % 60 << " seconds "
             << std::endl;
-  std::cout << "stats: " << hist.ToString() << endl;
+  std::cout << "stats: " << hist.ToString() << std::endl;
   return 0;
 }

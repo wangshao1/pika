@@ -36,22 +36,21 @@ DEFINE_int32(element_count, 1, "elements number in hash/list/set/zset");
 using pstd::Status;
 using std::default_random_engine;
 
-Status RunGetCommand(redisContext* c, int index);
-Status RunSetCommand(redisContext* c, int index);
-Status RunSetCommandPipeline(redisContext* c);
-Status RunZAddCommand(redisContext* c);
-
 struct ThreadArg {
   pthread_t tid;
   std::string table_name;
   size_t idx;
 };
 
-enum TransmitMode { kNormal = 0, kPipeline = 1 };
+Status RunGetCommand(redisContext* c, ThreadArg* arg);
+Status RunSetCommand(redisContext* c, ThreadArg* arg);
+Status RunSetCommandPipeline(redisContext* c);
+Status RunZAddCommand(redisContext* c);
+
+
 
 thread_local int last_seed = 0;
 std::vector<std::string> tables;
-TransmitMode transmit_mode = kNormal;
 int pipeline_num = 0;
 rocksdb::HistogramImpl hist;
 
@@ -79,25 +78,10 @@ void PrintInfo(const std::time_t& now) {
   std::cout << "Thread num : " << FLAGS_thread_num << std::endl;
   std::cout << "Payload size : " << FLAGS_value_size << std::endl;
   std::cout << "Number of request : " << FLAGS_count << std::endl;
-  std::cout << "Transmit mode: " << (transmit_mode == kNormal ? "No Pipeline" : "Pipeline") << std::endl;
+  std::cout << "Transmit mode: " << (FLAGS_pipeline ? "Pipeline" : "No Pipeline") << std::endl;
   std::cout << "Collection of dbs: " << FLAGS_dbs << std::endl;
   std::cout << "Startup Time : " << asctime(localtime(&now));
   std::cout << "========================================================" << std::endl;
-}
-
-void Usage() {
-  std::cout << "Usage: " << std::endl;
-  std::cout << "\tBenchmark_client writes data to the specified table" << std::endl;
-  std::cout << "\t-h    -- server hostname (default 127.0.0.1)" << std::endl;
-  std::cout << "\t-p    -- server port (default 9221)" << std::endl;
-  std::cout << "\t-t    -- thread num of each table (default 1)" << std::endl;
-  std::cout << "\t-c    -- collection of table names (default db1)" << std::endl;
-  std::cout << "\t-k    -- key size of SET value in bytes (default 50)" << std::endl;
-  std::cout << "\t-d    -- data size of SET value in bytes (default 50)" << std::endl;
-  std::cout << "\t-n    -- number of requests single thread (default 100000)" << std::endl;
-  std::cout << "\t-P    -- pipeline <numreq> requests. (default no pipeline)" << std::endl;
-  std::cout << "\t-C    -- command type. (default set)" << std::endl;
-  std::cout << "\texample: ./benchmark_client -t 3 -c db1,db2 -d 1024" << std::endl;
 }
 
 std::vector<ThreadArg> thread_args;
@@ -109,13 +93,12 @@ void RunGenerateCommand(int index) {
     std::cout << "open file error";
     return;
   }
-  for (size_t i = 0; i < FLAGS_count; i++) {
+  for (size_t i = 0; i < FLAGS_count * FLAGS_element_count; i++) {
     std::string key;
     GenerateRandomString(FLAGS_key_size, &key);
     key.append("\n");
     fwrite(key.data(), sizeof(char), key.size(), fp);
   }
-
   fclose(fp);
 }
 
@@ -185,34 +168,21 @@ void* ThreadMain(void* arg) {
   }
   freeReplyObject(res);
 
+  Status s;
   if (FLAGS_command == "get") {
-    Status s = RunGetCommand(c, ta->idx);
-    if (!s.ok()) {
-      std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
-      printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
-    }
-    redisFree(c);
-    return nullptr;
-  }
-
-  if (transmit_mode == kNormal) {
-    Status s = RunSetCommand(c, ta->idx);
-    if (!s.ok()) {
-      std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
-      printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
-      redisFree(c);
-      return nullptr;
-    }
-  } else if (transmit_mode == kPipeline) {
-    Status s = RunSetCommandPipeline(c);
-    if (!s.ok()) {
-      std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
-      printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
-      redisFree(c);
-      return nullptr;
+    s = RunGetCommand(c, ta);
+  } else if (FLAGS_command == "set") {
+    if (!FLAGS_pipeline) {
+      s = RunSetCommand(c, ta);
+    } else {
+      s = RunSetCommandPipeline(c);
     }
   }
 
+  if (!s.ok()) {
+    std::string thread_info = "Table " + ta->table_name + ", Thread " + std::to_string(ta->idx);
+    printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
+  }
   redisFree(c);
   return nullptr;
 }
@@ -260,10 +230,10 @@ Status RunSetCommandPipeline(redisContext* c) {
   return Status::OK();
 }
 
-Status RunGetCommand(redisContext* c, int index) {
+Status RunGetCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
   std::vector<std::string> keys(FLAGS_count, "");
-  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
   for (size_t idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
@@ -294,20 +264,75 @@ Status RunGetCommand(redisContext* c, int index) {
         redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
     uint64_t cost = pstd::NowMicros() - begin;
     hist.Add(cost);
-    if (!res || strcasecmp(res->str, "OK")) {
+    if (!res) {
       std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
-      freeReplyObject(res);
-      return Status::Corruption(res_str);
+      std::cout << res_str << std::endl;
     }
     freeReplyObject(res);
   }
   return Status::OK();
 }
 
-Status RunSetCommand(redisContext* c, int index) {
+Status RunHSetCommand(redisContext* c, int index) {
+  redisReply* res = nullptr;
+  std::vector<std::pair<std::string, std::vector<std::string>>> keys(FLAGS_count);
+  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  FILE* fp = fopen(filename.c_str(), "r");
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+    char* key = new char[FLAGS_key_size + 2];
+    fgets(key, 1000, fp);
+    key[FLAGS_key_size] = '\0';
+    std::vector<std::string> elements;
+    for (size_t idy = 0; idy < FLAGS_element_count; ++idy) {
+      char* element = new char[FLAGS_key_size + 2];
+      fgets(element, 1000, fp);
+      element[FLAGS_key_size] = '\0';
+      elements.push_back(std::string(element));
+    }
+    keys[idx] = std::make_pair(std::string(key), elements);
+  }
+  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+    const char* set_argv[4];
+    size_t set_argvlen[4];
+    std::string pkey, element;
+    std::string value;
+    default_random_engine e;
+    e.seed(last_seed);
+    last_seed = e();
+    int32_t rand_num = last_seed % 10 + 1;
+
+    //GenerateRandomString(rand_num, &key);
+    pkey = keys[idx].first;
+    for (const auto& member : keys[idx].second) {
+      GenerateRandomString(FLAGS_value_size, &value);
+      set_argv[0] = "hset";
+      set_argvlen[0] = 4;
+      set_argv[1] = pkey.c_str();
+      set_argvlen[1] = pkey.size();
+      set_argv[2] = element.c_str();
+      set_argvlen[2] = element.size();
+      set_argv[3] = value.c_str();
+      set_argvlen[3] = value.size();
+
+      uint64_t begin = pstd::NowMicros();
+      res = reinterpret_cast<redisReply*>(
+          redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
+      uint64_t cost = pstd::NowMicros() - begin;
+      hist.Add(cost);
+      if (!res || strcasecmp(res->str, "OK")) {
+        std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
+        std::cout << res_str << std::endl;
+      }
+      freeReplyObject(res);
+    }
+  }
+  return Status::OK();
+}
+
+Status RunSetCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
   std::vector<std::string> keys(FLAGS_count, "");
-  std::string filename = "benchmark_keyfile_" + std::to_string(index);
+  std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
   for (size_t idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
@@ -344,8 +369,7 @@ Status RunSetCommand(redisContext* c, int index) {
     hist.Add(cost);
     if (!res || strcasecmp(res->str, "OK")) {
       std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
-      freeReplyObject(res);
-      return Status::Corruption(res_str);
+      std::cout << res_str << std::endl;
     }
     freeReplyObject(res);
   }
@@ -387,16 +411,10 @@ Status RunZAddCommand(redisContext* c) {
   return Status::OK();
 }
 
-// ./benchmark_client
-// ./benchmark_client -h
-// ./benchmark_client -b db1:5:10000,db2:3:10000
 int main(int argc, char* argv[]) {
-
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   pstd::StringSplit(FLAGS_dbs, ',', tables);
-
   if (tables.empty()) {
-    Usage();
     exit(-1);
   }
 

@@ -15,6 +15,7 @@
 #include "src/base_data_key_format.h"
 #include "src/base_meta_value_format.h"
 #include "src/debug.h"
+#include "src/instance.h"
 
 namespace storage {
 
@@ -73,31 +74,15 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
     TRACE("[DataFilter], key: %s, data = %s, version = %d", parsed_base_data_key.Key().ToString().c_str(),
           parsed_base_data_key.data().ToString().c_str(), parsed_base_data_key.Version());
 
-    const char* ptr = key.data();
-    int key_size = key.size();
-    ptr = SeekUserkeyDelim(ptr + kPrefixReserveLength, key_size - kPrefixReserveLength);
-    std::string meta_key_enc(key.data(), std::distance(key.data(), ptr));
-    meta_key_enc.append(kSuffixReserveLength, kNeedTransformCharacter);
-
-    if (meta_key_enc != cur_key_) {
-      cur_key_ = meta_key_enc;
-      std::string meta_value;
-      // destroyed when close the database, Reserve Current key value
-      if (cf_handles_ptr_->empty()) {
-        return false;
-      }
-      Status s = db_->Get(default_read_options_, (*cf_handles_ptr_)[meta_cf_index_], cur_key_, &meta_value);
-      if (s.ok()) {
-        meta_not_found_ = false;
-        ParsedBaseMetaValue parsed_base_meta_value(&meta_value);
-        cur_meta_version_ = parsed_base_meta_value.Version();
-        cur_meta_etime_ = parsed_base_meta_value.Etime();
-      } else if (s.IsNotFound()) {
-        meta_not_found_ = true;
+    ParsedBaseMetaKey pbmk(key); 
+    if (pbmk.Key().ToString() != cur_key_) {
+      cur_key_ = pbmk.Key().ToString();
+      auto iter = mem_.find(cur_key_);
+      if (iter == mem_.end()) {
+        meta_not_found_ = true; 
       } else {
-        cur_key_ = "";
-        TRACE("Reserve[Get meta_key faild]");
-        return false;
+        cur_meta_version_ = iter->second.first;
+        cur_meta_etime_ = iter->second.second;
       }
     }
 
@@ -105,6 +90,8 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
       TRACE("Drop[Meta key not exist]");
       return true;
     }
+
+    LOG(WARNING) << "user_key: " << cur_key_ << " meta not found: " << meta_not_found_ << " meta_version: " << cur_meta_version_ << " meta_etime: " << cur_meta_etime_;
 
     int64_t unix_time;
     rocksdb::Env::Default()->GetCurrentTime(&unix_time);

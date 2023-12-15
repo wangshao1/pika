@@ -298,7 +298,6 @@ public:
   virtual void OnCompactionBegin(rocksdb::DB* db, const rocksdb::CompactionJobInfo& info) override {
     rocksdb::Slice begin = info.smallest_user_key;
     rocksdb::Slice end = info.largest_user_key;
-    LOG(WARNING) << "begin: " << get_printable_key(begin.ToString()) << " end: " << get_printable_key(end.ToString());
 
     if (info.cf_id == kStringsCF || info.cf_id == kHashesMetaCF ||
         info.cf_id == kSetsMetaCF || info.cf_id == kListsMetaCF ||

@@ -1,5 +1,5 @@
-set(WARNING_FLAGS "-W -Wextra -Wall -Wsign-compare \
--Wno-unused-parameter -Wno-redundant-decls -Wwrite-strings \
+set(WARNING_FLAGS "-g -W -Wextra -Wall -Wsign-compare \
+-Wno-unused-parameter -Wno-redundant-decls -Wwrite-strings -Wno-unused-result \
 -Wpointer-arith -Wreorder -Wswitch -Wsign-promo \
 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-missing-field-initializers")
 

@@ -19,10 +19,10 @@
 #include "pstd/include/env.h"
 
 DEFINE_string(command, "generate", "command to execute, eg: generate/get/set/zadd");
+DEFINE_bool(pipeline, false, "whether to enable pipeline");
 DEFINE_string(host, "127.0.0.1", "target server's host");
 DEFINE_int32(port, 9221, "target server's listen port");
 DEFINE_int32(timeout, 1000, "request timeout");
-DEFINE_bool(pipeline, false, "whether to enable pipeline");
 DEFINE_string(password, "", "password");
 DEFINE_int32(key_size, 50, "key size int bytes");
 DEFINE_int32(value_size, 100, "value size in bytes");
@@ -97,8 +97,8 @@ void PrintInfo(const std::time_t& now) {
   std::cout << "Number of request : " << FLAGS_count << std::endl;
   std::cout << "Transmit mode: " << (FLAGS_pipeline ? "Pipeline" : "No Pipeline") << std::endl;
   std::cout << "Collection of dbs: " << FLAGS_dbs << std::endl;
+  std::cout << "Elements num: " << FLAGS_element_count << std::endl;
   std::cout << "Startup Time : " << asctime(localtime(&now)) << std::endl;
-  std::cout << "Elements num: " << FLAGS_element_count;
   std::cout << "========================================================" << std::endl;
 }
 
@@ -109,7 +109,7 @@ void RunGenerateCommand(int index) {
     std::cout << "open file error";
     return;
   }
-  for (size_t i = 0; i < FLAGS_count * FLAGS_element_count; i++) {
+  for (int i = 0; i < FLAGS_count * FLAGS_element_count; i++) {
     std::string key;
     GenerateRandomString(FLAGS_key_size, &key);
     key.append("\n");
@@ -216,7 +216,7 @@ void* ThreadMain(void* arg) {
 
 Status RunSetCommandPipeline(redisContext* c) {
   redisReply* res = nullptr;
-  for (size_t idx = 0; idx < FLAGS_count; (idx += pipeline_num)) {
+  for (int idx = 0; idx < FLAGS_count; (idx += pipeline_num)) {
     const char* argv[3] = {"SET", nullptr, nullptr};
     size_t argv_len[3] = {3, 0, 0};
     for (int32_t batch_idx = 0; batch_idx < pipeline_num; ++batch_idx) {
@@ -262,33 +262,29 @@ Status RunGetCommand(redisContext* c, ThreadArg* arg) {
   std::vector<std::string> keys(FLAGS_count, "");
   std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
     fgets(key, 1000, fp);
     key[FLAGS_key_size] = '\0';
     keys[idx] = std::string(key);
   }
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
-    const char* set_argv[2];
-    size_t set_argvlen[2];
-    std::string key;
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
+    if (idx % 10000 == 0) {
+      std::cout << "finish " << idx << " request" << std::endl;
+    }
+    const char* argv[2];
+    size_t argvlen[2];
     std::string value;
-    default_random_engine e;
-    e.seed(last_seed);
-    last_seed = e();
-    int32_t rand_num = last_seed % 10 + 1;
-
-    key = keys[idx];
-
-    set_argv[0] = "get";
-    set_argvlen[0] = 3;
-    set_argv[1] = key.c_str();
-    set_argvlen[1] = key.size();
+    std::string key = keys[idx];
+    argv[0] = "get";
+    argvlen[0] = 3;
+    argv[1] = key.c_str();
+    argvlen[1] = key.size();
 
     uint64_t begin = pstd::NowMicros();
 
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
+        redisCommandArgv(c, 3, reinterpret_cast<const char**>(argv), reinterpret_cast<const size_t*>(argvlen)));
     uint64_t cost = pstd::NowMicros() - begin;
     hist.Add(cost);
     if (!res) {
@@ -308,12 +304,12 @@ Status RunHGetAllCommand(redisContext* c, ThreadArg* arg) {
   std::vector<std::pair<std::string, std::vector<std::string>>> keys(FLAGS_count);
   std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
     fgets(key, 1000, fp);
     key[FLAGS_key_size] = '\0';
     std::vector<std::string> elements;
-    for (size_t idy = 0; idy < FLAGS_element_count; ++idy) {
+    for (int idy = 0; idy < FLAGS_element_count; ++idy) {
       char* element = new char[FLAGS_key_size + 2];
       fgets(element, 1000, fp);
       element[FLAGS_key_size] = '\0';
@@ -321,31 +317,29 @@ Status RunHGetAllCommand(redisContext* c, ThreadArg* arg) {
     }
     keys[idx] = std::make_pair(std::string(key), elements);
   }
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
-    const char* set_argv[2];
-    size_t set_argvlen[2];
-    std::string pkey, element;
-    std::string value;
-    default_random_engine e;
-    e.seed(last_seed);
-    last_seed = e();
-    int32_t rand_num = last_seed % 10 + 1;
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
+    if (idx % 10000 == 0) {
+      std::cout << "finish " << idx << " request" << std::endl;
+    }
+    const char* argv[2];
+    size_t argvlen[2];
+    std::string pkey;
 
     //GenerateRandomString(rand_num, &key);
     pkey = keys[idx].first;
 
-    set_argv[0] = "hgetall";
-    set_argvlen[0] = 7;
-    set_argv[1] = pkey.c_str();
-    set_argvlen[1] = pkey.size();
+    argv[0] = "hgetall";
+    argvlen[0] = 7;
+    argv[1] = pkey.c_str();
+    argvlen[1] = pkey.size();
 
     uint64_t begin = pstd::NowMicros();
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 2, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
+        redisCommandArgv(c, 2, reinterpret_cast<const char**>(argv), reinterpret_cast<const size_t*>(argvlen)));
     uint64_t cost = pstd::NowMicros() - begin;
     hist.Add(cost);
-    if (!res || strcasecmp(res->str, "OK")) {
-      std::string res_str = "Exec hgetall error: " + (res != nullptr ? std::string(res->str) : "");
+    if (!res || res->type != REDIS_REPLY_ARRAY) {
+      std::string res_str = "Exec hgetall error, type: " + (res != nullptr ? std::to_string(res->type) : "");
       std::cout << res_str << std::endl;
       arg->stat.error_cnt++;
     } else {
@@ -362,13 +356,13 @@ Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
   std::vector<std::pair<std::string, std::vector<std::string>>> keys(FLAGS_count);
   std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
     fgets(key, 1000, fp);
     key[FLAGS_key_size] = '\0';
     std::vector<std::string> elements;
     elements.push_back(std::string(key));
-    for (size_t idy = 1; idy < FLAGS_element_count; ++idy) {
+    for (int idy = 1; idy < FLAGS_element_count; ++idy) {
       char* element = new char[FLAGS_key_size + 2];
       fgets(element, 1000, fp);
       element[FLAGS_key_size] = '\0';
@@ -376,7 +370,7 @@ Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
     }
     keys[idx] = std::make_pair(std::string(key), elements);
   }
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
     const char* set_argv[4];
     size_t set_argvlen[4];
     std::string pkey;
@@ -384,7 +378,6 @@ Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
     default_random_engine e;
     e.seed(last_seed);
     last_seed = e();
-    int32_t rand_num = last_seed % 10 + 1;
 
     //GenerateRandomString(rand_num, &key);
     pkey = keys[idx].first;
@@ -404,8 +397,8 @@ Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
           redisCommandArgv(c, 4, reinterpret_cast<const char**>(set_argv), reinterpret_cast<const size_t*>(set_argvlen)));
       uint64_t cost = pstd::NowMicros() - begin;
       hist.Add(cost);
-      if (!res || strcasecmp(res->str, "OK")) {
-        std::string res_str = "Exec command error: " + (res != nullptr ? std::string(res->str) : "");
+      if (!res || res->type != REDIS_REPLY_INTEGER) {
+        std::string res_str = "Exec " + FLAGS_command + " res->type: " + (res != nullptr ? std::to_string(res->type) : "");
         std::cout << res_str << std::endl;
         arg->stat.error_cnt++;
       } else {
@@ -422,24 +415,21 @@ Status RunSetCommand(redisContext* c, ThreadArg* arg) {
   std::vector<std::string> keys(FLAGS_count, "");
   std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
     fgets(key, 1000, fp);
     key[FLAGS_key_size] = '\0';
     keys[idx] = std::string(key);
   }
-  for (size_t idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
+    if (idx + 1 % 10000 == 0) {
+      std::cout << "finish " << idx << " request" << std::endl;
+    }
     const char* set_argv[3];
     size_t set_argvlen[3];
-    std::string key;
-    std::string value;
-    default_random_engine e;
-    e.seed(last_seed);
-    last_seed = e();
-    int32_t rand_num = last_seed % 10 + 1;
 
-    //GenerateRandomString(rand_num, &key);
-    key = keys[idx];
+    std::string value;
+    std::string key = keys[idx];
     GenerateRandomString(FLAGS_value_size, &value);
 
     set_argv[0] = "set";
@@ -511,7 +501,7 @@ int main(int argc, char* argv[]) {
   PrintInfo(now);
 
   for (const auto& table : tables) {
-    for (size_t idx = 0; idx < FLAGS_thread_num; ++idx) {
+    for (int idx = 0; idx < FLAGS_thread_num; ++idx) {
       thread_args.push_back({0, table, idx});
     }
   }

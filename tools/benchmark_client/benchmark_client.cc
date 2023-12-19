@@ -118,7 +118,7 @@ bool CompareValue(const std::string& expect, const std::string& actual) {
 
 void PrepareKeys(int suffix, std::vector<std::string>* keys) {
   keys->resize(FLAGS_count);
-  std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
+  std::string filename = "benchmark_keyfile_" + std::to_string(suffix);
   FILE* fp = fopen(filename.c_str(), "r");
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
@@ -129,9 +129,9 @@ void PrepareKeys(int suffix, std::vector<std::string>* keys) {
   fclose(fp);
 }
 
-void PreparePkeyMembers(int suffix, std::vector<std::pair<std::string, std::set<std::string>>* keys) {
+void PreparePkeyMembers(int suffix, std::vector<std::pair<std::string, std::set<std::string>>>* keys) {
   keys->resize(FLAGS_count);
-  std::string filename = "benchmark_keyfile_" + std::to_string(arg->idx);
+  std::string filename = "benchmark_keyfile_" + std::to_string(suffix);
   FILE* fp = fopen(filename.c_str(), "r");
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
@@ -349,11 +349,11 @@ Status RunSAddCommand(redisContext* c, ThreadArg* arg) {
       hist.Add(pstd::NowMicros() - begin);
 
       if (!res) {
-        std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+        std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
         arg->stat.timeout_cnt++;
       } else if (res->type != REDIS_REPLY_INTEGER) {
         std::cout << FLAGS_command << " invalid type: " << res->type
-                  << " key: " << key << std::endl;
+                  << " key: " << pkey << std::endl;
         arg->stat.error_cnt++;
       } else {
         arg->stat.success_cnt++;
@@ -390,17 +390,17 @@ Status RunSMembersCommand(redisContext* c, ThreadArg* arg) {
     hist.Add(pstd::NowMicros() - begin);
 
     if (!res) {
-      std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+      std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
       arg->stat.timeout_cnt++;
     } else if (res->type != REDIS_REPLY_ARRAY) {
       std::cout << FLAGS_command << " invalid type: " << res->type
-                << " key: " << key << std::endl;
+                << " key: " << pkey << std::endl;
       arg->stat.error_cnt++;
     } else {
       if (CompareValue(elements, res)) {
         arg->stat.success_cnt++;
       } else {
-        std::cout << FLAGS_command << " key: " << key
+        std::cout << FLAGS_command << " key: " << pkey
                   << " compare value failed" << std::endl;
         arg->stat.error_cnt++;
       }
@@ -412,8 +412,8 @@ Status RunSMembersCommand(redisContext* c, ThreadArg* arg) {
 
 Status RunHGetAllCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
-  std::vector<std::pair<std::string, std::vector<std::string>>> keys;
-  PreaprePkeyMembers(arg->idx, &keys);
+  std::vector<std::pair<std::string, std::set<std::string>>> keys;
+  PreparePkeyMembers(arg->idx, &keys);
 
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     if (idx % 10000 == 0) {
@@ -442,17 +442,17 @@ Status RunHGetAllCommand(redisContext* c, ThreadArg* arg) {
     hist.Add(pstd::NowMicros() - begin);
 
     if (!res) {
-      std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+      std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
       arg->stat.timeout_cnt++;
     } else if (res->type != REDIS_REPLY_ARRAY) {
       std::cout << FLAGS_command << " invalid type: " << res->type
-                << " key: " << key << std::endl;
+                << " key: " << pkey << std::endl;
       arg->stat.error_cnt++;
     } else {
       if (CompareValue(m, res)) {
         arg->stat.success_cnt++;
       } else {
-        std::cout << FLAGS_command << " key: " << key
+        std::cout << FLAGS_command << " key: " << pkey
                   << " compare value failed" << std::endl;
         arg->stat.error_cnt++;
       }
@@ -465,8 +465,8 @@ Status RunHGetAllCommand(redisContext* c, ThreadArg* arg) {
 
 Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
-  std::vector<std::pair<std::string, std::vector<std::string>>> keys;
-  PreaprePkeyMembers(arg->idx, &keys);
+  std::vector<std::pair<std::string, std::set<std::string>>> keys;
+  PreparePkeyMembers(arg->idx, &keys);
 
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     const char* set_argv[4];
@@ -494,11 +494,11 @@ Status RunHSetCommand(redisContext* c, ThreadArg* arg) {
       hist.Add(pstd::NowMicros() - begin);
 
       if (!res) {
-        std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+        std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
         arg->stat.timeout_cnt++;
       } else if (res->type != REDIS_REPLY_INTEGER) {
         std::cout << FLAGS_command << " invalid type: " << res->type
-                  << " key: " << key << std::endl;
+                  << " key: " << pkey << std::endl;
         arg->stat.error_cnt++;
       } else {
         arg->stat.success_cnt++;
@@ -573,10 +573,11 @@ Status RunZAddCommand(redisContext* c, ThreadArg* arg) {
     argvlen[0] = 4;
     argv[1] = pkey.c_str();
     argvlen[1] = pkey.size();
-    for (auto i = 0; i < keys[idx].second; i++) {
-      std::string member = keys[idx].second[i];
-      argv[2] = std::to_string(i).c_str();
-      argvlen[2] = std::to_string(i).size();
+    int score = 0;
+    for (const auto& member : keys[idx].second) {
+      score++;
+      argv[2] = std::to_string(score).c_str();
+      argvlen[2] = std::to_string(score).size();
       argv[3] = member.c_str();
       argvlen[3] = member.size();
 
@@ -587,11 +588,11 @@ Status RunZAddCommand(redisContext* c, ThreadArg* arg) {
       hist.Add(pstd::NowMicros() - begin);
 
       if (!res) {
-        std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+        std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
         arg->stat.timeout_cnt++;
       } else if (res->type != REDIS_REPLY_INTEGER) {
         std::cout << FLAGS_command << " invalid type: " << res->type
-                  << " key: " << key << std::endl;
+                  << " key: " << pkey << std::endl;
         arg->stat.error_cnt++;
       } else {
         arg->stat.success_cnt++;
@@ -605,8 +606,8 @@ Status RunZAddCommand(redisContext* c, ThreadArg* arg) {
 
 Status RunZRangeCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
-  std::vector<std::pair<std::string, std::vector<std::string>>> keys;
-  PreaprePkeyMembers(arg->idx, &keys);
+  std::vector<std::pair<std::string, std::set<std::string>>> keys;
+  PreparePkeyMembers(arg->idx, &keys);
 
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     if (idx % 10000 == 0) {
@@ -624,26 +625,26 @@ Status RunZRangeCommand(redisContext* c, ThreadArg* arg) {
     argv[2] = "0";
     argvlen[2] = 1;
     argv[3] = "-1";
-    argvlen[4] = 2;
+    argvlen[3] = 2;
 
     uint64_t begin = pstd::NowMicros();
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 2, reinterpret_cast<const char**>(argv),
+        redisCommandArgv(c, 4, reinterpret_cast<const char**>(argv),
                          reinterpret_cast<const size_t*>(argvlen)));
     hist.Add(pstd::NowMicros() - begin);
 
     if (!res) {
-      std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+      std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
       arg->stat.timeout_cnt++;
     } else if (res->type != REDIS_REPLY_ARRAY) {
       std::cout << FLAGS_command << " invalid type: " << res->type
-                << " key: " << key << std::endl;
+                << " key: " << pkey << std::endl;
       arg->stat.error_cnt++;
     } else {
       if (CompareValue(elements, res)) {
         arg->stat.success_cnt++;
       } else {
-        std::cout << FLAGS_command << " key: " << key
+        std::cout << FLAGS_command << " key: " << pkey
                   << " compare value failed" << std::endl;
         arg->stat.error_cnt++;
       }
@@ -678,11 +679,11 @@ Status RunLPushCommand(redisContext* c, ThreadArg* arg) {
       hist.Add(pstd::NowMicros() - begin);
 
       if (!res) {
-        std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+        std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
         arg->stat.timeout_cnt++;
       } else if (res->type != REDIS_REPLY_INTEGER) {
         std::cout << FLAGS_command << " invalid type: " << res->type
-                  << " key: " << key << std::endl;
+                  << " key: " << pkey << std::endl;
         arg->stat.error_cnt++;
       } else {
         arg->stat.success_cnt++;
@@ -695,8 +696,8 @@ Status RunLPushCommand(redisContext* c, ThreadArg* arg) {
 
 Status RunLRangeCommand(redisContext* c, ThreadArg* arg) {
   redisReply* res = nullptr;
-  std::vector<std::pair<std::string, std::vector<std::string>>> keys;
-  PreaprePkeyMembers(arg->idx, &keys);
+  std::vector<std::pair<std::string, std::set<std::string>>> keys;
+  PreparePkeyMembers(arg->idx, &keys);
 
   for (int idx = 0; idx < FLAGS_count; ++idx) {
     if (idx % 10000 == 0) {
@@ -714,26 +715,26 @@ Status RunLRangeCommand(redisContext* c, ThreadArg* arg) {
     argv[2] = "0";
     argvlen[2] = 1;
     argv[3] = "-1";
-    argvlen[4] = 2;
+    argvlen[3] = 2;
 
     uint64_t begin = pstd::NowMicros();
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 2, reinterpret_cast<const char**>(argv),
+        redisCommandArgv(c, 4, reinterpret_cast<const char**>(argv),
                          reinterpret_cast<const size_t*>(argvlen)));
     hist.Add(pstd::NowMicros() - begin);
 
     if (!res) {
-      std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
+      std::cout << FLAGS_command << " timeout, key: " << pkey << std::endl;
       arg->stat.timeout_cnt++;
     } else if (res->type != REDIS_REPLY_ARRAY) {
       std::cout << FLAGS_command << " invalid type: " << res->type
-                << " key: " << key << std::endl;
+                << " key: " << pkey << std::endl;
       arg->stat.error_cnt++;
     } else {
       if (CompareValue(elements, res)) {
         arg->stat.success_cnt++;
       } else {
-        std::cout << FLAGS_command << " key: " << key
+        std::cout << FLAGS_command << " key: " << pkey
                   << " compare value failed" << std::endl;
         arg->stat.error_cnt++;
       }
@@ -827,7 +828,7 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Total Time Cost : " << hours << " hours " << minutes % 60 << " minutes " << seconds % 60 << " seconds "
             << std::endl;
-  std::cout << "Timeout Count: " << stat.timeout_cnt << " Error Count: " << stat.error_count << std::endl;
+  std::cout << "Timeout Count: " << stat.timeout_cnt << " Error Count: " << stat.error_cnt << std::endl;
   std::cout << "stats: " << hist.ToString() << std::endl;
   return 0;
 }

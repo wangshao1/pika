@@ -125,6 +125,7 @@ void PrepareKeys(int suffix, std::vector<std::string>* keys) {
     fgets(key, 1000, fp);
     key[FLAGS_key_size] = '\0';
     (*keys)[idx] = std::string(key);
+    delete []key;
   }
   fclose(fp);
 }
@@ -144,13 +145,13 @@ void PreparePkeyMembers(int suffix, std::vector<std::pair<std::string, std::set<
       fgets(element, 1000, fp);
       element[FLAGS_key_size] = '\0';
       elements.insert(std::string(element));
+      delete []element;
     }
     (*keys)[idx] = std::make_pair(std::string(key), elements);
+    delete []key;
   }
   fclose(fp);
 }
-
-
 
 void GenerateRandomString(int32_t len, std::string* target) {
   target->clear();
@@ -169,15 +170,16 @@ void GenerateRandomString(int32_t len, std::string* target) {
 }
 
 void GenerateValue(const std::string& key, int32_t len, std::string* value) {
-  if (FLAGS_compare_value) {
+  if (!FLAGS_compare_value) {
     return GenerateRandomString(len, value);
   }
+  value->resize(0);
   while (len - value->size() != 0) {
     size_t min_len = len - value->size();
     if (min_len > key.size()) {
       min_len = key.size();
     }
-    value->append(key.substr(min_len));
+    value->append(key.substr(0, min_len));
   }
   return;
 }
@@ -296,10 +298,11 @@ Status RunGetCommand(redisContext* c, ThreadArg* arg) {
     argvlen[0] = 3;
     argv[1] = key.c_str();
     argvlen[1] = key.size();
+    GenerateValue(key, FLAGS_value_size, &value);
 
     uint64_t begin = pstd::NowMicros();
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 3, reinterpret_cast<const char**>(argv),
+        redisCommandArgv(c, 2, reinterpret_cast<const char**>(argv),
                          reinterpret_cast<const size_t*>(argvlen)));
     hist.Add(pstd::NowMicros() - begin);
 
@@ -311,7 +314,7 @@ Status RunGetCommand(redisContext* c, ThreadArg* arg) {
                 << " key: " << key << std::endl;
       arg->stat.error_cnt++;
     } else {
-      if (CompareValue(key, std::string(res->str))) {
+      if (CompareValue(value, std::string(res->str))) {
         arg->stat.success_cnt++;
       } else {
         std::cout << FLAGS_command << " key: " << key
@@ -515,7 +518,7 @@ Status RunSetCommand(redisContext* c, ThreadArg* arg) {
   PrepareKeys(arg->idx, &keys);
 
   for (int idx = 0; idx < FLAGS_count; ++idx) {
-    if (idx + 1 % 10000 == 0) {
+    if (idx % 10000 == 0) {
       std::cout << "finish " << idx << " request" << std::endl;
     }
     const char* set_argv[3];
@@ -542,18 +545,12 @@ Status RunSetCommand(redisContext* c, ThreadArg* arg) {
     if (!res) {
       std::cout << FLAGS_command << " timeout, key: " << key << std::endl;
       arg->stat.timeout_cnt++;
-    } else if (res->type != REDIS_REPLY_STRING) {
+    } else if (res->type != REDIS_REPLY_STATUS) {
       std::cout << FLAGS_command << " invalid type: " << res->type
                 << " key: " << key << std::endl;
       arg->stat.error_cnt++;
     } else {
-      if (CompareValue(key, std::string(res->str))) {
-        arg->stat.success_cnt++;
-      } else {
-        std::cout << FLAGS_command << " key: " << key
-                  << " compare value failed" << std::endl;
-        arg->stat.error_cnt++;
-      }
+      arg->stat.success_cnt++;
     }
     freeReplyObject(res);
   }

@@ -242,7 +242,7 @@ rocksdb::Status Redis::SDiff(const std::vector<std::string>& keys, std::vector<s
       version = parsed_sets_meta_value.Version();
       SetsMemberKey sets_member_key(keys[0], version, Slice());
       prefix = sets_member_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, keys[0]);
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, keys[0]);
       auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -313,7 +313,7 @@ rocksdb::Status Redis::SDiffstore(const Slice& destination, const std::vector<st
       version = parsed_sets_meta_value.Version();
       SetsMemberKey sets_member_key(keys[0], version, Slice());
       Slice prefix = sets_member_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, keys[0]);
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, keys[0]);
       auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -417,7 +417,7 @@ rocksdb::Status Redis::SInter(const std::vector<std::string>& keys, std::vector<
       std::string member_value;
       version = parsed_sets_meta_value.Version();
       SetsMemberKey sets_member_key(keys[0], version, Slice());
-      KeyStatisticsDurationGuard guard(this, keys[0]);
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, keys[0]);
       Slice prefix = sets_member_key.EncodeSeekKey();
       auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
@@ -503,7 +503,7 @@ rocksdb::Status Redis::SInterstore(const Slice& destination, const std::vector<s
         version = parsed_sets_meta_value.Version();
         SetsMemberKey sets_member_key(keys[0], version, Slice());
         Slice prefix = sets_member_key.EncodeSeekKey();
-        KeyStatisticsDurationGuard guard(this, keys[0]);
+        KeyStatisticsDurationGuard guard(this, DataType::kSets, keys[0]);
         auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
         for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
           ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -620,7 +620,7 @@ rocksdb::Status Redis::SMembers(const Slice& key, std::vector<std::string>* memb
       version = parsed_sets_meta_value.Version();
       SetsMemberKey sets_member_key(key, version, Slice());
       Slice prefix = sets_member_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -633,25 +633,26 @@ rocksdb::Status Redis::SMembers(const Slice& key, std::vector<std::string>* memb
 }
 
 Status Redis::SMembersWithTTL(const Slice& key,
-                                  std::vector<std::string>* members,
-                                  int64_t* ttl) {
+                              std::vector<std::string>* members,
+                              int64_t* ttl) {
   rocksdb::ReadOptions read_options;
   const rocksdb::Snapshot* snapshot;
 
   std::string meta_value;
-  int32_t version = 0;
+  uint64_t version = 0;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  Status s = db_->Get(read_options, handles_[0], key, &meta_value);
+  BaseMetaKey base_meta_key(key);
+  rocksdb::Status s = db_->Get(read_options, handles_[kSetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedSetsMetaValue parsed_sets_meta_value(&meta_value);
-    if (parsed_sets_meta_value.count() == 0) {
+    if (parsed_sets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (parsed_sets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
       // ttl
-      *ttl = parsed_sets_meta_value.timestamp();
+      *ttl = parsed_sets_meta_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -660,10 +661,11 @@ Status Redis::SMembersWithTTL(const Slice& key,
         *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
       }
 
-      version = parsed_sets_meta_value.version();
+      version = parsed_sets_meta_value.Version();
       SetsMemberKey sets_member_key(key, version, Slice());
-      Slice prefix = sets_member_key.Encode();
-      auto iter = db_->NewIterator(read_options, handles_[1]);
+      Slice prefix = sets_member_key.EncodeSeekKey();
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, key.ToString());
+      auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(prefix);
            iter->Valid() && iter->key().starts_with(prefix);
            iter->Next()) {
@@ -833,7 +835,7 @@ rocksdb::Status Redis::SPop(const Slice& key, std::vector<std::string>* members,
 
         SetsMemberKey sets_member_key(key, version, Slice());
         int64_t del_count = 0;
-        KeyStatisticsDurationGuard guard(this, key.ToString());
+        KeyStatisticsDurationGuard guard(this, DataType::kSets, key.ToString());
         auto iter = db_->NewIterator(default_read_options_, handles_[kSetsDataCF]);
         for (iter->Seek(sets_member_key.EncodeSeekKey());
             iter->Valid() && cur_index < size;
@@ -924,7 +926,7 @@ rocksdb::Status Redis::SRandmember(const Slice& key, int32_t count, std::vector<
       int32_t cur_index = 0;
       int32_t idx = 0;
       SetsMemberKey sets_member_key(key, version, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, key.ToString());
       auto iter = db_->NewIterator(default_read_options_, handles_[kSetsDataCF]);
       for (iter->Seek(sets_member_key.EncodeSeekKey()); iter->Valid() && cur_index < size; iter->Next(), cur_index++) {
         if (static_cast<size_t>(idx) >= targets.size()) {
@@ -1027,7 +1029,7 @@ rocksdb::Status Redis::SUnion(const std::vector<std::string>& keys, std::vector<
   for (const auto& key_version : vaild_sets) {
     SetsMemberKey sets_member_key(key_version.key, key_version.version, Slice());
     prefix = sets_member_key.EncodeSeekKey();
-    KeyStatisticsDurationGuard guard(this, key_version.key);
+    KeyStatisticsDurationGuard guard(this, DataType::kSets, key_version.key);
     auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
     for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
       ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -1078,7 +1080,7 @@ rocksdb::Status Redis::SUnionstore(const Slice& destination, const std::vector<s
   for (const auto& key_version : vaild_sets) {
     SetsMemberKey sets_member_key(key_version.key, key_version.version, Slice());
     prefix = sets_member_key.EncodeSeekKey();
-    KeyStatisticsDurationGuard guard(this, key_version.key);
+    KeyStatisticsDurationGuard guard(this, DataType::kSets, key_version.key);
     auto iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
     for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
       ParsedSetsMemberKey parsed_sets_member_key(iter->key());
@@ -1167,7 +1169,7 @@ rocksdb::Status Redis::SScan(const Slice& key, int64_t cursor, const std::string
       SetsMemberKey sets_member_prefix(key, version, sub_member);
       SetsMemberKey sets_member_key(key, version, start_point);
       std::string prefix = sets_member_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kSetsDataCF]);
       for (iter->Seek(sets_member_key.EncodeSeekKey()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {

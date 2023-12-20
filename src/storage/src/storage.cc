@@ -144,7 +144,8 @@ Status Storage::Get(const Slice& key, std::string* value) {
 }
 
 Status Storage::GetWithTTL(const Slice& key, std::string* value, int64_t* ttl) {
-  return strings_db_->GetWithTTL(key, value, ttl);
+  auto inst = GetDBInstance(key);
+  return inst->GetWithTTL(key, value, ttl);
 }
 
 Status Storage::GetSet(const Slice& key, const Slice& value, std::string* old_value) {
@@ -249,7 +250,8 @@ Status Storage::Getrange(const Slice& key, int64_t start_offset, int64_t end_off
 
 Status Storage::GetrangeWithValue(const Slice& key, int64_t start_offset, int64_t end_offset,
                                      std::string* ret, std::string* value, int64_t* ttl) {
-  return strings_db_->GetrangeWithValue(key, start_offset, end_offset, ret, value, ttl);
+  auto inst = GetDBInstance(key);
+  return inst->GetrangeWithValue(key, start_offset, end_offset, ret, value, ttl);
 }
 
 Status Storage::Append(const Slice& key, const Slice& value, int32_t* ret) {
@@ -594,7 +596,8 @@ Status Storage::SMembers(const Slice& key, std::vector<std::string>* members) {
 }
 
 Status Storage::SMembersWithTTL(const Slice& key, std::vector<std::string>* members, int64_t *ttl) {
-  return sets_db_->SMembersWithTTL(key, members, ttl);
+  auto inst = GetDBInstance(key);
+  return inst->SMembersWithTTL(key, members, ttl);
 }
 
 Status Storage::SMove(const Slice& source, const Slice& destination, const Slice& member, int32_t* ret) {
@@ -846,7 +849,9 @@ Status Storage::ZRange(const Slice& key, int32_t start, int32_t stop, std::vecto
 }
 Status Storage::ZRangeWithTTL(const Slice& key, int32_t start, int32_t stop, std::vector<ScoreMember>* score_members,
                                  int64_t *ttl) {
-  return zsets_db_->ZRangeWithTTL(key, start, stop, score_members, ttl);
+  score_members->clear();
+  auto inst = GetDBInstance(key);
+  return inst->ZRangeWithTTL(key, start, stop, score_members, ttl);
 }
 
 Status Storage::ZRangebyscore(const Slice& key, double min, double max, bool left_close, bool right_close,
@@ -2009,8 +2014,11 @@ Status Storage::RunBGTask() {
     }
 
     if (task.operation == kCleanAll) {
-      DoCompact(task.type);
+      DoCompactRange(task.type, "", "");
     } else if (task.operation == kCompactRange) {
+      if (task.argv.size() == 1) {
+        DoCompactSpecificKey(task.type, task.argv[0]);
+      }
       if (task.argv.size() == 2) {
         DoCompactRange(task.type, task.argv.front(), task.argv.back());
       }
@@ -2021,48 +2029,57 @@ Status Storage::RunBGTask() {
 
 Status Storage::Compact(const DataType& type, bool sync) {
   if (sync) {
-    return DoCompact(type);
+    return DoCompactRange(type, "", "");
   } else {
     AddBGTask({type, kCleanAll});
   }
   return Status::OK();
 }
 
-Status Storage::DoCompact(const DataType& type) {
+// run compactrange for all rocksdb instance
+Status Storage::DoCompactRange(const DataType& type, const std::string& start, const std::string& end) {
   if (type != kAll && type != kStrings && type != kHashes && type != kSets && type != kZSets && type != kLists) {
     return Status::InvalidArgument("");
   }
+
+  std::string start_key, end_key;
+  CalculateStartAndEndKey(start, &start_key, nullptr);
+  CalculateStartAndEndKey(end, nullptr, &end_key);
+  Slice slice_start_key(start_key);
+  Slice slice_end_key(end_key);
+  Slice* start_ptr = slice_start_key.empty() ? nullptr : &slice_start_key;
+  Slice* end_ptr = slice_end_key.empty() ? nullptr : &slice_end_key;
 
   Status s;
   for (const auto& inst : insts_) {
     switch (type) {
       case DataType::kStrings:
         current_task_type_ = Operation::kCleanStrings;
-        s = inst->CompactRange(type, nullptr, nullptr);
+        s = inst->CompactRange(type, start_ptr, end_ptr);
         break;
       case DataType::kHashes:
         current_task_type_ = Operation::kCleanHashes;
-        s = inst->CompactRange(type, nullptr, nullptr);
+        s = inst->CompactRange(type, start_ptr, end_ptr);
         break;
       case DataType::kLists:
         current_task_type_ = Operation::kCleanLists;
-        s = inst->CompactRange(type, nullptr, nullptr);
+        s = inst->CompactRange(type, start_ptr, end_ptr);
         break;
       case DataType::kSets:
         current_task_type_ = Operation::kCleanSets;
-        s = inst->CompactRange(type, nullptr, nullptr);
+        s = inst->CompactRange(type, start_ptr, end_ptr);
         break;
       case DataType::kZSets:
         current_task_type_ = Operation::kCleanZSets;
-        s = inst->CompactRange(type, nullptr, nullptr);
+        s = inst->CompactRange(type, start_ptr, end_ptr);
         break;
       default:
         current_task_type_ = Operation::kCleanAll;
-        s = inst->CompactRange(DataType::kStrings, nullptr, nullptr);
-        s = inst->CompactRange(DataType::kHashes, nullptr, nullptr);
-        s = inst->CompactRange(DataType::kLists, nullptr, nullptr);
-        s = inst->CompactRange(DataType::kSets, nullptr, nullptr);
-        s = inst->CompactRange(DataType::kZSets, nullptr, nullptr);
+        s = inst->CompactRange(DataType::kStrings, start_ptr, end_ptr);
+        s = inst->CompactRange(DataType::kHashes, start_ptr, end_ptr);
+        s = inst->CompactRange(DataType::kLists, start_ptr, end_ptr);
+        s = inst->CompactRange(DataType::kSets, start_ptr, end_ptr);
+        s = inst->CompactRange(DataType::kZSets, start_ptr, end_ptr);
     }
   }
   current_task_type_ = Operation::kNone;
@@ -2078,31 +2095,16 @@ Status Storage::CompactRange(const DataType& type, const std::string& start, con
   return Status::OK();
 }
 
-Status Storage::DoCompactRange(const DataType& type, const std::string& start, const std::string& end) {
+Status Storage::DoCompactSpecificKey(const DataType& type, const std::string& key) {
   Status s;
-  if (type == kStrings) {
-    Slice slice_begin(start);
-    Slice slice_end(end);
-    s = strings_db_->CompactRange(&slice_begin, &slice_end);
-    return s;
-  }
+  auto inst = GetDBInstance(key);
 
-  std::string meta_start_key;
-  std::string meta_end_key;
-  std::string data_start_key;
-  std::string data_end_key;
-  CalculateMetaStartAndEndKey(start, &meta_start_key, nullptr);
-  CalculateMetaStartAndEndKey(end, nullptr, &meta_end_key);
-  CalculateDataStartAndEndKey(start, &data_start_key, nullptr);
-  CalculateDataStartAndEndKey(end, nullptr, &data_end_key);
-  Slice slice_meta_begin(meta_start_key);
-  Slice slice_meta_end(meta_end_key);
-  Slice slice_data_begin(data_start_key);
-  Slice slice_data_end(data_end_key);
-  s = inst->CompactRange(type, &slice_meta_begin, &slice_meta_end, kMeta);
-  if (s.ok()) {
-    s = inst->CompactRange(type, &slice_data_begin, &slice_data_end, kData);
-  }
+  std::string start_key;
+  std::string end_key;
+  CalculateStartAndEndKey(key, &start_key, &end_key);
+  Slice slice_begin(start_key);
+  Slice slice_end(end_key);
+  s = inst->CompactRange(type, &slice_begin, &slice_end, kMeta);
   return s;
 }
 
@@ -2121,9 +2123,8 @@ Status Storage::SetSmallCompactionThreshold(uint32_t small_compaction_threshold)
 }
 
 Status Storage::SetSmallCompactionDurationThreshold(uint32_t small_compaction_duration_threshold) {
-  std::vector<Redis*> dbs = {sets_db_.get(), zsets_db_.get(), hashes_db_.get(), lists_db_.get()};
-  for (const auto& db : dbs) {
-    db->SetSmallCompactionDurationThreshold(small_compaction_duration_threshold);
+  for (const auto& inst : insts_) {
+    inst->SetSmallCompactionDurationThreshold(small_compaction_duration_threshold);
   }
   return Status::OK();
 }
@@ -2240,29 +2241,30 @@ int64_t Storage::IsExist(const Slice& key, std::map<DataType, Status>* type_stat
   std::string value;
   int32_t ret = 0;
   int64_t type_count = 0;
-  Status s = strings_db_->Get(key, &value);
+  auto inst = GetDBInstance(key);
+  Status s = inst->Get(key, &value);
   (*type_status)[DataType::kStrings] = s;
   if (s.ok()) {
     type_count++;
   }
-  s = hashes_db_->HLen(key, &ret);
+  s = inst->HLen(key, &ret);
   (*type_status)[DataType::kHashes] = s;
   if (s.ok()) {
     type_count++;
   }
-  s = sets_db_->SCard(key, &ret);
+  s = inst->SCard(key, &ret);
   (*type_status)[DataType::kSets] = s;
   if (s.ok()) {
     type_count++;
   }
   uint64_t llen = 0;
-  s = lists_db_->LLen(key, &llen);
+  s = inst->LLen(key, &llen);
   (*type_status)[DataType::kLists] = s;
   if (s.ok()) {
     type_count++;
   }
 
-  s = zsets_db_->ZCard(key, &ret);
+  s = inst->ZCard(key, &ret);
   (*type_status)[DataType::kZSets] = s;
   if (s.ok()) {
     type_count++;

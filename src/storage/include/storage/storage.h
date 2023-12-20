@@ -95,6 +95,7 @@ struct ValueStatus {
 struct FieldValue {
   std::string field;
   std::string value;
+  FieldValue() = default;
   FieldValue(const std::string& k, const std::string& v) : field(k), value(v) {}
   FieldValue(std::string&& k, std::string&& v) : field(std::move(k)), value(std::move(v)) {}
   bool operator==(const FieldValue& fv) const { return (fv.field == field && fv.value == value); }
@@ -1033,8 +1034,8 @@ class Storage {
 
   Status Compact(const DataType& type, bool sync = false);
   Status CompactRange(const DataType& type, const std::string& start, const std::string& end, bool sync = false);
-  Status DoCompact(const DataType& type);
   Status DoCompactRange(const DataType& type, const std::string& start, const std::string& end);
+  Status DoCompactSpecificKey(const DataType& type, const std::string& key);
 
   Status SetMaxCacheStatisticKeys(uint32_t max_cache_statistic_keys);
   Status SetSmallCompactionThreshold(uint32_t small_compaction_threshold);

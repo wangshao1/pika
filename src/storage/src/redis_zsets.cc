@@ -128,7 +128,7 @@ Status Redis::ZPopMax(const Slice& key, const int64_t count, std::vector<ScoreMe
       num = num <= count ? num : count;
       uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       int32_t del_cnt = 0;
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && del_cnt < num; iter->Prev()) {
@@ -176,7 +176,7 @@ Status Redis::ZPopMin(const Slice& key, const int64_t count, std::vector<ScoreMe
       num = num <= count ? num : count;
       uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       int32_t del_cnt = 0;
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && del_cnt < num; iter->Next()) {
@@ -354,7 +354,7 @@ Status Redis::ZCount(const Slice& key, double min, double max, bool left_close, 
       int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -488,7 +488,7 @@ Status Redis::ZRange(const Slice& key, int32_t start, int32_t stop, std::vector<
       ScoreMember score_member;
 
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         if (cur_index >= start_index) {
@@ -514,16 +514,17 @@ Status Redis::ZRangeWithTTL(const Slice& key, int32_t start, int32_t stop, std::
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
 
-  Status s = db_->Get(read_options, key, &meta_value);
+  BaseMetaKey base_meta_key(key);
+  Status s = db_->Get(read_options, handles_[kZsetsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedZSetsMetaValue parsed_zsets_meta_value(&meta_value);
-    if (parsed_zsets_meta_value.count() == 0) {
+    if (parsed_zsets_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (parsed_zsets_meta_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
       // ttl
-      *ttl = parsed_zsets_meta_value.timestamp();
+      *ttl = parsed_zsets_meta_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -532,10 +533,10 @@ Status Redis::ZRangeWithTTL(const Slice& key, int32_t start, int32_t stop, std::
         *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
       }
 
-      int32_t count = parsed_zsets_meta_value.count();
-      int32_t version = parsed_zsets_meta_value.version();
+      int32_t count = parsed_zsets_meta_value.Count();
+      uint64_t version = parsed_zsets_meta_value.Version();
       int32_t start_index = start >= 0 ? start : count + start;
-      int32_t stop_index  = stop  >= 0 ? stop  : count + stop;
+      int32_t stop_index = stop >= 0 ? stop : count + stop;
       start_index = start_index <= 0 ? 0 : start_index;
       stop_index = stop_index >= count ? count - 1 : stop_index;
       if (start_index > stop_index
@@ -547,7 +548,8 @@ Status Redis::ZRangeWithTTL(const Slice& key, int32_t start, int32_t stop, std::
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version,
                                     std::numeric_limits<double>::lowest(), Slice());
-      rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[2]);
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
+      rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode());
            iter->Valid() && cur_index <= stop_index;
            iter->Next(), ++cur_index) {
@@ -589,7 +591,7 @@ Status Redis::ZRangebyscore(const Slice& key, double min, double max, bool left_
       int64_t skipped = 0;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && index <= stop_index; iter->Next(), ++index) {
         bool left_pass = false;
@@ -656,7 +658,7 @@ Status Redis::ZRank(const Slice& key, const Slice& member, int32_t* rank) {
       int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && index <= stop_index; iter->Next(), ++index) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
@@ -768,7 +770,7 @@ Status Redis::ZRemrangebyrank(const Slice& key, int32_t start, int32_t stop, int
         return s;
       }
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::lowest(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         if (cur_index >= start_index) {
@@ -819,7 +821,7 @@ Status Redis::ZRemrangebyscore(const Slice& key, double min, double max, bool le
       int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, min, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[kZsetsScoreCF]);
       for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -897,7 +899,7 @@ Status Redis::ZRevrange(const Slice& key, int32_t start, int32_t stop, std::vect
       int32_t cur_index = count - 1;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && cur_index >= start_index;
            iter->Prev(), --cur_index) {
@@ -938,7 +940,7 @@ Status Redis::ZRevrangebyscore(const Slice& key, double min, double max, bool le
       int64_t skipped = 0;
       ScoreMember score_member;
       ZSetsScoreKey zsets_score_key(key, version, std::nextafter(max, std::numeric_limits<double>::max()), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && left > 0; iter->Prev(), --left) {
         bool left_pass = false;
@@ -1005,7 +1007,7 @@ Status Redis::ZRevrank(const Slice& key, const Slice& member, int32_t* rank) {
       int32_t left = parsed_zsets_meta_value.Count();
       uint64_t version = parsed_zsets_meta_value.Version();
       ZSetsScoreKey zsets_score_key(key, version, std::numeric_limits<double>::max(), Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
       for (iter->SeekForPrev(zsets_score_key.Encode()); iter->Valid() && left >= 0; iter->Prev(), --left, ++rev_index) {
         ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
@@ -1125,7 +1127,7 @@ Status Redis::ZUnionstore(const Slice& destination, const std::vector<std::strin
         double weight = idx < weights.size() ? weights[idx] : 1;
         version = parsed_zsets_meta_value.Version();
         ZSetsScoreKey zsets_score_key(keys[idx], version, std::numeric_limits<double>::lowest(), Slice());
-        KeyStatisticsDurationGuard guard(this, keys[idx]);
+        KeyStatisticsDurationGuard guard(this, DataType::kZSets, keys[idx]);
         rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
         for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index;
              iter->Next(), ++cur_index) {
@@ -1245,7 +1247,7 @@ Status Redis::ZInterstore(const Slice& destination, const std::vector<std::strin
 
   if (!have_invalid_zsets) {
     ZSetsScoreKey zsets_score_key(valid_zsets[0].key, valid_zsets[0].version, std::numeric_limits<double>::lowest(), Slice());
-    KeyStatisticsDurationGuard guard(this, vaild_zsets[0].key);
+    KeyStatisticsDurationGuard guard(this, DataType::kZSets, valid_zsets[0].key);
     rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsScoreCF]);
     for (iter->Seek(zsets_score_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
       ParsedZSetsScoreKey parsed_zsets_score_key(iter->key());
@@ -1357,7 +1359,7 @@ Status Redis::ZRangebylex(const Slice& key, const Slice& min, const Slice& max, 
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ZSetsMemberKey zsets_member_key(key, version, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsDataCF]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -1420,7 +1422,7 @@ Status Redis::ZRemrangebylex(const Slice& key, const Slice& min, const Slice& ma
       int32_t cur_index = 0;
       int32_t stop_index = parsed_zsets_meta_value.Count() - 1;
       ZSetsMemberKey zsets_member_key(key, version, Slice());
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsDataCF]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && cur_index <= stop_index; iter->Next(), ++cur_index) {
         bool left_pass = false;
@@ -1580,7 +1582,7 @@ Status Redis::ZScan(const Slice& key, int64_t cursor, const std::string& pattern
       ZSetsMemberKey zsets_member_prefix(key, version, sub_member);
       ZSetsMemberKey zsets_member_key(key, version, start_point);
       std::string prefix = zsets_member_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kZSets, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kZsetsDataCF]);
       for (iter->Seek(zsets_member_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {

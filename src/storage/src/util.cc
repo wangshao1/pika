@@ -208,7 +208,10 @@ int is_dir(const char* filename) {
   return -1;
 }
 
-int CalculateMetaStartAndEndKey(const std::string& key, std::string* meta_start_key, std::string* meta_end_key) {
+int CalculateStartAndEndKey(const std::string& key, std::string* start_key, std::string* end_key) {
+  if (key.empty()) {
+    return 0;
+  }
   size_t usize = kPrefixReserveLength + key.size() + kEncodedKeyDelimSize;
   usize += std::count(key.begin(), key.end(), kNeedTransformCharacter);
   auto dst = std::make_unique<char[]>(usize);
@@ -216,14 +219,16 @@ int CalculateMetaStartAndEndKey(const std::string& key, std::string* meta_start_
   memset(ptr, kNeedTransformCharacter, kPrefixReserveLength);
   ptr += kPrefixReserveLength;
   ptr = storage::EncodeUserKey(Slice(key), ptr);
-  *meta_start_key = std::string(dst.get(), ptr);
-  *meta_end_key = std::string(dst.get(), ptr);
-  meta_end_key->append(1, static_cast<char>(0xff));
+  if (start_key) {
+    *start_key = std::string(dst.get(), ptr);
+  }
+  if (end_key) {
+    *end_key = std::string(dst.get(), ptr);
+    // Encoded key's last two character is "\u0000\u0000",
+    // so directly upgrade end_key's back character to '\u0001'.
+    end_key->back() = '\u0001';
+  }
   return 0;
-}
-
-int CalculateDataStartAndEndKey(const std::string& key, std::string* data_start_key, std::string* data_end_key) {
-  return CalculateMetaStartAndEndKey(key, data_start_key, data_end_key);
 }
 
 // requires:

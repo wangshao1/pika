@@ -16,7 +16,7 @@
 #include <memory>
 #include <set>
 
-#include "src/cache/include/config.h"
+#include "pstd/include/cache/config.h"
 #include "net/include/bg_thread.h"
 #include "net/include/net_pubsub.h"
 #include "net/include/thread_pool.h"

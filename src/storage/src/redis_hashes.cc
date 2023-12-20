@@ -20,7 +20,6 @@
 
 namespace storage {
 Status Redis::ScanHashesKeyNum(KeyInfo* key_info) {
->>>>>>> f6f2690e (floyd: refactor storage to support multi rocksdb instance && todis key format)
   uint64_t keys = 0;
   uint64_t expires = 0;
   uint64_t ttl_sum = 0;
@@ -223,7 +222,7 @@ Status Redis::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
       version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedHashesDataKey parsed_hashes_data_key(iter->key());
@@ -241,19 +240,20 @@ Status Redis::HGetallWithTTL(const Slice& key, std::vector<FieldValue>* fvs, int
   const rocksdb::Snapshot* snapshot;
 
   std::string meta_value;
-  int32_t version = 0;
+  uint64_t version = 0;
   ScopeSnapshot ss(db_, &snapshot);
   read_options.snapshot = snapshot;
-  Status s = db_->Get(read_options, handles_[0], key, &meta_value);
+  BaseMetaKey base_meta_key(key);
+  Status s = db_->Get(read_options, handles_[kHashesMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
-    if (parsed_hashes_meta_value.count() == 0) {
+    if (parsed_hashes_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (parsed_hashes_meta_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
       // ttl
-      *ttl = parsed_hashes_meta_value.timestamp();
+      *ttl = parsed_hashes_meta_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -262,16 +262,15 @@ Status Redis::HGetallWithTTL(const Slice& key, std::vector<FieldValue>* fvs, int
         *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
       }
 
-      version = parsed_hashes_meta_value.version();
+      version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
-      Slice prefix = hashes_data_key.Encode();
-      auto iter = db_->NewIterator(read_options, handles_[1]);
-      for (iter->Seek(prefix);
-           iter->Valid() && iter->key().starts_with(prefix);
-           iter->Next()) {
+      Slice prefix = hashes_data_key.EncodeSeekKey();
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
+      auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
+      for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedHashesDataKey parsed_hashes_data_key(iter->key());
-        fvs->push_back({parsed_hashes_data_key.field().ToString(),
-                        iter->value().ToString()});
+        ParsedBaseDataValue parsed_internal_value(iter->value());
+        fvs->push_back({parsed_hashes_data_key.field().ToString(), parsed_internal_value.UserValue().ToString()});
       }
       delete iter;
     }
@@ -461,7 +460,7 @@ Status Redis::HKeys(const Slice& key, std::vector<std::string>* fields) {
       version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedHashesDataKey parsed_hashes_data_key(iter->key());
@@ -755,7 +754,7 @@ Status Redis::HVals(const Slice& key, std::vector<std::string>* values) {
       version = parsed_hashes_meta_value.Version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.EncodeSeekKey();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedBaseDataValue parsed_internal_value(iter->value());
@@ -821,7 +820,7 @@ Status Redis::HScan(const Slice& key, int64_t cursor, const std::string& pattern
       HashesDataKey hashes_data_prefix(key, version, sub_field);
       HashesDataKey hashes_start_data_key(key, version, start_point);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {
@@ -875,7 +874,7 @@ Status Redis::HScanx(const Slice& key, const std::string& start_field, const std
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, start_field);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {
@@ -935,7 +934,7 @@ Status Redis::PKHScanRange(const Slice& key, const Slice& field_start, const std
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, field_start);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->Seek(start_no_limit ? prefix : hashes_start_data_key.Encode());
            iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Next()) {
@@ -999,7 +998,7 @@ Status Redis::PKHRScanRange(const Slice& key, const Slice& field_start, const st
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, start_key_version, start_key_field);
       std::string prefix = hashes_data_prefix.EncodeSeekKey().ToString();
-      KeyStatisticsDurationGuard guard(this, key.ToString());
+      KeyStatisticsDurationGuard guard(this, DataType::kHashes, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kHashesDataCF]);
       for (iter->SeekForPrev(hashes_start_data_key.Encode().ToString());
            iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Prev()) {

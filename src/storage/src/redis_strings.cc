@@ -346,7 +346,8 @@ Status Redis::Get(const Slice& key, std::string* value) {
 
 Status Redis::GetWithTTL(const Slice& key, std::string* value, int64_t* ttl) {
   value->clear();
-  Status s = db_->Get(default_read_options_, key, value);
+  BaseKey base_key(key);
+  Status s = db_->Get(default_read_options_, base_key.Encode(), value);
   if (s.ok()) {
     ParsedStringsValue parsed_strings_value(value);
     if (parsed_strings_value.IsStale()) {
@@ -355,7 +356,7 @@ Status Redis::GetWithTTL(const Slice& key, std::string* value, int64_t* ttl) {
       return Status::NotFound("Stale");
     } else {
       parsed_strings_value.StripSuffix();
-      *ttl = parsed_strings_value.timestamp();
+      *ttl = parsed_strings_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -437,7 +438,7 @@ Status Redis::Getrange(const Slice& key, int64_t start_offset, int64_t end_offse
 }
 
 Status Redis::GetrangeWithValue(const Slice& key, int64_t start_offset, int64_t end_offset,
-                                       std::string* ret, std::string* value, int64_t* ttl) {
+                                std::string* ret, std::string* value, int64_t* ttl) {
   *ret = "";
   Status s = db_->Get(default_read_options_, key, value);
   if (s.ok()) {
@@ -449,7 +450,7 @@ Status Redis::GetrangeWithValue(const Slice& key, int64_t start_offset, int64_t 
     } else {
       parsed_strings_value.StripSuffix();
       // get ttl
-      *ttl = parsed_strings_value.timestamp();
+      *ttl = parsed_strings_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -849,7 +850,7 @@ Status Redis::Setrange(const Slice& key, int64_t start_offset, const Slice& valu
       new_value = tmp.append(value.data());
       *ret = static_cast<int32_t>(new_value.length());
     } else {
-      timestamp = parsed_strings_value.timestamp();
+      timestamp = parsed_strings_value.Etime();
       if (static_cast<size_t>(start_offset) > old_value.length()) {
         old_value.resize(start_offset);
         new_value = old_value.append(value.data());

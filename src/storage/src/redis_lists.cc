@@ -447,16 +447,17 @@ Status Redis::LRangeWithTTL(const Slice& key, int64_t start, int64_t stop, std::
   read_options.snapshot = snapshot;
 
   std::string meta_value;
-  Status s = db_->Get(read_options, handles_[0], key, &meta_value);
+  BaseMetaKey base_meta_key(key);
+  Status s = db_->Get(read_options, handles_[kListsMetaCF], base_meta_key.Encode(), &meta_value);
   if (s.ok()) {
     ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
-    if (parsed_lists_meta_value.count() == 0) {
+    if (parsed_lists_meta_value.Count() == 0) {
       return Status::NotFound();
     } else if (parsed_lists_meta_value.IsStale()) {
       return Status::NotFound("Stale");
     } else {
       // ttl
-      *ttl = parsed_lists_meta_value.timestamp();
+      *ttl = parsed_lists_meta_value.Etime();
       if (*ttl == 0) {
         *ttl = -1;
       } else {
@@ -465,15 +466,11 @@ Status Redis::LRangeWithTTL(const Slice& key, int64_t start, int64_t stop, std::
         *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
       }
 
-      int32_t version = parsed_lists_meta_value.version();
-      uint64_t origin_left_index = parsed_lists_meta_value.left_index() + 1;
-      uint64_t origin_right_index = parsed_lists_meta_value.right_index() - 1;
-      uint64_t sublist_left_index  = start >= 0 ?
-                                               origin_left_index + start :
-                                               origin_right_index + start + 1;
-      uint64_t sublist_right_index = stop >= 0 ?
-                                               origin_left_index + stop :
-                                               origin_right_index + stop + 1;
+      uint64_t version = parsed_lists_meta_value.Version();
+      uint64_t origin_left_index = parsed_lists_meta_value.LeftIndex() + 1;
+      uint64_t origin_right_index = parsed_lists_meta_value.RightIndex() - 1;
+      uint64_t sublist_left_index = start >= 0 ? origin_left_index + start : origin_right_index + start + 1;
+      uint64_t sublist_right_index = stop >= 0 ? origin_left_index + stop : origin_right_index + stop + 1;
 
       if (sublist_left_index > sublist_right_index
           || sublist_left_index > origin_right_index
@@ -486,13 +483,13 @@ Status Redis::LRangeWithTTL(const Slice& key, int64_t start, int64_t stop, std::
         if (sublist_right_index > origin_right_index) {
           sublist_right_index = origin_right_index;
         }
-        rocksdb::Iterator* iter = db_->NewIterator(read_options,
-                                                   handles_[1]);
+        rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[kListsDataCF]);
         uint64_t current_index = sublist_left_index;
         ListsDataKey start_data_key(key, version, current_index);
         for (iter->Seek(start_data_key.Encode());
              iter->Valid() && current_index <= sublist_right_index;
              iter->Next(), current_index++) {
+          ParsedBaseDataValue parsed_value(iter->value());
           ret->push_back(iter->value().ToString());
         }
         delete iter;

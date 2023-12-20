@@ -8,8 +8,8 @@
 
 #include <glog/logging.h>
 
-#include "cache/include/config.h"
-#include "include/pika_define.h"
+#include "pstd/include/cache/config.h"
+#include "pstd/include/pika_define.h"
 #include "pstd/include/pstd_string.h"
 #include "pstd/include/pika_conf.h"
 #include "pstd/include/env.h"

@@ -128,8 +128,9 @@ class BaseDataFilter : public rocksdb::CompactionFilter {
 
   // Only judge by meta value ttl
   virtual rocksdb::CompactionFilter::Decision FilterBlobByKey(int level, const Slice& key,
-      std::string* new_value, std::string* skip_until) const {
+      uint64_t expire_time, std::string* new_value, std::string* skip_until) const override {
     UNUSED(level);
+    UNUSED(expire_time);
     UNUSED(new_value);
     UNUSED(skip_until);
     bool unused_value_changed;

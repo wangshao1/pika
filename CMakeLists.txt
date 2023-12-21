@@ -585,9 +585,11 @@ ExternalProject_Add(rocksdb
   ${LIBGPERF_NAME}
   ${LIBJEMALLOC_NAME}
   URL
-  https://github.com/facebook/rocksdb/archive/refs/tags/v8.3.3.tar.gz
+  https://github.com/pikiwidb/rocksdb/archive/refs/heads/feature/optimize_blob.zip
+  #https://github.com/facebook/rocksdb/archive/refs/tags/v8.3.3.tar.gz
   URL_HASH
-  MD5=2815555a2ee2d12a7081a91fb988bf24
+  #MD5=2815555a2ee2d12a7081a91fb988bf24
+  MD5=5ba2e0649e81c15dd38e0bec680047b8
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND

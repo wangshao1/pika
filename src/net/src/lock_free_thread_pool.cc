@@ -49,7 +49,7 @@ LockFreeThreadPool::LockFreeThreadPool(size_t worker_num, size_t max_queue_size,
       queue_(max_queue_size_),
       should_stop_(false) {}
 
-LockFreeThreadPool::~ThreadPool() { stop_thread_pool(); }
+LockFreeThreadPool::~LockFreeThreadPool() { stop_thread_pool(); }
 
 int LockFreeThreadPool::start_thread_pool() {
   if (!running_.load()) {
@@ -102,8 +102,8 @@ void LockFreeThreadPool::Schedule(TaskFunc func, void* arg) {
     }
   }
 
-  std::unique_lock lock(mu_);
-  wsignal_.wait(lock, [this]() { return queue_.try_enqueue(task) || should_stop(); });
+  std::unique_lock<std::mutex> lock(mu_);
+  wsignal_.wait(lock, [this, &task]() { return queue_.try_enqueue(task) || should_stop(); });
 
   if (!should_stop()) {
     rsignal_.notify_one();
@@ -124,22 +124,22 @@ void LockFreeThreadPool::runInThread() {
     int retry_cnt = 0;
     Task task;
     while (retry_cnt++ < 3 && !success) {
-      success = try_dequeue(task);
+      success = queue_.try_dequeue(task);
       wsignal_.notify_one();
       if (success) {
         break;
       }
     }
     if (!success) {
-      std::unique_lock lock(mu_);
-      rsignal_.wait(lock, [this]() { return queue_.dequeue(task) || should_stop(); });
+      std::unique_lock<std::mutex> lock(mu_);
+      rsignal_.wait(lock, [this, &task]() { return queue_.try_dequeue(task) || should_stop(); });
     }
 
     if (should_stop()) {
       break;
     }
     wsignal_.notify_one();
-    (*task.func)(arg);
+    (*task.func)(task.arg);
   }
 }
 }  // namespace net

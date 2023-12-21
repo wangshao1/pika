@@ -22,7 +22,7 @@ class LockFreeThreadPool : public pstd::noncopyable {
  public:
   class Worker {
    public:
-    explicit Worker(ThreadPool* tp) : start_(false), thread_pool_(tp){};
+    explicit Worker(LockFreeThreadPool* tp) : start_(false), thread_pool_(tp){};
     static void* WorkerMain(void* arg);
 
     int start();
@@ -31,12 +31,12 @@ class LockFreeThreadPool : public pstd::noncopyable {
    private:
     pthread_t thread_id_;
     std::atomic<bool> start_;
-    ThreadPool* const thread_pool_;
+    LockFreeThreadPool* const thread_pool_;
     std::string worker_name_;
   };
 
   explicit LockFreeThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name = "ThreadPool");
-  virtual ~ThreadPool();
+  virtual ~LockFreeThreadPool();
 
   int start_thread_pool();
   int stop_thread_pool();

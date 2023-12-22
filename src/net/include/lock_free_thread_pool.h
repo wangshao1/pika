@@ -35,7 +35,7 @@ class LockFreeThreadPool : public pstd::noncopyable {
     std::string worker_name_;
   };
 
-  explicit LockFreeThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name = "ThreadPool");
+  explicit LockFreeThreadPool(size_t worker_num, size_t max_queue_size, const std::string& thread_pool_name = "LockFreeThreadPool");
   virtual ~LockFreeThreadPool();
 
   int start_thread_pool();

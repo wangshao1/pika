@@ -41,7 +41,7 @@ int LockFreeThreadPool::Worker::stop() {
   return 0;
 }
 
-LockFreeThreadPool::LockFreeThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name)
+LockFreeThreadPool::LockFreeThreadPool(size_t worker_num, size_t max_queue_size, const std::string& thread_pool_name)
     : worker_num_(worker_num),
       max_queue_size_(max_queue_size),
       thread_pool_name_(std::move(thread_pool_name)),
@@ -94,7 +94,7 @@ void LockFreeThreadPool::Schedule(TaskFunc func, void* arg) {
   Task task{func, arg};
   int retry_cnt = 0;
   bool success = false;
-  while (retry_cnt++ < 3 && !success) {
+  while (retry_cnt++ < 100 && !success) {
     bool success = queue_.try_enqueue(task);
     if (success) {
       rsignal_.notify_one();

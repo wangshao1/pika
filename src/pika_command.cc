@@ -817,7 +817,7 @@ void Cmd::InternalProcessCommand(const std::shared_ptr<Slot>& slot, const std::s
     do_duration_ += pstd::NowMicros() - start_us;
   }
 
-  DoBinlog(sync_slot);
+  //DoBinlog(sync_slot);
 
   if (is_write()) {
     record_lock.Unlock(current_key());

@@ -37,6 +37,7 @@ class StringsFilter : public rocksdb::CompactionFilter {
     }
   }
 
+  /*
   virtual rocksdb::CompactionFilter::Decision FilterBlobByKey(int level, const Slice& key,
       uint64_t expire_time, std::string* new_value, std::string* skip_until) const override {
     int64_t unix_time;
@@ -47,6 +48,7 @@ class StringsFilter : public rocksdb::CompactionFilter {
     } 
     return CompactionFilter::Decision::kKeep;
   }
+  */
 
   const char* Name() const override { return "StringsFilter"; }
 };

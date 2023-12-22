@@ -19,10 +19,17 @@ namespace net {
 using TaskFunc = void (*)(void *);
 
 struct Task {
-  Task() = default;
+  Task() {
+    auto now = std::chrono::system_clock::now();
+    ts = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+  } 
   TaskFunc func;
   void* arg;
-  Task(TaskFunc _func, void* _arg) : func(_func), arg(_arg) {}
+  uint64_t ts;
+  Task(TaskFunc _func, void* _arg) : func(_func), arg(_arg) {
+    auto now = std::chrono::system_clock::now();
+    ts = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+  }
 };
 
 struct TimeTask {

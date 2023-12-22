@@ -3,12 +3,13 @@
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
 
+#include <sys/time.h>
+#include <utility>
+
+#include "glog/logging.h"
+
 #include "net/include/lock_free_thread_pool.h"
 #include "net/src/net_thread_name.h"
-
-#include <sys/time.h>
-
-#include <utility>
 
 namespace net {
 
@@ -94,12 +95,24 @@ void LockFreeThreadPool::Schedule(TaskFunc func, void* arg) {
   Task task{func, arg};
   int retry_cnt = 0;
   bool success = false;
+  thread_local int print_cnt = 0;
+  if (print_cnt++ % 1000 == 0) {
+    LOG(WARNING) << "queue size: " << queue_.size_approx();
+  }
   while (retry_cnt++ < 100 && !success) {
-    bool success = queue_.try_enqueue(task);
+    success = queue_.try_enqueue(task);
     if (success) {
+      auto now = std::chrono::system_clock::now();
+      uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+      /*
+      if (unow - task.ts > 1000 * 10) {
+        LOG(WARNING) << "before in queue for: " << (unow - task.ts) / 1000 << " ms";
+      }
+      */
       rsignal_.notify_one();
       return;
     }
+    LOG(WARNING) << "retry_cnt: " << retry_cnt;
   }
 
   std::unique_lock<std::mutex> lock(mu_);
@@ -123,8 +136,19 @@ void LockFreeThreadPool::runInThread() {
     bool success = false;
     int retry_cnt = 0;
     Task task;
+    /*
+    auto now1 = std::chrono::system_clock::now();
+    uint64_t unow1 = std::chrono::duration_cast<std::chrono::microseconds>(now1.time_since_epoch()).count();
+    */
     while (retry_cnt++ < 3 && !success) {
       success = queue_.try_dequeue(task);
+      /*
+      auto now = std::chrono::system_clock::now();
+      uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+      if (unow - task.ts > 1000 * 10) {
+        LOG(WARNING) << "waiting in queue for: " << (unow - task.ts) / 1000 << " ms" << " wait:" << (unow - unow1) << "us";
+      }
+      */
       wsignal_.notify_one();
       if (success) {
         break;
@@ -133,12 +157,27 @@ void LockFreeThreadPool::runInThread() {
     if (!success) {
       std::unique_lock<std::mutex> lock(mu_);
       rsignal_.wait(lock, [this, &task]() { return queue_.try_dequeue(task) || should_stop(); });
+      if (should_stop()) {
+        break;
+      }
+      /*
+      auto now = std::chrono::system_clock::now();
+      uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+      if (unow - task.ts > 1000 * 10) {
+        LOG(WARNING) << "waiting in queue for: " << (unow - task.ts) / 1000 << " ms";
+      }
+      */
+      wsignal_.notify_one();
     }
 
-    if (should_stop()) {
-      break;
+    /*
+    auto now = std::chrono::system_clock::now();
+    uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    if (unow - task.ts > 1000 * 10) {
+      LOG(WARNING) << "waiting in queue for: " << (unow - task.ts) / 1000 << " ms";
     }
-    wsignal_.notify_one();
+    */
+
     (*task.func)(task.arg);
   }
 }

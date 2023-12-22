@@ -140,6 +140,8 @@ void ThreadPool::runInThread() {
       auto now = std::chrono::system_clock::now();
       uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
+      uint64_t ts;
+
       auto [exec_time, func, arg] = time_queue_.top();
       if (unow  >= exec_time) {
         time_queue_.pop();
@@ -154,7 +156,7 @@ void ThreadPool::runInThread() {
     }
 
     if (!queue_.empty()) {
-      auto [func, arg] = queue_.front();
+      auto [func, arg, ts] = queue_.front();
       queue_.pop();
       wsignal_.notify_one();
       lock.unlock();

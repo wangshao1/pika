@@ -837,6 +837,7 @@ void Cmd::DoCommand(const std::shared_ptr<Slot>& slot, const HintKeys& hint_keys
 }
 
 void Cmd::DoBinlog(const std::shared_ptr<SyncMasterSlot>& slot) {
+  return;
   if (res().ok() && is_write() && g_pika_conf->write_binlog()) {
     std::shared_ptr<net::NetConn> conn_ptr = GetConn();
     std::shared_ptr<std::string> resp_ptr = GetResp();

@@ -115,6 +115,9 @@ session_keepalive_period = "75s"
 # Set session to be sensitive to failures. Default is false, instead of closing socket, proxy will send an error response to client.
 session_break_on_failure = false
 
+# Slowlog-log-slower-than(us), from receive command to send response, 0 is allways print slow log
+slowlog_log_slower_than = 100000
+
 # Set metrics server (such as http://localhost:28000), proxy will report json formatted metrics to specified server in a predefined period.
 metrics_report_server = ""
 metrics_report_period = "1s"
@@ -130,6 +133,9 @@ metrics_report_influxdb_database = ""
 metrics_report_statsd_server = ""
 metrics_report_statsd_period = "1s"
 metrics_report_statsd_prefix = ""
+
+# Maximum delay statistical time interval.(This value must be greater than 0.)
+max_delay_refresh_time_interval = "15s"
 `
 
 type Config struct {
@@ -176,6 +182,8 @@ type Config struct {
 	SessionKeepAlivePeriod timesize.Duration `toml:"session_keepalive_period" json:"session_keepalive_period"`
 	SessionBreakOnFailure  bool              `toml:"session_break_on_failure" json:"session_break_on_failure"`
 
+	SlowlogLogSlowerThan int64 `toml:"slowlog_log_slower_than" json:"slowlog_log_slower_than"`
+
 	MetricsReportServer           string            `toml:"metrics_report_server" json:"metrics_report_server"`
 	MetricsReportPeriod           timesize.Duration `toml:"metrics_report_period" json:"metrics_report_period"`
 	MetricsReportInfluxdbServer   string            `toml:"metrics_report_influxdb_server" json:"metrics_report_influxdb_server"`
@@ -186,6 +194,10 @@ type Config struct {
 	MetricsReportStatsdServer     string            `toml:"metrics_report_statsd_server" json:"metrics_report_statsd_server"`
 	MetricsReportStatsdPeriod     timesize.Duration `toml:"metrics_report_statsd_period" json:"metrics_report_statsd_period"`
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
+
+	MaxDelayRefreshTimeInterval timesize.Duration `toml:"max_delay_refresh_time_interval" json:"max_delay_refresh_time_interval"`
+
+	ConfigFileName string `toml:"-" json:"config_file_name"`
 }
 
 func NewDefaultConfig() *Config {
@@ -302,6 +314,10 @@ func (c *Config) Validate() error {
 		return errors.New("invalid session_keepalive_period")
 	}
 
+	if c.SlowlogLogSlowerThan < 0 {
+		return errors.New("invalid slowlog_log_slower_than")
+	}
+
 	if c.MetricsReportPeriod < 0 {
 		return errors.New("invalid metrics_report_period")
 	}
@@ -311,5 +327,10 @@ func (c *Config) Validate() error {
 	if c.MetricsReportStatsdPeriod < 0 {
 		return errors.New("invalid metrics_report_statsd_period")
 	}
+
+	if c.MaxDelayRefreshTimeInterval <= 0 {
+		return errors.New("max_delay_refresh_time_interval must be greater than 0")
+	}
+
 	return nil
 }

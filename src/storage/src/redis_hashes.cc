@@ -22,6 +22,7 @@ RedisHashes::RedisHashes(Storage* const s, const DataType& type) : Redis(s, type
 Status RedisHashes::Open(const StorageOptions& storage_options, const std::string& db_path) {
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
+  small_compaction_duration_threshold_ = storage_options.small_compaction_duration_threshold;
 
   rocksdb::Options ops(storage_options.options);
   Status s = rocksdb::DB::Open(ops, db_path, &db_);
@@ -168,7 +169,7 @@ Status RedisHashes::PKPatternMatchDel(const std::string& pattern, int32_t* ret) 
     if (static_cast<size_t>(batch.Count()) >= BATCH_DELETE_LIMIT) {
       s = db_->Write(default_write_options_, &batch);
       if (s.ok()) {
-        total_delete += batch.Count();
+        total_delete += static_cast<int32_t>( batch.Count());
         batch.Clear();
       } else {
         *ret = total_delete;
@@ -180,7 +181,7 @@ Status RedisHashes::PKPatternMatchDel(const std::string& pattern, int32_t* ret) 
   if (batch.Count() != 0U) {
     s = db_->Write(default_write_options_, &batch);
     if (s.ok()) {
-      total_delete += batch.Count();
+      total_delete += static_cast<int32_t>(batch.Count());
       batch.Clear();
     }
   }
@@ -234,6 +235,9 @@ Status RedisHashes::HDel(const Slice& key, const std::vector<std::string>& field
         }
       }
       *ret = del_cnt;
+      if (!parsed_hashes_meta_value.CheckModifyCount(-del_cnt)){
+        return Status::InvalidArgument("hash size overflow");
+      }
       parsed_hashes_meta_value.ModifyCount(-del_cnt);
       batch.Put(handles_[0], key, meta_value);
     }
@@ -295,10 +299,54 @@ Status RedisHashes::HGetall(const Slice& key, std::vector<FieldValue>* fvs) {
       version = parsed_hashes_meta_value.version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.Encode();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedHashesDataKey parsed_hashes_data_key(iter->key());
         fvs->push_back({parsed_hashes_data_key.field().ToString(), iter->value().ToString()});
+      }
+      delete iter;
+    }
+  }
+  return s;
+}
+
+Status RedisHashes::HGetallWithTTL(const Slice& key, std::vector<FieldValue>* fvs, int64_t* ttl) {
+  rocksdb::ReadOptions read_options;
+  const rocksdb::Snapshot* snapshot;
+
+  std::string meta_value;
+  int32_t version = 0;
+  ScopeSnapshot ss(db_, &snapshot);
+  read_options.snapshot = snapshot;
+  Status s = db_->Get(read_options, handles_[0], key, &meta_value);
+  if (s.ok()) {
+    ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
+    if (parsed_hashes_meta_value.count() == 0) {
+      return Status::NotFound();
+    } else if (parsed_hashes_meta_value.IsStale()) {
+      return Status::NotFound("Stale");
+    } else {
+      // ttl
+      *ttl = parsed_hashes_meta_value.timestamp();
+      if (*ttl == 0) {
+        *ttl = -1;
+      } else {
+        int64_t curtime;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
+        *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
+      }
+
+      version = parsed_hashes_meta_value.version();
+      HashesDataKey hashes_data_key(key, version, "");
+      Slice prefix = hashes_data_key.Encode();
+      auto iter = db_->NewIterator(read_options, handles_[1]);
+      for (iter->Seek(prefix);
+           iter->Valid() && iter->key().starts_with(prefix);
+           iter->Next()) {
+        ParsedHashesDataKey parsed_hashes_data_key(iter->key());
+        fvs->push_back({parsed_hashes_data_key.field().ToString(),
+                        iter->value().ToString()});
       }
       delete iter;
     }
@@ -317,6 +365,8 @@ Status RedisHashes::HIncrby(const Slice& key, const Slice& field, int64_t value,
   std::string meta_value;
 
   Status s = db_->Get(default_read_options_, handles_[0], key, &meta_value);
+  char value_buf[32] = {0};
+  char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
@@ -325,9 +375,8 @@ Status RedisHashes::HIncrby(const Slice& key, const Slice& field, int64_t value,
       parsed_hashes_meta_value.set_timestamp(0);
       batch.Put(handles_[0], key, meta_value);
       HashesDataKey hashes_data_key(key, version, field);
-      char buf[32];
-      Int64ToStr(buf, 32, value);
-      batch.Put(handles_[1], hashes_data_key.Encode(), buf);
+      Int64ToStr(value_buf, 32, value);
+      batch.Put(handles_[1], hashes_data_key.Encode(), value_buf);
       *ret = value;
     } else {
       version = parsed_hashes_meta_value.version();
@@ -342,32 +391,31 @@ Status RedisHashes::HIncrby(const Slice& key, const Slice& field, int64_t value,
           return Status::InvalidArgument("Overflow");
         }
         *ret = ival + value;
-        char buf[32];
-        Int64ToStr(buf, 32, *ret);
-        batch.Put(handles_[1], hashes_data_key.Encode(), buf);
+        Int64ToStr(value_buf, 32, *ret);
+        batch.Put(handles_[1], hashes_data_key.Encode(), value_buf);
         statistic++;
       } else if (s.IsNotFound()) {
-        char buf[32];
-        Int64ToStr(buf, 32, value);
+        Int64ToStr(value_buf, 32, value);
+        if (!parsed_hashes_meta_value.CheckModifyCount(1)){
+          return Status::InvalidArgument("hash size overflow");
+        }
         parsed_hashes_meta_value.ModifyCount(1);
         batch.Put(handles_[0], key, meta_value);
-        batch.Put(handles_[1], hashes_data_key.Encode(), buf);
+        batch.Put(handles_[1], hashes_data_key.Encode(), value_buf);
         *ret = value;
       } else {
         return s;
       }
     }
   } else if (s.IsNotFound()) {
-    char str[4];
-    EncodeFixed32(str, 1);
-    HashesMetaValue hashes_meta_value(std::string(str, sizeof(int32_t)));
+    EncodeFixed32(meta_value_buf, 1);
+    HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[0], key, hashes_meta_value.Encode());
     HashesDataKey hashes_data_key(key, version, field);
 
-    char buf[32];
-    Int64ToStr(buf, 32, value);
-    batch.Put(handles_[1], hashes_data_key.Encode(), buf);
+    Int64ToStr(value_buf, 32, value);
+    batch.Put(handles_[1], hashes_data_key.Encode(), value_buf);
     *ret = value;
   } else {
     return s;
@@ -393,6 +441,7 @@ Status RedisHashes::HIncrbyfloat(const Slice& key, const Slice& field, const Sli
   }
 
   Status s = db_->Get(default_read_options_, handles_[0], key, &meta_value);
+  char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
@@ -423,6 +472,9 @@ Status RedisHashes::HIncrbyfloat(const Slice& key, const Slice& field, const Sli
         statistic++;
       } else if (s.IsNotFound()) {
         LongDoubleToStr(long_double_by, new_value);
+        if (!parsed_hashes_meta_value.CheckModifyCount(1)){
+          return Status::InvalidArgument("hash size overflow");
+        }
         parsed_hashes_meta_value.ModifyCount(1);
         batch.Put(handles_[0], key, meta_value);
         batch.Put(handles_[1], hashes_data_key.Encode(), *new_value);
@@ -431,9 +483,8 @@ Status RedisHashes::HIncrbyfloat(const Slice& key, const Slice& field, const Sli
       }
     }
   } else if (s.IsNotFound()) {
-    char str[4];
-    EncodeFixed32(str, 1);
-    HashesMetaValue hashes_meta_value(std::string(str, sizeof(int32_t)));
+    EncodeFixed32(meta_value_buf, 1);
+    HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[0], key, hashes_meta_value.Encode());
 
@@ -467,6 +518,7 @@ Status RedisHashes::HKeys(const Slice& key, std::vector<std::string>* fields) {
       version = parsed_hashes_meta_value.version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.Encode();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         ParsedHashesDataKey parsed_hashes_data_key(iter->key());
@@ -559,11 +611,15 @@ Status RedisHashes::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) 
   int32_t version = 0;
   std::string meta_value;
   Status s = db_->Get(default_read_options_, handles_[0], key, &meta_value);
+  char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
       version = parsed_hashes_meta_value.InitialMetaValue();
-      parsed_hashes_meta_value.set_count(filtered_fvs.size());
+      if (!parsed_hashes_meta_value.check_set_count(static_cast<int32_t>(filtered_fvs.size()))) {
+        return Status::InvalidArgument("hash size overflow");
+      }
+      parsed_hashes_meta_value.set_count(static_cast<int32_t>(filtered_fvs.size()));
       batch.Put(handles_[0], key, meta_value);
       for (const auto& fv : filtered_fvs) {
         HashesDataKey hashes_data_key(key, version, fv.field);
@@ -586,13 +642,15 @@ Status RedisHashes::HMSet(const Slice& key, const std::vector<FieldValue>& fvs) 
           return s;
         }
       }
+      if (!parsed_hashes_meta_value.CheckModifyCount(count)){
+        return Status::InvalidArgument("hash size overflow");
+      }
       parsed_hashes_meta_value.ModifyCount(count);
       batch.Put(handles_[0], key, meta_value);
     }
   } else if (s.IsNotFound()) {
-    char str[4];
-    EncodeFixed32(str, filtered_fvs.size());
-    HashesMetaValue hashes_meta_value(std::string(str, sizeof(int32_t)));
+    EncodeFixed32(meta_value_buf, filtered_fvs.size());
+    HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[0], key, hashes_meta_value.Encode());
     for (const auto& fv : filtered_fvs) {
@@ -613,6 +671,7 @@ Status RedisHashes::HSet(const Slice& key, const Slice& field, const Slice& valu
   uint32_t statistic = 0;
   std::string meta_value;
   Status s = db_->Get(default_read_options_, handles_[0], key, &meta_value);
+  char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
@@ -636,6 +695,9 @@ Status RedisHashes::HSet(const Slice& key, const Slice& field, const Slice& valu
           statistic++;
         }
       } else if (s.IsNotFound()) {
+        if (!parsed_hashes_meta_value.CheckModifyCount(1)){
+          return Status::InvalidArgument("hash size overflow");
+        }
         parsed_hashes_meta_value.ModifyCount(1);
         batch.Put(handles_[0], key, meta_value);
         batch.Put(handles_[1], hashes_data_key.Encode(), value);
@@ -645,9 +707,8 @@ Status RedisHashes::HSet(const Slice& key, const Slice& field, const Slice& valu
       }
     }
   } else if (s.IsNotFound()) {
-    char str[4];
-    EncodeFixed32(str, 1);
-    HashesMetaValue meta_value(Slice(str, sizeof(int32_t)));
+    EncodeFixed32(meta_value_buf, 1);
+    HashesMetaValue meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = meta_value.UpdateVersion();
     batch.Put(handles_[0], key, meta_value.Encode());
     HashesDataKey data_key(key, version, field);
@@ -668,6 +729,7 @@ Status RedisHashes::HSetnx(const Slice& key, const Slice& field, const Slice& va
   int32_t version = 0;
   std::string meta_value;
   Status s = db_->Get(default_read_options_, handles_[0], key, &meta_value);
+  char meta_value_buf[4] = {0};
   if (s.ok()) {
     ParsedHashesMetaValue parsed_hashes_meta_value(&meta_value);
     if (parsed_hashes_meta_value.IsStale() || parsed_hashes_meta_value.count() == 0) {
@@ -685,6 +747,9 @@ Status RedisHashes::HSetnx(const Slice& key, const Slice& field, const Slice& va
       if (s.ok()) {
         *ret = 0;
       } else if (s.IsNotFound()) {
+        if (!parsed_hashes_meta_value.CheckModifyCount(1)){
+          return Status::InvalidArgument("hash size overflow");
+        }
         parsed_hashes_meta_value.ModifyCount(1);
         batch.Put(handles_[0], key, meta_value);
         batch.Put(handles_[1], hashes_data_key.Encode(), value);
@@ -694,9 +759,8 @@ Status RedisHashes::HSetnx(const Slice& key, const Slice& field, const Slice& va
       }
     }
   } else if (s.IsNotFound()) {
-    char str[4];
-    EncodeFixed32(str, 1);
-    HashesMetaValue hashes_meta_value(std::string(str, sizeof(int32_t)));
+    EncodeFixed32(meta_value_buf, 1);
+    HashesMetaValue hashes_meta_value(Slice(meta_value_buf, sizeof(int32_t)));
     version = hashes_meta_value.UpdateVersion();
     batch.Put(handles_[0], key, hashes_meta_value.Encode());
     HashesDataKey hashes_data_key(key, version, field);
@@ -727,6 +791,7 @@ Status RedisHashes::HVals(const Slice& key, std::vector<std::string>* values) {
       version = parsed_hashes_meta_value.version();
       HashesDataKey hashes_data_key(key, version, "");
       Slice prefix = hashes_data_key.Encode();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       auto iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(prefix); iter->Valid() && iter->key().starts_with(prefix); iter->Next()) {
         values->push_back(iter->value().ToString());
@@ -741,7 +806,7 @@ Status RedisHashes::HStrlen(const Slice& key, const Slice& field, int32_t* len) 
   std::string value;
   Status s = HGet(key, field, &value);
   if (s.ok()) {
-    *len = value.size();
+    *len = static_cast<int32_t>(value.size());
   } else {
     *len = 0;
   }
@@ -789,6 +854,7 @@ Status RedisHashes::HScan(const Slice& key, int64_t cursor, const std::string& p
       HashesDataKey hashes_data_prefix(key, version, sub_field);
       HashesDataKey hashes_start_data_key(key, version, start_point);
       std::string prefix = hashes_data_prefix.Encode().ToString();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {
@@ -839,6 +905,7 @@ Status RedisHashes::HScanx(const Slice& key, const std::string& start_field, con
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, start_field);
       std::string prefix = hashes_data_prefix.Encode().ToString();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(hashes_start_data_key.Encode()); iter->Valid() && rest > 0 && iter->key().starts_with(prefix);
            iter->Next()) {
@@ -895,6 +962,7 @@ Status RedisHashes::PKHScanRange(const Slice& key, const Slice& field_start, con
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, version, field_start);
       std::string prefix = hashes_data_prefix.Encode().ToString();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->Seek(start_no_limit ? prefix : hashes_start_data_key.Encode());
            iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Next()) {
@@ -955,6 +1023,7 @@ Status RedisHashes::PKHRScanRange(const Slice& key, const Slice& field_start, co
       HashesDataKey hashes_data_prefix(key, version, Slice());
       HashesDataKey hashes_start_data_key(key, start_key_version, start_key_field);
       std::string prefix = hashes_data_prefix.Encode().ToString();
+      KeyStatisticsDurationGuard guard(this, key.ToString());
       rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
       for (iter->SeekForPrev(hashes_start_data_key.Encode().ToString());
            iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Prev()) {
@@ -1285,7 +1354,7 @@ void RedisHashes::ScanDatabase() {
   ScopeSnapshot ss(db_, &snapshot);
   iterator_options.snapshot = snapshot;
   iterator_options.fill_cache = false;
-  int32_t current_time = time(nullptr);
+  auto current_time = static_cast<int32_t>(time(nullptr));
 
   LOG(INFO) << "***************Hashes Meta Data***************";
   auto meta_iter = db_->NewIterator(iterator_options, handles_[0]);

@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,9 +17,10 @@ const (
 )
 
 type ParseOption struct {
-	Version  *semver.Version
-	Extracts map[string]string
-	Info     string
+	Version       *semver.Version
+	Extracts      map[string]string
+	ExtractsProxy map[string][]int64
+	Info          string
 }
 
 type Parser interface {
@@ -109,7 +112,7 @@ func (p *regexParser) Parse(m MetricMeta, c Collector, opt ParseOption) {
 
 	matchMaps := p.regMatchesToMap(s)
 	if len(matchMaps) == 0 {
-		log.Warnf("regexParser::Parse reg find sub match nil. name:%s text:%s", p.name, s)
+		log.Warnf("regexParser::Parse reg find sub match nil. name:%s", p.name)
 	}
 
 	extracts := make(map[string]string)
@@ -133,7 +136,7 @@ func (p *regexParser) regMatchesToMap(s string) []map[string]string {
 
 	multiMatches := p.reg.FindAllStringSubmatch(s, -1)
 	if len(multiMatches) == 0 {
-		log.Errorf("regexParser::regMatchesToMap reg find sub match nil. name:%s text:%s", p.name, s)
+		log.Errorf("regexParser::regMatchesToMap reg find sub match nil. name:%s", p.name)
 		return nil
 	}
 
@@ -210,7 +213,7 @@ func (p *timeParser) Parse(m MetricMeta, c Collector, opt ParseOption) {
 			} else {
 				t, err := convertTimeToUnix(v)
 				if err != nil {
-                    log.Warnf("time is '0' and cannot be parsed", err)
+					log.Warnf("time is '0' and cannot be parsed", err)
 				}
 				metric.Value = float64(t)
 			}
@@ -240,9 +243,9 @@ func convertToFloat64(s string) float64 {
 	s = strings.ToLower(s)
 
 	switch s {
-	case "yes", "up", "online":
+	case "yes", "up", "online", "true":
 		return 1
-	case "no", "down", "offline", "null":
+	case "no", "down", "offline", "null", "false":
 		return 0
 	}
 
@@ -261,10 +264,102 @@ func mustNewVersionConstraint(version string) *semver.Constraints {
 	return c
 }
 
+const TimeLayout = "2006-01-02 15:04:05"
+
 func convertTimeToUnix(ts string) (int64, error) {
-	t, err := time.Parse(time.RFC3339, ts)
+	t, err := time.Parse(TimeLayout, ts)
 	if err != nil {
-		return 0, err
+		log.Warnf("format time failed, ts: %s, err: %v", ts, err)
+		return 0, nil
 	}
 	return t.Unix(), nil
+}
+
+type proxyParser struct{}
+
+func (p *proxyParser) Parse(m MetricMeta, c Collector, opt ParseOption) {
+	m.Lookup(func(m MetaData) {
+		for opstr, v := range opt.ExtractsProxy {
+			metric := Metric{
+				MetaData:    m,
+				LabelValues: make([]string, len(m.Labels)),
+				Value:       defaultValue,
+			}
+
+			for i := 0; i < len(m.Labels)-1; i++ {
+				labelValue, ok := findInMap(m.Labels[i], opt.Extracts)
+				if !ok {
+					log.Debugf("normalParser::Parse not found label value. metricName:%s labelName:%s",
+						m.Name, m.Labels[i])
+				}
+
+				metric.LabelValues[i] = labelValue
+			}
+			metric.LabelValues[len(m.Labels)-1] = opstr
+
+			switch m.ValueName {
+			case "calls":
+				metric.Value = convertToFloat64(strconv.FormatInt(v[0], 10))
+			case "usecs_percall":
+				metric.Value = convertToFloat64(strconv.FormatInt(v[1], 10))
+			case "fails":
+				metric.Value = convertToFloat64(strconv.FormatInt(v[2], 10))
+			case "max_delay":
+				metric.Value = convertToFloat64(strconv.FormatInt(v[3], 10))
+			}
+
+			if err := c.Collect(metric); err != nil {
+				log.Errorf("proxyParser::Parse metric collect failed. metric:%#v err:%s",
+					m, m.ValueName)
+			}
+		}
+	})
+
+}
+
+func StructToMap(obj interface{}) (map[string]string, map[string][]int64, error) {
+	result := make(map[string]string)
+	cmdResult := make(map[string][]int64)
+	objValue := reflect.ValueOf(obj)
+	objType := objValue.Type()
+
+	for i := 0; i < objValue.NumField(); i++ {
+		field := objValue.Field(i)
+		fieldType := objType.Field(i)
+		jsonName := fieldType.Tag.Get("json")
+		if jsonName == "" {
+			jsonName = fieldType.Name
+		}
+		value := field.Interface()
+
+		if field.Kind() == reflect.Struct {
+			subMap, subCmdMap, _ := StructToMap(value)
+			for k, v := range subMap {
+				result[strings.ToLower(jsonName+"_"+k)] = v
+			}
+			for k, v := range subCmdMap {
+				if v != nil {
+					for index := range v {
+						cmdResult[k] = append(cmdResult[k], v[index])
+					}
+				}
+			}
+		} else if field.Kind() == reflect.Slice && field.Len() > 0 {
+			for j := 0; j < field.Len(); j++ {
+				elemType := field.Index(j).Type()
+				elemValue := field.Index(j)
+				if elemType.Kind() == reflect.Struct && elemValue.NumField() > 0 {
+					var key string = elemValue.Field(0).String()
+					for p := 1; p < elemValue.NumField(); p++ {
+						cmdResult[key] = append(cmdResult[key], elemValue.Field(p).Int())
+					}
+				} else {
+					result[strings.ToLower(jsonName)] = fmt.Sprintf("%v", value)
+				}
+			}
+		} else {
+			result[strings.ToLower(jsonName)] = fmt.Sprintf("%v", value)
+		}
+	}
+	return result, cmdResult, nil
 }

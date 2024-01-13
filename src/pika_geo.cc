@@ -78,8 +78,8 @@ void GeoPosCmd::DoInitial() {
 }
 
 void GeoPosCmd::Do(std::shared_ptr<Slot> slot) {
-  double score;
-  res_.AppendArrayLen(members_.size());
+  double score = 0.0;
+  res_.AppendArrayLenUint64(members_.size());
   for (const auto& member : members_) {
     rocksdb::Status s = slot->db()->ZScore(key_, member, &score);
     if (s.ok()) {
@@ -153,8 +153,8 @@ void GeoDistCmd::DoInitial() {
 }
 
 void GeoDistCmd::Do(std::shared_ptr<Slot> slot) {
-  double first_score;
-  double second_score;
+  double first_score = 0.0;
+  double second_score = 0.0;
   double first_xy[2];
   double second_xy[2];
   rocksdb::Status s = slot->db()->ZScore(key_, first_pos_, &first_score);
@@ -184,8 +184,8 @@ void GeoDistCmd::Do(std::shared_ptr<Slot> slot) {
   double distance = geohashGetDistance(first_xy[0], first_xy[1], second_xy[0], second_xy[1]);
   distance = length_converter(distance, unit_);
   char buf[32];
-  sprintf(buf, "%.4f", distance);
-  res_.AppendStringLen(strlen(buf));
+  snprintf(buf, sizeof(buf), "%.4f", distance);
+  res_.AppendStringLenUint64(strlen(buf));
   res_.AppendContent(buf);
 }
 
@@ -204,9 +204,9 @@ void GeoHashCmd::DoInitial() {
 
 void GeoHashCmd::Do(std::shared_ptr<Slot> slot) {
   const char* geoalphabet = "0123456789bcdefghjkmnpqrstuvwxyz";
-  res_.AppendArrayLen(members_.size());
+  res_.AppendArrayLenUint64(members_.size());
   for (const auto& member : members_) {
-    double score;
+    double score = 0.0;
     rocksdb::Status s = slot->db()->ZScore(key_, member, &score);
     if (s.ok()) {
       double xy[2];
@@ -223,7 +223,7 @@ void GeoHashCmd::Do(std::shared_ptr<Slot> slot) {
       char buf[12];
       int i;
       for (i = 0; i < 11; i++) {
-        int idx = (encode_hash.bits >> (52 - ((i + 1) * 5))) & 0x1f;
+        uint64_t idx = (encode_hash.bits >> (52 - ((i + 1) * 5))) & 0x1f;
         buf[i] = geoalphabet[idx];
       }
       buf[11] = '\0';
@@ -282,7 +282,7 @@ static void GetAllNeighbors(const std::shared_ptr<Slot>& slot, std::string& key,
   // For each neighbor, get all the matching
   // members and add them to the potential result list.
   std::vector<NeighborPoint> result;
-  int last_processed = 0;
+  size_t last_processed = 0;
   for (size_t i = 0; i < sizeof(neighbors) / sizeof(*neighbors); i++) {
     GeoHashFix52Bits min;
     GeoHashFix52Bits max;
@@ -307,7 +307,7 @@ static void GetAllNeighbors(const std::shared_ptr<Slot>& slot, std::string& key,
     // Insert into result only if the point is within the search area.
     for (auto & score_member : score_members) {
       double xy[2];
-      double real_distance;
+      double real_distance = 0.0;
       GeoHashBits hash = {.bits = static_cast<uint64_t>(score_member.score), .step = GEO_STEP_MAX};
       geohashDecodeToLongLatWGS84(hash, xy);
       if (geohashGetDistanceIfInRadiusWGS84(longitude, latitude, xy[0], xy[1], distance, &real_distance) != 0) {
@@ -323,9 +323,9 @@ static void GetAllNeighbors(const std::shared_ptr<Slot>& slot, std::string& key,
 
   // If using the count opiton
   if (range.count) {
-    count_limit = static_cast<int>(result.size()) < range.count_limit ? result.size() : range.count_limit;
+    count_limit = static_cast<int32_t>(result.size() < range.count_limit ? result.size() : range.count_limit);
   } else {
-    count_limit = result.size();
+    count_limit = static_cast<int32_t>(result.size());
   }
   // If using sort option
   if (range.sort == Asc) {
@@ -360,7 +360,7 @@ static void GetAllNeighbors(const std::shared_ptr<Slot>& slot, std::string& key,
         res.AppendArrayLen(range.option_num + 1);
       }
       // Member
-      res.AppendStringLen(result[i].member.size());
+      res.AppendStringLenUint64(result[i].member.size());
       res.AppendContent(result[i].member);
 
       // If using withdist option
@@ -371,13 +371,13 @@ static void GetAllNeighbors(const std::shared_ptr<Slot>& slot, std::string& key,
         double distance = geohashGetDistance(longitude, latitude, xy[0], xy[1]);
         distance = length_converter(distance, range.unit);
         char buf[32];
-        sprintf(buf, "%.4f", distance);
-        res.AppendStringLen(strlen(buf));
+        snprintf(buf, sizeof(buf), "%.4f", distance);
+        res.AppendStringLenUint64(strlen(buf));
         res.AppendContent(buf);
       }
       // If using withhash option
       if (range.withhash) {
-        res.AppendInteger(result[i].score);
+        res.AppendInteger(static_cast<int64_t>(result[i].score));
       }
       // If using withcoord option
       if (range.withcoord) {
@@ -542,7 +542,7 @@ void GeoRadiusByMemberCmd::DoInitial() {
 }
 
 void GeoRadiusByMemberCmd::Do(std::shared_ptr<Slot> slot) {
-  double score;
+  double score = 0.0;
   rocksdb::Status s = slot->db()->ZScore(key_, range_.member, &score);
   if (s.ok()) {
     double xy[2];

@@ -158,32 +158,12 @@ Status SyncProgress::Update(const std::string& ip, int port, const LogOffset& st
     match_index_[ip + std::to_string(port)] = acked_offset;
   }
 
-  // if consensus_level == 0 LogOffset() return
-  *committed_index = InternalCalCommittedIndex(GetAllMatchIndex());
   return Status::OK();
 }
 
 int SyncProgress::SlaveSize() {
   std::shared_lock l(rwlock_);
-  return slaves_.size();
-}
-
-LogOffset SyncProgress::InternalCalCommittedIndex(const std::unordered_map<std::string, LogOffset>& match_index) {
-  int consensus_level = g_pika_conf->consensus_level();
-  if (consensus_level == 0) {
-    return {};
-  }
-  if (static_cast<int>(match_index.size()) < consensus_level) {
-    return {};
-  }
-  std::vector<LogOffset> offsets;
-  offsets.reserve(match_index.size());
-for (const auto& index : match_index) {
-    offsets.push_back(index.second);
-  }
-  std::sort(offsets.begin(), offsets.end());
-  LogOffset offset = offsets[offsets.size() - consensus_level];
-  return offset;
+  return static_cast<int32_t>(slaves_.size());
 }
 
 /* MemLog */
@@ -248,7 +228,7 @@ int MemLog::InternalFindLogByLogicIndex(const LogOffset& offset) {
       return -1;
     }
     if (logs_[i].offset.l_offset.index == offset.l_offset.index) {
-      return i;
+      return static_cast<int32_t>(i);
     }
   }
   return -1;
@@ -260,7 +240,7 @@ int MemLog::InternalFindLogByBinlogOffset(const LogOffset& offset) {
       return -1;
     }
     if (logs_[i].offset == offset) {
-      return i;
+      return static_cast<int32_t>(i);
     }
   }
   return -1;
@@ -275,9 +255,6 @@ ConsensusCoordinator::ConsensusCoordinator(const std::string& db_name, uint32_t 
   context_ = std::make_shared<Context>(log_path + kContext);
   stable_logger_ = std::make_shared<StableLog>(db_name, slot_id, log_path);
   mem_logger_ = std::make_shared<MemLog>();
-  if (g_pika_conf->consensus_level() != 0) {
-    Init();
-  }
 }
 
 ConsensusCoordinator::~ConsensusCoordinator() = default;
@@ -378,30 +355,12 @@ Status ConsensusCoordinator::ProposeLog(const std::shared_ptr<Cmd>& cmd_ptr, std
 
   LogOffset log_offset;
 
-  stable_logger_->Logger()->Lock();
-  // build BinlogItem
-  uint32_t filenum = 0;
-  uint32_t term = 0;
-  uint64_t offset = 0;
-  uint64_t logic_id = 0;
-  Status s = stable_logger_->Logger()->GetProducerStatus(&filenum, &offset, &term, &logic_id);
-  if (!s.ok()) {
-    stable_logger_->Logger()->Unlock();
-    return s;
-  }
   BinlogItem item;
-  item.set_exec_time(time(nullptr));
-  item.set_term_id(term);
-  item.set_logic_id(logic_id + 1);
-  item.set_filenum(filenum);
-  item.set_offset(offset);
   // make sure stable log and mem log consistent
-  s = InternalAppendLog(item, cmd_ptr, std::move(conn_ptr), std::move(resp_ptr));
+  Status s = InternalAppendLog(item, cmd_ptr, std::move(conn_ptr), std::move(resp_ptr));
   if (!s.ok()) {
-    stable_logger_->Logger()->Unlock();
     return s;
   }
-  stable_logger_->Logger()->Unlock();
 
   g_pika_server->SignalAuxiliary();
   return Status::OK();
@@ -419,10 +378,6 @@ Status ConsensusCoordinator::InternalAppendLog(const BinlogItem& item, const std
   if (!s.ok()) {
     return s;
   }
-  if (g_pika_conf->consensus_level() == 0) {
-    return Status::OK();
-  }
-  mem_logger_->AppendLog(MemLog::LogItem(log_offset, cmd_ptr, std::move(conn_ptr), std::move(resp_ptr)));
   return Status::OK();
 }
 
@@ -435,38 +390,9 @@ Status ConsensusCoordinator::ProcessLeaderLog(const std::shared_ptr<Cmd>& cmd_pt
     return Status::OK();
   }
 
-  stable_logger_->Logger()->Lock();
   Status s = InternalAppendLog(attribute, cmd_ptr, nullptr, nullptr);
-  stable_logger_->Logger()->Unlock();
 
-  if (g_pika_conf->consensus_level() == 0) {
-    InternalApplyFollower(MemLog::LogItem(LogOffset(), cmd_ptr, nullptr, nullptr));
-    return Status::OK();
-  }
-
-  return Status::OK();
-}
-
-Status ConsensusCoordinator::ProcessLocalUpdate(const LogOffset& leader_commit) {
-  if (g_pika_conf->consensus_level() == 0) {
-    return Status::OK();
-  }
-
-  LogOffset last_index = mem_logger_->last_offset();
-  LogOffset committed_index = last_index < leader_commit ? last_index : leader_commit;
-
-  LogOffset updated_committed_index;
-  bool need_update = false;
-  {
-    std::lock_guard l(index_mu_);
-    need_update = InternalUpdateCommittedIndex(committed_index, &updated_committed_index);
-  }
-  if (need_update) {
-    Status s = ScheduleApplyFollowerLog(updated_committed_index);
-    if (!s.ok()) {
-      return s;
-    }
-  }
+  InternalApplyFollower(MemLog::LogItem(LogOffset(), cmd_ptr, nullptr, nullptr));
   return Status::OK();
 }
 
@@ -478,53 +404,13 @@ Status ConsensusCoordinator::UpdateSlave(const std::string& ip, int port, const 
     return s;
   }
 
-  if (g_pika_conf->consensus_level() == 0) {
-    return Status::OK();
-  }
-
-  // do not commit log which is not current term log
-  if (committed_index.l_offset.term != term()) {
-    LOG_EVERY_N(INFO, 1000) << "Will not commit log term which is not equals to current term"  // NOLINT
-                            << " To updated committed_index" << committed_index.ToString() << " current term " << term()
-                            << " from " << ip << " " << port << " start " << start.ToString() << " end "
-                            << end.ToString();
-    return Status::OK();
-  }
-
-  LogOffset updated_committed_index;
-  bool need_update = false;
-  {
-    std::lock_guard l(index_mu_);
-    need_update = InternalUpdateCommittedIndex(committed_index, &updated_committed_index);
-  }
-  if (need_update) {
-    s = ScheduleApplyLog(updated_committed_index);
-    // updateslave could be invoked by many thread
-    // not found means a late offset pass in ScheduleApplyLog
-    // an early offset is not found
-    if (!s.ok() && !s.IsNotFound()) {
-      return s;
-    }
-  }
-
   return Status::OK();
-}
-
-bool ConsensusCoordinator::InternalUpdateCommittedIndex(const LogOffset& slave_committed_index,
-                                                        LogOffset* updated_committed_index) {
-  if (slave_committed_index <= committed_index_) {
-    return false;
-  }
-  committed_index_ = slave_committed_index;
-  *updated_committed_index = slave_committed_index;
-  return true;
 }
 
 Status ConsensusCoordinator::InternalAppendBinlog(const BinlogItem& item, const std::shared_ptr<Cmd>& cmd_ptr,
                                                   LogOffset* log_offset) {
-  std::string binlog =
-      cmd_ptr->ToBinlog(item.exec_time(), item.term_id(), item.logic_id(), item.filenum(), item.offset());
-  Status s = stable_logger_->Logger()->Put(binlog);
+  std::string content = cmd_ptr->ToRedisProtocol();
+  Status s = stable_logger_->Logger()->Put(content);
   if (!s.ok()) {
     std::string db_name = cmd_ptr->db_name().empty() ? g_pika_conf->default_db() : cmd_ptr->db_name();
     std::shared_ptr<DB> db = g_pika_server->GetDB(db_name);
@@ -942,7 +828,7 @@ Status ConsensusCoordinator::FollowerNegotiate(const std::vector<LogOffset>& hin
   }
 
   LogOffset committed = committed_index();
-  for (int i = hints.size() - 1; i >= 0; i--) {
+  for (size_t i = hints.size() - 1; i >= 0; i--) {
     if (hints[i].l_offset.index < committed.l_offset.index) {
       return Status::Corruption("hints less than committed index");
     }

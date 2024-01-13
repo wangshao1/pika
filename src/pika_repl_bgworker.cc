@@ -75,7 +75,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
   }
 
   // find the last not keepalive binlogsync
-  for (int i = index->size() - 1; i >= 0; i--) {
+  for (int i = static_cast<int>(index->size() - 1); i >= 0; i--) {
     const InnerMessage::InnerResponse::BinlogSync& binlog_res = res->binlog_sync((*index)[i]);
     if (!binlog_res.binlog().empty()) {
       ParseBinlogOffset(binlog_res.binlog_offset(), &pb_end);
@@ -138,8 +138,8 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     }
   }
 
-  for (size_t i = 0; i < index->size(); ++i) {
-    const InnerMessage::InnerResponse::BinlogSync& binlog_res = res->binlog_sync((*index)[i]);
+  for (int i : *index) {
+    const InnerMessage::InnerResponse::BinlogSync& binlog_res = res->binlog_sync(i);
     // if pika are not current a slave or Slot not in
     // BinlogSync state, we drop remain write binlog task
     if (((g_pika_server->role() & PIKA_ROLE_SLAVE) == 0) ||
@@ -183,7 +183,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     LogOffset leader_commit;
     ParseBinlogOffset(res->consensus_meta().commit(), &leader_commit);
     // Update follower commit && apply
-    slot->ConsensusProcessLocalUpdate(leader_commit);
+    return;
   }
 
   LogOffset ack_end;
@@ -205,13 +205,12 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
 int PikaReplBgWorker::HandleWriteBinlog(net::RedisParser* parser, const net::RedisCmdArgsType& argv) {
   std::string opt = argv[0];
   auto worker = static_cast<PikaReplBgWorker*>(parser->data);
-
   // Monitor related
   std::string monitor_message;
   if (g_pika_server->HasMonitorClients()) {
     std::string db_name = worker->db_name_.substr(2);
     std::string monitor_message =
-        std::to_string(1.0 * pstd::NowMicros() / 1000000) + " [" + db_name + " " + worker->ip_port_ + "]";
+        std::to_string(static_cast<double>(pstd::NowMicros()) / 1000000) + " [" + db_name + " " + worker->ip_port_ + "]";
     for (const auto& item : argv) {
       monitor_message += " " + pstd::ToRead(item);
     }
@@ -256,35 +255,35 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
   }
   std::shared_ptr<Slot> slot = g_pika_server->GetDBSlotById(db_name, slot_id);
   // Add read lock for no suspend command
-  if (!c_ptr->is_suspend()) {
+  if (!c_ptr->IsSuspend()) {
     slot->DbRWLockReader();
   }
-
-  c_ptr->Do(slot);
-
-  if (!c_ptr->is_suspend()) {
+  if (c_ptr->IsNeedCacheDo()
+      && PIKA_CACHE_NONE != g_pika_conf->cache_model()
+      && slot->cache()->CacheStatus() == PIKA_CACHE_STATUS_OK) {
+    if (c_ptr->is_write()) {
+      c_ptr->DoThroughDB(slot);
+      if (c_ptr->IsNeedUpdateCache()) {
+        c_ptr->DoUpdateCache(slot);
+      }
+    } else {
+      LOG(WARNING) << "This branch is not impossible reach";
+    }
+  } else {
+    c_ptr->Do(slot);
+  }
+  if (!c_ptr->IsSuspend()) {
     slot->DbRWUnLock();
   }
 
   if (g_pika_conf->slowlog_slower_than() >= 0) {
-    int32_t start_time = start_us / 1000000;
-    int64_t duration = pstd::NowMicros() - start_us;
+    auto start_time = static_cast<int32_t>(start_us / 1000000);
+    auto duration = static_cast<int64_t>(pstd::NowMicros() - start_us);
     if (duration > g_pika_conf->slowlog_slower_than()) {
       g_pika_server->SlowlogPushEntry(argv, start_time, duration);
       if (g_pika_conf->slowlog_write_errorlog()) {
         LOG(ERROR) << "command: " << argv[0] << ", start_time(s): " << start_time << ", duration(us): " << duration;
       }
     }
-  }
-
-
-  if (g_pika_conf->consensus_level() != 0) {
-    std::shared_ptr<SyncMasterSlot> slot =
-        g_pika_rm->GetSyncMasterSlotByName(SlotInfo(db_name, slot_id));
-    if (!slot) {
-      LOG(WARNING) << "Sync Master Slot not exist " << db_name << slot_id;
-      return;
-    }
-    slot->ConsensusUpdateAppliedIndex(offset);
   }
 }

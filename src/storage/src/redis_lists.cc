@@ -26,6 +26,7 @@ RedisLists::RedisLists(Storage* const s, const DataType& type) : Redis(s, type) 
 Status RedisLists::Open(const StorageOptions& storage_options, const std::string& db_path) {
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
+  small_compaction_duration_threshold_ = storage_options.small_compaction_duration_threshold;
 
   rocksdb::Options ops(storage_options.options);
   Status s = rocksdb::DB::Open(ops, db_path, &db_);
@@ -175,7 +176,7 @@ Status RedisLists::PKPatternMatchDel(const std::string& pattern, int32_t* ret) {
     if (static_cast<size_t>(batch.Count()) >= BATCH_DELETE_LIMIT) {
       s = db_->Write(default_write_options_, &batch);
       if (s.ok()) {
-        total_delete += batch.Count();
+        total_delete += static_cast<int32_t>(batch.Count());
         batch.Clear();
       } else {
         *ret = total_delete;
@@ -187,7 +188,7 @@ Status RedisLists::PKPatternMatchDel(const std::string& pattern, int32_t* ret) {
   if (batch.Count() != 0U) {
     s = db_->Write(default_write_options_, &batch);
     if (s.ok()) {
-      total_delete += batch.Count();
+      total_delete += static_cast<int32_t>(batch.Count());
       batch.Clear();
     }
   }
@@ -245,13 +246,13 @@ Status RedisLists::LInsert(const Slice& key, const BeforeOrAfter& before_or_afte
     } else {
       bool find_pivot = false;
       uint64_t pivot_index = 0;
-      uint32_t version = parsed_lists_meta_value.version();
+      int32_t version = parsed_lists_meta_value.version();
       uint64_t current_index = parsed_lists_meta_value.left_index() + 1;
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[1]);
       ListsDataKey start_data_key(key, version, current_index);
       for (iter->Seek(start_data_key.Encode()); iter->Valid() && current_index < parsed_lists_meta_value.right_index();
            iter->Next(), current_index++) {
-        if (strcmp(iter->value().ToString().data(), pivot.data()) == 0) {
+        if (iter->value() == Slice(pivot)) {
           find_pivot = true;
           pivot_index = current_index;
           break;
@@ -315,7 +316,7 @@ Status RedisLists::LInsert(const Slice& key, const BeforeOrAfter& before_or_afte
         batch.Put(handles_[0], key, meta_value);
         ListsDataKey lists_target_key(key, version, target_index);
         batch.Put(handles_[1], lists_target_key.Encode(), value);
-        *ret = parsed_lists_meta_value.count();
+        *ret = static_cast<int32_t>(parsed_lists_meta_value.count());
         return db_->Write(default_write_options_, &batch);
       }
     }
@@ -359,10 +360,10 @@ Status RedisLists::LPop(const Slice& key, int64_t count, std::vector<std::string
     } else if (parsed_lists_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t size=parsed_lists_meta_value.count();
+      auto size = static_cast<int64_t>(parsed_lists_meta_value.count());
       int32_t version = parsed_lists_meta_value.version();
       int32_t start_index = 0;
-      int32_t stop_index = count<=size?count-1:size-1;
+      auto stop_index = static_cast<int32_t>(count<=size?count-1:size-1);
       int32_t cur_index = 0;
       ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.left_index()+1);
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[1]);
@@ -510,6 +511,71 @@ Status RedisLists::LRange(const Slice& key, int64_t start, int64_t stop, std::ve
   }
 }
 
+Status RedisLists::LRangeWithTTL(const Slice& key, int64_t start, int64_t stop, std::vector<std::string>* ret, int64_t* ttl) {
+  rocksdb::ReadOptions read_options;
+  const rocksdb::Snapshot* snapshot;
+
+  ScopeSnapshot ss(db_, &snapshot);
+  read_options.snapshot = snapshot;
+
+  std::string meta_value;
+  Status s = db_->Get(read_options, handles_[0], key, &meta_value);
+  if (s.ok()) {
+    ParsedListsMetaValue parsed_lists_meta_value(&meta_value);
+    if (parsed_lists_meta_value.count() == 0) {
+      return Status::NotFound();
+    } else if (parsed_lists_meta_value.IsStale()) {
+      return Status::NotFound("Stale");
+    } else {
+      // ttl
+      *ttl = parsed_lists_meta_value.timestamp();
+      if (*ttl == 0) {
+        *ttl = -1;
+      } else {
+        int64_t curtime;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
+        *ttl = *ttl - curtime >= 0 ? *ttl - curtime : -2;
+      }
+
+      int32_t version = parsed_lists_meta_value.version();
+      uint64_t origin_left_index = parsed_lists_meta_value.left_index() + 1;
+      uint64_t origin_right_index = parsed_lists_meta_value.right_index() - 1;
+      uint64_t sublist_left_index  = start >= 0 ?
+                                               origin_left_index + start :
+                                               origin_right_index + start + 1;
+      uint64_t sublist_right_index = stop >= 0 ?
+                                               origin_left_index + stop :
+                                               origin_right_index + stop + 1;
+
+      if (sublist_left_index > sublist_right_index
+          || sublist_left_index > origin_right_index
+          || sublist_right_index < origin_left_index) {
+        return Status::OK();
+      } else {
+        if (sublist_left_index < origin_left_index) {
+          sublist_left_index = origin_left_index;
+        }
+        if (sublist_right_index > origin_right_index) {
+          sublist_right_index = origin_right_index;
+        }
+        rocksdb::Iterator* iter = db_->NewIterator(read_options,
+                                                   handles_[1]);
+        uint64_t current_index = sublist_left_index;
+        ListsDataKey start_data_key(key, version, current_index);
+        for (iter->Seek(start_data_key.Encode());
+             iter->Valid() && current_index <= sublist_right_index;
+             iter->Next(), current_index++) {
+          ret->push_back(iter->value().ToString());
+        }
+        delete iter;
+        return Status::OK();
+      }
+    }
+  } else {
+    return s;
+  }
+}
+
 Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uint64_t* ret) {
   *ret = 0;
   rocksdb::WriteBatch batch;
@@ -527,7 +593,7 @@ Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uin
       std::vector<uint64_t> target_index;
       std::vector<uint64_t> delete_index;
       uint64_t rest = (count < 0) ? -count : count;
-      uint32_t version = parsed_lists_meta_value.version();
+      int32_t version = parsed_lists_meta_value.version();
       uint64_t start_index = parsed_lists_meta_value.left_index() + 1;
       uint64_t stop_index = parsed_lists_meta_value.right_index() - 1;
       ListsDataKey start_data_key(key, version, start_index);
@@ -538,7 +604,7 @@ Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uin
         for (iter->Seek(start_data_key.Encode());
              iter->Valid() && current_index <= stop_index && ((count == 0) || rest != 0);
              iter->Next(), current_index++) {
-          if (strcmp(iter->value().ToString().data(), value.data()) == 0) {
+          if (iter->value() == value) {
             target_index.push_back(current_index);
             if (count != 0) {
               rest--;
@@ -552,7 +618,7 @@ Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uin
         for (iter->Seek(stop_data_key.Encode());
              iter->Valid() && current_index >= start_index && ((count == 0) || rest != 0);
              iter->Prev(), current_index--) {
-          if (strcmp(iter->value().ToString().data(), value.data()) == 0) {
+          if (iter->value() == value) {
             target_index.push_back(current_index);
             if (count != 0) {
               rest--;
@@ -577,7 +643,7 @@ Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uin
           rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[1]);
           for (iter->Seek(sublist_right_key.Encode()); iter->Valid() && current_index >= start_index;
                iter->Prev(), current_index--) {
-            if ((strcmp(iter->value().ToString().data(), value.data()) == 0) && rest > 0) {
+            if ((iter->value() == value) && rest > 0) {
               rest--;
             } else {
               ListsDataKey lists_data_key(key, version, left--);
@@ -597,7 +663,7 @@ Status RedisLists::LRem(const Slice& key, int64_t count, const Slice& value, uin
           rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[1]);
           for (iter->Seek(sublist_left_key.Encode()); iter->Valid() && current_index <= stop_index;
                iter->Next(), current_index++) {
-            if ((strcmp(iter->value().ToString().data(), value.data()) == 0) && rest > 0) {
+            if ((iter->value() == value) && rest > 0) {
               rest--;
             } else {
               ListsDataKey lists_data_key(key, version, right++);
@@ -639,7 +705,7 @@ Status RedisLists::LSet(const Slice& key, int64_t index, const Slice& value) {
     } else if (parsed_lists_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      uint32_t version = parsed_lists_meta_value.version();
+      int32_t version = parsed_lists_meta_value.version();
       uint64_t target_index =
           index >= 0 ? parsed_lists_meta_value.left_index() + index + 1 : parsed_lists_meta_value.right_index() + index;
       if (target_index <= parsed_lists_meta_value.left_index() ||
@@ -731,10 +797,10 @@ Status RedisLists::RPop(const Slice& key, int64_t count, std::vector<std::string
     } else if (parsed_lists_meta_value.count() == 0) {
       return Status::NotFound();
     } else {
-      uint64_t size=parsed_lists_meta_value.count();
+      auto size = static_cast<int64_t>(parsed_lists_meta_value.count());
       int32_t version = parsed_lists_meta_value.version();
       int32_t start_index = 0;
-      int32_t stop_index = count<=size?count-1:size-1;
+      auto stop_index = static_cast<int32_t>(count<=size?count-1:size-1);
       int32_t cur_index = 0;
       ListsDataKey lists_data_key(key, version, parsed_lists_meta_value.right_index()-1);
       rocksdb::Iterator* iter = db_->NewIterator(default_read_options_, handles_[1]);
@@ -1247,7 +1313,7 @@ void RedisLists::ScanDatabase() {
   ScopeSnapshot ss(db_, &snapshot);
   iterator_options.snapshot = snapshot;
   iterator_options.fill_cache = false;
-  int32_t current_time = time(nullptr);
+  auto current_time = static_cast<int32_t>(time(nullptr));
 
   LOG(INFO) << "***************List Meta Data***************";
   auto meta_iter = db_->NewIterator(iterator_options, handles_[0]);

@@ -19,7 +19,7 @@ DispatchThread::DispatchThread(int port, int work_num, ConnFactory* conn_factory
     : ServerThread::ServerThread(port, cron_interval, handle),
       last_thread_(0),
       work_num_(work_num),
-      queue_limit_(queue_limit) {
+      queue_limit_(queue_limit){
   for (int i = 0; i < work_num_; i++) {
     worker_thread_.emplace_back(std::make_unique<WorkerThread>(conn_factory, this, queue_limit, cron_interval));
   }
@@ -30,8 +30,7 @@ DispatchThread::DispatchThread(const std::string& ip, int port, int work_num, Co
     : ServerThread::ServerThread(ip, port, cron_interval, handle),
       last_thread_(0),
       work_num_(work_num),
-      queue_limit_(queue_limit) {
-
+      queue_limit_(queue_limit){
   for (int i = 0; i < work_num_; i++) {
     worker_thread_.emplace_back(std::make_unique<WorkerThread>(conn_factory, this, queue_limit, cron_interval));
   }
@@ -43,10 +42,8 @@ DispatchThread::DispatchThread(const std::set<std::string>& ips, int port, int w
       last_thread_(0),
       work_num_(work_num),
       queue_limit_(queue_limit) {
-
   for (int i = 0; i < work_num_; i++) {
     worker_thread_.emplace_back(std::make_unique<WorkerThread>(conn_factory, this, queue_limit, cron_interval));
-
   }
 }
 
@@ -67,6 +64,13 @@ int DispatchThread::StartThread() {
       return ret;
     }
   }
+
+  // Adding timer tasks and run timertaskThread
+  timerTaskThread_.AddTimerTask(
+      "blrpop_blocking_info_scan", 250, true, [this] { this->ScanExpiredBlockedConnsOfBlrpop();});
+
+
+  timerTaskThread_.StartThread();
   return ServerThread::StartThread();
 }
 
@@ -87,6 +91,7 @@ int DispatchThread::StopThread() {
       worker_thread_[i]->private_data_ = nullptr;
     }
   }
+  timerTaskThread_.StopThread();
   return ServerThread::StopThread();
 }
 
@@ -168,7 +173,156 @@ void DispatchThread::HandleNewConn(const int connfd, const std::string& ip_port)
   }
 }
 
+bool BlockedConnNode::IsExpired() {
+  if (expire_time_ == 0) {
+    return false;
+  }
+  auto now = std::chrono::system_clock::now();
+  int64_t now_in_ms = std::chrono::time_point_cast<std::chrono::milliseconds>(now).time_since_epoch().count();
+  if (expire_time_ <= now_in_ms) {
+    return true;
+  }
+  return false;
+}
+
+std::shared_ptr<RedisConn>& BlockedConnNode::GetConnBlocked() { return conn_blocked_; }
+BlockKeyType BlockedConnNode::GetBlockType() const { return block_type_; }
+
+void DispatchThread::CleanWaitNodeOfUnBlockedBlrConn(std::shared_ptr<net::RedisConn> conn_unblocked) {
+  // removed all the waiting info of this conn/ doing cleaning work
+  auto pair = blocked_conn_to_keys_.find(conn_unblocked->fd());
+  if (pair == blocked_conn_to_keys_.end()) {
+    LOG(WARNING) << "blocking info of blpop/brpop went wrong, blpop/brpop can't working correctly";
+    return;
+  }
+  auto& blpop_keys_list = pair->second;
+  for (auto& blpop_key : *blpop_keys_list) {
+    auto& wait_list_of_this_key = key_to_blocked_conns_.find(blpop_key)->second;
+    for (auto conn = wait_list_of_this_key->begin(); conn != wait_list_of_this_key->end();) {
+      if (conn->GetConnBlocked()->fd() == conn_unblocked->fd()) {
+        conn = wait_list_of_this_key->erase(conn);
+        break;
+      }
+      conn++;
+    }
+  }
+  blocked_conn_to_keys_.erase(conn_unblocked->fd());
+}
+
+void DispatchThread::CleanKeysAfterWaitNodeCleaned() {
+  // after wait info of a conn is cleaned, some wait list of keys might be empty, must erase them from the map
+  std::vector<BlockKey> keys_to_erase;
+  for (auto& pair : key_to_blocked_conns_) {
+    if (pair.second->empty()) {
+      // wait list of this key is empty, just erase this key
+      keys_to_erase.emplace_back(pair.first);
+    }
+  }
+  for (auto& blrpop_key : keys_to_erase) {
+    key_to_blocked_conns_.erase(blrpop_key);
+  }
+}
+
+void DispatchThread::ClosingConnCheckForBlrPop(std::shared_ptr<net::RedisConn> conn_to_close) {
+  if (!conn_to_close) {
+    // dynamic pointer cast failed, it's not an instance of RedisConn, no need of the process below
+    return;
+  }
+  {
+    std::shared_lock l(block_mtx_);
+    if (blocked_conn_to_keys_.find(conn_to_close->fd()) == blocked_conn_to_keys_.end()) {
+      // this conn_to_close is not disconnected from blocking state cause by "blpop/brpop"
+      return;
+    }
+  }
+  std::lock_guard l(block_mtx_);
+  CleanWaitNodeOfUnBlockedBlrConn(conn_to_close);
+  CleanKeysAfterWaitNodeCleaned();
+}
+
+void DispatchThread::ScanExpiredBlockedConnsOfBlrpop() {
+  std::unique_lock latch(block_mtx_);
+  for (auto& pair : key_to_blocked_conns_) {
+    auto& conns_list = pair.second;
+    for (auto conn_node = conns_list->begin(); conn_node != conns_list->end();) {
+      if (conn_node->IsExpired()) {
+        std::shared_ptr conn_ptr = conn_node->GetConnBlocked();
+        conn_ptr->WriteResp("$-1\r\n");
+        conn_ptr->NotifyEpoll(true);
+        conn_node = conns_list->erase(conn_node);
+        CleanWaitNodeOfUnBlockedBlrConn(conn_ptr);
+      } else {
+        conn_node++;
+      }
+    }
+  }
+  CleanKeysAfterWaitNodeCleaned();
+}
+
 void DispatchThread::SetQueueLimit(int queue_limit) { queue_limit_ = queue_limit; }
+
+/**
+ * @param keys format: tablename + key,because can watch the key of different db
+ */
+void DispatchThread::AddWatchKeys(const std::unordered_set<std::string> &keys, const std::shared_ptr<NetConn>& client_conn) {
+  std::lock_guard lg(watch_keys_mu_);
+  for (const auto &key : keys) {
+    if (key_conns_map_.count(key) == 0) {
+      key_conns_map_.emplace();
+    }
+    key_conns_map_[key].emplace(client_conn);
+    conn_keys_map_[client_conn].emplace(key);
+  }
+}
+
+void DispatchThread::RemoveWatchKeys(const std::shared_ptr<NetConn>& client_conn) {
+  std::lock_guard lg(watch_keys_mu_);
+  auto &keys = conn_keys_map_[client_conn];
+  for (const auto &key : keys) {
+    if (key_conns_map_.count(key) == 0 || key_conns_map_[key].count(client_conn) == 0) {
+      continue;
+    }
+    key_conns_map_[key].erase(client_conn);
+    if (key_conns_map_[key].empty()) {
+      key_conns_map_.erase(key);
+    }
+  }
+  conn_keys_map_.erase(client_conn);
+}
+
+std::vector<std::shared_ptr<NetConn>> DispatchThread::GetInvolvedTxn(const std::vector<std::string> &keys) {
+  std::lock_guard lg(watch_keys_mu_);
+  auto involved_conns = std::vector<std::shared_ptr<NetConn>>{};
+  for (const auto &key : keys) {
+    if (key_conns_map_.count(key) == 0 || key_conns_map_[key].empty()) {
+      continue;
+    }
+    for(auto &client_conn : key_conns_map_[key]) {
+      involved_conns.emplace_back(client_conn);
+    }
+  }
+  return involved_conns;
+}
+
+std::vector<std::shared_ptr<NetConn>> DispatchThread::GetAllTxns() {
+  std::lock_guard lg(watch_keys_mu_);
+  auto involved_conns = std::vector<std::shared_ptr<NetConn>>{};
+  for(auto &[client_conn, _] : conn_keys_map_) {
+    involved_conns.emplace_back(client_conn);
+  }
+  return involved_conns;
+}
+
+std::vector<std::shared_ptr<NetConn>> DispatchThread::GetDBTxns(std::string db_name) {
+  std::lock_guard lg(watch_keys_mu_);
+  auto involved_conns = std::vector<std::shared_ptr<NetConn>>{};
+  for(auto &[db_key, client_conns] : key_conns_map_) {
+    if (db_key.find(db_name) == 0) {
+      involved_conns.insert(involved_conns.end(), client_conns.begin(), client_conns.end());
+    }
+  }
+  return involved_conns;
+}
 
 extern ServerThread* NewDispatchThread(int port, int work_num, ConnFactory* conn_factory, int cron_interval,
                                        int queue_limit, const ServerHandle* handle) {

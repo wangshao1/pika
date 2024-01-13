@@ -21,6 +21,7 @@
 #include "include/pika_repl_server.h"
 #include "include/pika_slave_node.h"
 #include "include/pika_stable_log.h"
+#include "include/rsync_client.h"
 
 #define kBinlogSendPacketNum 40
 #define kBinlogSendBatchNum 100
@@ -87,10 +88,9 @@ class SyncMasterSlot : public SyncSlot {
   pstd::Status ConsensusUpdateSlave(const std::string& ip, int port, const LogOffset& start, const LogOffset& end);
   pstd::Status ConsensusProposeLog(const std::shared_ptr<Cmd>& cmd_ptr, std::shared_ptr<PikaClientConn> conn_ptr,
                              std::shared_ptr<std::string> resp_ptr);
-  Status ConsensusProposeLog(const std::shared_ptr<Cmd>& cmd_ptr);
+  pstd::Status ConsensusProposeLog(const std::shared_ptr<Cmd>& cmd_ptr);
   pstd::Status ConsensusSanityCheck();
   pstd::Status ConsensusProcessLeaderLog(const std::shared_ptr<Cmd>& cmd_ptr, const BinlogItem& attribute);
-  pstd::Status ConsensusProcessLocalUpdate(const LogOffset& leader_commit);
   LogOffset ConsensusCommittedIndex();
   LogOffset ConsensusLastIndex();
   uint32_t ConsensusTerm();
@@ -157,17 +157,24 @@ class SyncSlaveSlot : public SyncSlot {
 
   std::string LocalIp();
 
+  void StopRsync();
+
+  void ActivateRsync();
+
+  bool IsRsyncRunning() {return rsync_cli_->IsRunning();}
+
  private:
+  std::unique_ptr<rsync::RsyncClient> rsync_cli_;
   pstd::Mutex slot_mu_;
   RmNode m_info_;
-  ReplState repl_state_;
+  ReplState repl_state_{kNoConnect};
   std::string local_ip_;
 };
 
 class PikaReplicaManager {
  public:
   PikaReplicaManager();
-  ~PikaReplicaManager(){};
+  ~PikaReplicaManager() = default;
 
   friend Cmd;
 
@@ -236,12 +243,33 @@ class PikaReplicaManager {
   void ScheduleReplClientBGTask(net::TaskFunc func, void* arg);
   void ScheduleWriteBinlogTask(const std::string& db_slot,
                                const std::shared_ptr<InnerMessage::InnerResponse>& res,
-                               std::shared_ptr<net::PbConn> conn, void* res_private_data);
+                               const std::shared_ptr<net::PbConn>& conn, void* res_private_data);
   void ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, const LogOffset& offset, const std::string& db_name,
                            uint32_t slot_id);
 
   void ReplServerRemoveClientConn(int fd);
   void ReplServerUpdateClientConnMap(const std::string& ip_port, int fd);
+
+  std::shared_mutex& GetSlotLock() { return slots_rw_; }
+  void SlotLock() {
+    slots_rw_.lock();
+  }
+  void SlotLockShared() {
+    slots_rw_.lock_shared();
+  }
+  void SlotUnlock() {
+    slots_rw_.unlock();
+  }
+  void SlotUnlockShared() {
+    slots_rw_.unlock_shared();
+  }
+
+  std::unordered_map<SlotInfo, std::shared_ptr<SyncMasterSlot>, hash_slot_info>& GetSyncMasterSlots() {
+    return sync_master_slots_;
+  }
+  std::unordered_map<SlotInfo, std::shared_ptr<SyncSlaveSlot>, hash_slot_info>& GetSyncSlaveSlots() {
+    return sync_slave_slots_;
+  }
 
  private:
   void InitSlot();

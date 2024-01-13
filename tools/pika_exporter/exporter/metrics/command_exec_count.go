@@ -2,7 +2,7 @@ package metrics
 
 import "regexp"
 
-func init() {
+func RegisterCommandExecCount() {
 	Register(collectCommandExecCountMetrics)
 }
 
@@ -16,7 +16,7 @@ var collectCommandExecCountMetrics = map[string]MetricConfig{
 				Parser: &regexParser{
 					name:   "command_exec_count_command",
 					source: "commands_count",
-					reg:  regexp.MustCompile(`(\r|\n)*(?P<command>[^:]+):(?P<count>[\d]*)`),
+					reg:    regexp.MustCompile(`(\r|\n)*(?P<command>[^:]+):(?P<count>[\d]*)`),
 					Parser: &normalParser{},
 				},
 			},

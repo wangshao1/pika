@@ -132,7 +132,8 @@ int PubSubThread::Publish(const std::string& channel, const std::string& msg) {
   channel_ = channel;
   message_ = msg;
   // Send signal to ThreadMain()
-  write(msg_pfd_[1], "", 1);
+  ssize_t n = write(msg_pfd_[1], "", 1);
+  (void)(n);
   std::unique_lock lock(receiver_mutex_);
   receiver_rsignal_.wait(lock, [this]() { return receivers_ != -1; });
 
@@ -298,7 +299,8 @@ void PubSubThread::PubSubChannels(const std::string& pattern, std::vector<std::s
   } else {
     std::lock_guard l(channel_mutex_);
     for (auto& channel : pubsub_channel_) {
-      if (pstd::stringmatchlen(channel.first.c_str(), channel.first.size(), pattern.c_str(), pattern.size(), 0)) {
+      if (pstd::stringmatchlen(channel.first.c_str(), static_cast<int32_t>(channel.first.size()), 
+							   pattern.c_str(), static_cast<int32_t>(pattern.size()), 0)) {
         if (!channel.second.empty()) {
           result->push_back(channel.first);
         }
@@ -315,7 +317,7 @@ void PubSubThread::PubSubNumSub(const std::vector<std::string>& channels,
     subscribed = 0;
     for (auto& channel : pubsub_channel_) {
       if (channel.first == i) {
-        subscribed = channel.second.size();
+        subscribed = static_cast<int32_t>(channel.second.size());
       }
     }
     result->push_back(std::make_pair(i, subscribed));
@@ -326,7 +328,7 @@ int PubSubThread::PubSubNumPat() {
   int subscribed = 0;
   std::lock_guard l(pattern_mutex_);
   for (auto& channel : pubsub_pattern_) {
-    subscribed += channel.second.size();
+    subscribed += static_cast<int32_t>(channel.second.size());
   }
   return subscribed;
 }
@@ -344,7 +346,8 @@ void* PubSubThread::ThreadMain() {
       pfe = (net_multiplexer_->FiredEvents()) + i;
       if (pfe->fd == net_multiplexer_->NotifyReceiveFd()) {  // New connection comming
         if (pfe->mask & kReadable) {
-          read(net_multiplexer_->NotifyReceiveFd(), triger, 1);
+          ssize_t n = read(net_multiplexer_->NotifyReceiveFd(), triger, 1);
+          (void)(n);
           {
             NetItem ti = net_multiplexer_->NotifyQueuePop();
             if (ti.notify_type() == kNotiClose) {
@@ -364,7 +367,8 @@ void* PubSubThread::ThreadMain() {
       }
       if (pfe->fd == msg_pfd_[0]) {  // Publish message
         if (pfe->mask & kReadable) {
-          read(msg_pfd_[0], triger, 1);
+          ssize_t n = read(msg_pfd_[0], triger, 1);
+          (void)(n);
           std::string channel;
           std::string msg;
           int32_t receivers = 0;
@@ -402,8 +406,9 @@ void* PubSubThread::ThreadMain() {
 
           // Send message to a channel pattern's clients
           pattern_mutex_.lock();
-          for (auto & it : pubsub_pattern_) {
-            if (pstd::stringmatchlen(it.first.c_str(), it.first.size(), channel.c_str(), channel.size(), 0)) {
+          for (auto& it : pubsub_pattern_) {
+            if (pstd::stringmatchlen(it.first.c_str(), static_cast<int32_t>(it.first.size()), 
+									 channel.c_str(), static_cast<int32_t>(channel.size()), 0)) {
               for (size_t i = 0; i < it.second.size(); i++) {
                 if (!IsReady(it.second[i]->fd())) {
                   continue;

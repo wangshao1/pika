@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "include/pika_binlog_transverter.h"
+#include "pstd/include/pstd_defer.h"
 #include "pstd_status.h"
 
 using pstd::Status;
@@ -139,7 +140,7 @@ void Binlog::InitLogFile() {
   assert(queue_ != nullptr);
 
   uint64_t filesize = queue_->Filesize();
-  block_offset_ = filesize % kBlockSize;
+  block_offset_ = static_cast<int32_t>(filesize % kBlockSize);
 
   opened_.store(true);
 }
@@ -168,7 +169,25 @@ Status Binlog::Put(const std::string& item) {
   if (!opened_.load()) {
     return Status::Busy("Binlog is not open yet");
   }
-  Status s = Put(item.c_str(), item.size());
+  uint32_t filenum = 0;
+  uint32_t term = 0;
+  uint64_t offset = 0;
+  uint64_t logic_id = 0;
+
+  Lock();
+  DEFER {
+    Unlock();
+  };
+
+  Status s = GetProducerStatus(&filenum, &offset, &term, &logic_id);
+  if (!s.ok()) {
+    return s;
+  }
+  logic_id++;
+  std::string data = PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
+      time(nullptr), term, logic_id, filenum, offset, item, {});
+
+  s = Put(data.c_str(), static_cast<int>(data.size()));
   if (!s.ok()) {
     binlog_io_error_.store(true);
   }
@@ -241,9 +260,9 @@ Status Binlog::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n, int* 
       s = queue_->Flush();
     }
   }
-  block_offset_ += static_cast<int>(kHeaderSize + n);
+  block_offset_ += static_cast<int32_t>(kHeaderSize + n);
 
-  *temp_pro_offset += kHeaderSize + n;
+  *temp_pro_offset += static_cast<int32_t>(kHeaderSize + n);
   return s;
 }
 
@@ -253,7 +272,7 @@ Status Binlog::Produce(const pstd::Slice& item, int* temp_pro_offset) {
   size_t left = item.size();
   bool begin = true;
 
-  *temp_pro_offset = version_->pro_offset_;
+  *temp_pro_offset = static_cast<int>(version_->pro_offset_);
   do {
     const int leftover = static_cast<int>(kBlockSize) - block_offset_;
     assert(leftover >= 0);
@@ -386,7 +405,7 @@ Status Binlog::Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index) {
   if (fd < 0) {
     return Status::IOError("fd open failed");
   }
-  if (ftruncate(fd, pro_offset) != 0) {
+  if (ftruncate(fd, static_cast<int64_t>(pro_offset)) != 0) {
     return Status::IOError("ftruncate failed");
   }
   close(fd);

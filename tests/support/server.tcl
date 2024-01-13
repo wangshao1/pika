@@ -177,7 +177,7 @@ proc start_server {options {code undefined}} {
         if {[string length $line] > 0 && [string index $line 0] ne "#"} {
             set elements [split $line " "]
             set directive [lrange $elements 0 0]
-            set arguments [lrange $elements 1 end]
+            set arguments [lrange $elements 2 end]
             dict set config $directive $arguments
         }
     }
@@ -189,6 +189,11 @@ proc start_server {options {code undefined}} {
     set ::port [find_available_port [expr {$::port+1}]]
     dict set config port $::port
 
+    # start every server on a different path
+    dict set config log-path ./log$::port/
+    dict set config db-path ./db$::port/
+    dict set config dump-path ./dump$::port/
+
     # apply overrides from global space and arguments
     foreach {directive arguments} [concat $::global_overrides $overrides] {
         dict set config $directive $arguments
@@ -198,10 +203,7 @@ proc start_server {options {code undefined}} {
     set config_file [tmpfile redis.conf]
     set fp [open $config_file w+]
     foreach directive [dict keys $config] {
-        if {$directive == "port"} {
-            puts -nonewline $fp "$directive : "
-            puts $fp [dict get $config $directive]
-        } elseif {$directive == "requirepass" || $directive == "userpass"} {
+        if {$directive == "requirepass" || $directive == "userpass"} {
             if {[dict get $config $directive] eq ":"} {
                 puts $fp "$directive: "
             } else {
@@ -210,7 +212,7 @@ proc start_server {options {code undefined}} {
         } elseif {$directive == "dump_prefix"} {
             puts $fp "$directive :"
         } else {
-            puts -nonewline $fp "$directive "
+            puts -nonewline $fp "$directive : "
             puts $fp [dict get $config $directive]
         }
     }

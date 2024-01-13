@@ -29,9 +29,25 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   bool FlushSlotDB();
   bool FlushSlotSubDB(const std::string& db_name);
   void SetBinlogIoError();
+  void SetBinlogIoErrorrelieve();
   bool IsBinlogIoError();
   uint32_t SlotNum();
   void GetAllSlots(std::set<uint32_t>& slot_ids);
+  std::shared_mutex& GetSlotLock() {
+    return slots_rw_;
+  }
+  void SlotLock() {
+    slots_rw_.lock();
+  }
+  void SlotLockShared() {
+    slots_rw_.lock_shared();
+  }
+  void SlotUnlock() {
+    slots_rw_.unlock();
+  }
+  void SlotUnlockShared() {
+    slots_rw_.unlock_shared();
+  }
 
   // Dynamic change slot
   pstd::Status AddSlots(const std::set<uint32_t>& slot_ids);
@@ -48,6 +64,7 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
 
   // Compact use;
   void Compact(const storage::DataType& type);
+  void CompactRange(const storage::DataType& type, const std::string& start, const std::string& end);
 
   void LeaveAllSlot();
   std::set<uint32_t> GetSlotIDs();
@@ -56,7 +73,9 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   bool DBIsEmpty();
   pstd::Status MovetoToTrash(const std::string& path);
   pstd::Status Leave();
-
+  std::map<uint32_t, std::shared_ptr<Slot>> GetSlots() {
+    return slots_;
+  }
  private:
   std::string db_name_;
   uint32_t slot_num_ = 0;

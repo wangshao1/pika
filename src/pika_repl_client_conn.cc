@@ -38,7 +38,7 @@ bool PikaReplClientConn::IsDBStructConsistent(const std::vector<DBStruct>& curre
 
 int PikaReplClientConn::DealMessage() {
   std::shared_ptr<InnerMessage::InnerResponse> response = std::make_shared<InnerMessage::InnerResponse>();
-  ::google::protobuf::io::ArrayInputStream input(rbuf_ + cur_pos_ - header_len_, header_len_);
+  ::google::protobuf::io::ArrayInputStream input(rbuf_ + cur_pos_ - header_len_, static_cast<int32_t>(header_len_));
   ::google::protobuf::io::CodedInputStream decoder(&input);
   decoder.SetTotalBytesLimit(g_pika_conf->max_conn_rbuf_size());
   bool success = response->ParseFromCodedStream(&decoder) && decoder.ConsumedEntireMessage();
@@ -122,6 +122,29 @@ void PikaReplClientConn::HandleMetaSyncResponse(void* arg) {
     return;
   }
 
+  // The relicationid obtained from the server is null
+  if (meta_sync.replication_id() == "") {
+    LOG(WARNING) << "Meta Sync Failed: the relicationid obtained from the server is null, keep sending MetaSync msg";
+    return;
+  }
+
+  // The Replicationids of both the primary and secondary Replicationid are not empty and are not equal
+  if (g_pika_conf->replication_id() != meta_sync.replication_id() && g_pika_conf->replication_id() != "") {
+    LOG(WARNING) << "Meta Sync Failed: replicationid on both sides of the connection are inconsistent";
+    g_pika_server->SyncError();
+    conn->NotifyClose();
+    return;
+  }
+
+  // First synchronization between the master and slave
+  if (g_pika_conf->replication_id() != meta_sync.replication_id()) {
+    LOG(INFO) << "New node is added to the cluster and requires full replication, remote replication id: " << meta_sync.replication_id()
+              << ", local replication id: " << g_pika_conf->replication_id();
+    g_pika_server->force_full_sync_ = true;
+    g_pika_conf->SetReplicationID(meta_sync.replication_id());
+    g_pika_conf->ConfigRewriteReplicationID();
+  }
+
   g_pika_conf->SetWriteBinlog("yes");
   g_pika_server->PrepareSlotTrySync();
   g_pika_server->FinishMetaSync();
@@ -156,6 +179,7 @@ void PikaReplClientConn::HandleDBSyncResponse(void* arg) {
   slave_slot->SetMasterSessionId(session_id);
 
   std::string slot_name = slave_slot->SlotName();
+  slave_slot->StopRsync();
   slave_slot->SetReplState(ReplState::kWaitDBSync);
   LOG(INFO) << "Slot: " << slot_name << " Need Wait To Sync";
 }

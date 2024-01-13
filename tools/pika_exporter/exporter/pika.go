@@ -10,9 +10,10 @@ import (
 
 	"github.com/OpenAtomFoundation/pika/tools/pika_exporter/discovery"
 
-	"github.com/OpenAtomFoundation/pika/tools/pika_exporter/exporter/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/OpenAtomFoundation/pika/tools/pika_exporter/exporter/metrics"
 )
 
 type dbKeyPair struct {
@@ -55,6 +56,7 @@ func NewPikaExporter(dis discovery.Discovery, namespace string,
 	}
 	e.scanCount = scanCount
 
+	e.registerMetrics()
 	e.initMetrics()
 	e.wg.Add(1)
 	go e.statsKeySpace(statsClockHour)
@@ -215,7 +217,12 @@ func (e *exporter) scrape(ch chan<- prometheus.Metric) {
 }
 
 func (e *exporter) collectInfo(c *client, ch chan<- prometheus.Metric) error {
-	info, err := c.Info()
+	// update info config
+	if err := LoadConfig(); err != nil {
+		log.Errorln("load config failed:", err)
+		return err
+	}
+	info, err := c.GetInfo()
 	if err != nil {
 		return err
 	}
@@ -287,6 +294,41 @@ func (e *exporter) collectKeys(c *client) error {
 	}
 
 	return nil
+}
+
+func (e *exporter) registerMetrics() {
+	config := InfoConf
+	if config.Server {
+		metrics.RegisterServer()
+	}
+	if config.Data {
+		metrics.RegisterData()
+	}
+	if config.Clients {
+		metrics.RegisterClients()
+	}
+	if config.Stats {
+		metrics.RegisterStats()
+	}
+	if config.CPU {
+		metrics.RegisterCPU()
+	}
+	if config.Replication {
+		metrics.RegisterReplication()
+	}
+	if config.Keyspace {
+		metrics.RegisterKeyspace()
+	}
+	if config.Execcount {
+		metrics.RegisterCommandExecCount()
+	}
+	if config.Commandstats {
+		metrics.RegisterCommandstats()
+	}
+	if config.Rocksdb {
+		metrics.RegisterRocksDB()
+	}
+	metrics.RegisterBinlog()
 }
 
 func getKeysFromPatterns(c *client, keyPatterns []dbKeyPair, scanCount int) ([]dbKeyPair, error) {

@@ -4,15 +4,17 @@
 // of patent rights can be found in the PATENTS file in the same directory.
 
 #include "include/pika_kv.h"
+#include <memory>
 
+#include "include/pika_command.h"
+#include "include/pika_stream_base.h"
 #include "pstd/include/pstd_string.h"
 
-#include "include/pika_binlog_transverter.h"
+#include "include/pika_cache.h"
 #include "include/pika_conf.h"
 #include "include/pika_slot_command.h"
 
 extern std::unique_ptr<PikaConf> g_pika_conf;
-
 /* SET key value [NX] [XX] [EX <seconds>] [PX <milliseconds>] */
 void SetCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
@@ -54,6 +56,7 @@ void SetCmd::DoInitial() {
       if (strcasecmp(opt.data(), "px") == 0) {
         sec_ /= 1000;
       }
+      has_ttl_ = true;
     } else {
       res_.SetRes(CmdRes::kSyntaxErr);
       return;
@@ -63,27 +66,26 @@ void SetCmd::DoInitial() {
 }
 
 void SetCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s;
   int32_t res = 1;
   switch (condition_) {
     case SetCmd::kXX:
-      s = slot->db()->Setxx(key_, value_, &res, sec_);
+      s_ = slot->db()->Setxx(key_, value_, &res, static_cast<int32_t>(sec_));
       break;
     case SetCmd::kNX:
-      s = slot->db()->Setnx(key_, value_, &res, sec_);
+      s_ = slot->db()->Setnx(key_, value_, &res, static_cast<int32_t>(sec_));
       break;
     case SetCmd::kVX:
-      s = slot->db()->Setvx(key_, target_, value_, &success_, sec_);
+      s_ = slot->db()->Setvx(key_, target_, value_, &success_, static_cast<int32_t>(sec_));
       break;
     case SetCmd::kEXORPX:
-      s = slot->db()->Setex(key_, value_, sec_);
+      s_ = slot->db()->Setex(key_, value_, static_cast<int32_t>(sec_));
       break;
     default:
-      s = slot->db()->Set(key_, value_);
+      s_ = slot->db()->Set(key_, value_);
       break;
   }
 
-  if (s.ok() || s.IsNotFound()) {
+  if (s_.ok() || s_.IsNotFound()) {
     if (condition_ == SetCmd::kVX) {
       res_.AppendInteger(success_);
     } else {
@@ -95,12 +97,29 @@ void SetCmd::Do(std::shared_ptr<Slot> slot) {
       }
     }
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
-std::string SetCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                             uint64_t offset) {
+void SetCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void SetCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (SetCmd::kNX == condition_) {
+    return;
+  }
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    if (has_ttl_) {
+      slot->cache()->Setxx(CachePrefixKeyK, value_, sec_);
+    } else {
+      slot->cache()->SetxxWithoutTTL(CachePrefixKeyK, value_);
+    }
+  }
+}
+
+std::string SetCmd::ToRedisProtocol() {
   if (condition_ == SetCmd::kEXORPX) {
     std::string content;
     content.reserve(RAW_ARGS_LEN);
@@ -108,25 +127,24 @@ std::string SetCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logi
 
     // to pksetexat cmd
     std::string pksetexat_cmd("pksetexat");
-    RedisAppendLen(content, pksetexat_cmd.size(), "$");
+    RedisAppendLenUint64(content, pksetexat_cmd.size(), "$");
     RedisAppendContent(content, pksetexat_cmd);
     // key
-    RedisAppendLen(content, key_.size(), "$");
+    RedisAppendLenUint64(content, key_.size(), "$");
     RedisAppendContent(content, key_);
     // time_stamp
     char buf[100];
-    int32_t time_stamp = time(nullptr) + sec_;
+    auto time_stamp = static_cast<int32_t>(time(nullptr) + sec_);
     pstd::ll2string(buf, 100, time_stamp);
     std::string at(buf);
-    RedisAppendLen(content, at.size(), "$");
+    RedisAppendLenUint64(content, at.size(), "$");
     RedisAppendContent(content, at);
     // value
-    RedisAppendLen(content, value_.size(), "$");
+    RedisAppendLenUint64(content, value_.size(), "$");
     RedisAppendContent(content, value_);
-    return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                               content, {});
+    return content;
   } else {
-    return Cmd::ToBinlog(exec_time, term_id, logic_id, filenum, offset);
+    return Cmd::ToRedisProtocol();
   }
 }
 
@@ -139,15 +157,37 @@ void GetCmd::DoInitial() {
 }
 
 void GetCmd::Do(std::shared_ptr<Slot> slot) {
-  std::string value;
-  rocksdb::Status s = slot->db()->Get(key_, &value);
-  if (s.ok()) {
-    res_.AppendStringLen(value.size());
-    res_.AppendContent(value);
-  } else if (s.IsNotFound()) {
+  s_ = slot->db()->GetWithTTL(key_, &value_, &sec_);
+  if (s_.ok()) {
+    res_.AppendStringLenUint64(value_.size());
+    res_.AppendContent(value_);
+  } else if (s_.IsNotFound()) {
     res_.AppendStringLen(-1);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void GetCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+  auto s = slot->cache()->Get(CachePrefixKeyK, &value_);
+  if (s.ok()) {
+    res_.AppendStringLen(value_.size());
+    res_.AppendContent(value_);
+  } else {
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void GetCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
+}
+
+void GetCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->WriteKVToCache(CachePrefixKeyK, value_, sec_);
   }
 }
 
@@ -162,15 +202,44 @@ void DelCmd::DoInitial() {
 
 void DelCmd::Do(std::shared_ptr<Slot> slot) {
   std::map<storage::DataType, storage::Status> type_status;
+
   int64_t count = slot->db()->Del(keys_, &type_status);
+  
+  // stream's destory need to be treated specially
+  auto s = StreamStorage::DestoryStreams(keys_, slot.get());
+  if (!s.ok()) {
+    res_.SetRes(CmdRes::kErrOther, "stream delete error: " + s.ToString());
+    return;
+  }
+
   if (count >= 0) {
     res_.AppendInteger(count);
+    s_ = rocksdb::Status::OK();
     std::vector<std::string>::const_iterator it;
     for (it = keys_.begin(); it != keys_.end(); it++) {
       RemSlotKey(*it, slot);
     }
   } else {
     res_.SetRes(CmdRes::kErrOther, "delete error");
+    s_ = rocksdb::Status::Corruption("delete error");
+  }
+}
+
+void DelCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void DelCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    for (auto key : keys_) {
+      v.emplace_back(PCacheKeyPrefixK + key);
+      v.emplace_back(PCacheKeyPrefixL + key);
+      v.emplace_back(PCacheKeyPrefixZ + key);
+      v.emplace_back(PCacheKeyPrefixS + key);
+      v.emplace_back(PCacheKeyPrefixH + key);
+    }
+    slot->cache()->Del(v);
   }
 }
 
@@ -205,16 +274,27 @@ void IncrCmd::DoInitial() {
 }
 
 void IncrCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Incrby(key_, 1, &new_value_);
-  if (s.ok()) {
+  s_ = slot->db()->Incrby(key_, 1, &new_value_);
+  if (s_.ok()) {
     res_.AppendContent(":" + std::to_string(new_value_));
     AddSlotKey("k", key_, slot);
-  } else if (s.IsCorruption() && s.ToString() == "Corruption: Value is not a integer") {
+  } else if (s_.IsCorruption() && s_.ToString() == "Corruption: Value is not a integer") {
     res_.SetRes(CmdRes::kInvalidInt);
-  } else if (s.IsInvalidArgument()) {
+  } else if (s_.IsInvalidArgument()) {
     res_.SetRes(CmdRes::kOverFlow);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void IncrCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void IncrCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->Incrxx(CachePrefixKeyK);
   }
 }
 
@@ -231,16 +311,27 @@ void IncrbyCmd::DoInitial() {
 }
 
 void IncrbyCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Incrby(key_, by_, &new_value_);
-  if (s.ok()) {
+  s_ = slot->db()->Incrby(key_, by_, &new_value_);
+  if (s_.ok()) {
     res_.AppendContent(":" + std::to_string(new_value_));
     AddSlotKey("k", key_, slot);
-  } else if (s.IsCorruption() && s.ToString() == "Corruption: Value is not a integer") {
+  } else if (s_.IsCorruption() && s_.ToString() == "Corruption: Value is not a integer") {
     res_.SetRes(CmdRes::kInvalidInt);
-  } else if (s.IsInvalidArgument()) {
+  } else if (s_.IsInvalidArgument()) {
     res_.SetRes(CmdRes::kOverFlow);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void IncrbyCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void IncrbyCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->IncrByxx(CachePrefixKeyK, by_);
   }
 }
 
@@ -258,17 +349,31 @@ void IncrbyfloatCmd::DoInitial() {
 }
 
 void IncrbyfloatCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Incrbyfloat(key_, value_, &new_value_);
-  if (s.ok()) {
-    res_.AppendStringLen(new_value_.size());
+  s_ = slot->db()->Incrbyfloat(key_, value_, &new_value_);
+  if (s_.ok()) {
+    res_.AppendStringLenUint64(new_value_.size());
     res_.AppendContent(new_value_);
     AddSlotKey("k", key_, slot);
-  } else if (s.IsCorruption() && s.ToString() == "Corruption: Value is not a vaild float") {
+  } else if (s_.IsCorruption() && s_.ToString() == "Corruption: Value is not a vaild float") {
     res_.SetRes(CmdRes::kInvalidFloat);
-  } else if (s.IsInvalidArgument()) {
+  } else if (s_.IsInvalidArgument()) {
     res_.SetRes(CmdRes::KIncrByOverFlow);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void IncrbyfloatCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void IncrbyfloatCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    long double long_double_by;
+    if (storage::StrToLongDouble(value_.data(), value_.size(), &long_double_by) != -1) {
+      std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+      slot->cache()->Incrbyfloatxx(CachePrefixKeyK, long_double_by);
+    }
   }
 }
 
@@ -281,15 +386,26 @@ void DecrCmd::DoInitial() {
 }
 
 void DecrCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Decrby(key_, 1, &new_value_);
-  if (s.ok()) {
+  s_= slot->db()->Decrby(key_, 1, &new_value_);
+  if (s_.ok()) {
     res_.AppendContent(":" + std::to_string(new_value_));
-  } else if (s.IsCorruption() && s.ToString() == "Corruption: Value is not a integer") {
+  } else if (s_.IsCorruption() && s_.ToString() == "Corruption: Value is not a integer") {
     res_.SetRes(CmdRes::kInvalidInt);
-  } else if (s.IsInvalidArgument()) {
+  } else if (s_.IsInvalidArgument()) {
     res_.SetRes(CmdRes::kOverFlow);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void DecrCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void DecrCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->Decrxx(CachePrefixKeyK);
   }
 }
 
@@ -306,15 +422,27 @@ void DecrbyCmd::DoInitial() {
 }
 
 void DecrbyCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Decrby(key_, by_, &new_value_);
-  if (s.ok()) {
+  s_ = slot->db()->Decrby(key_, by_, &new_value_);
+  if (s_.ok()) {
+    AddSlotKey("k", key_, slot);
     res_.AppendContent(":" + std::to_string(new_value_));
-  } else if (s.IsCorruption() && s.ToString() == "Corruption: Value is not a integer") {
+  } else if (s_.IsCorruption() && s_.ToString() == "Corruption: Value is not a integer") {
     res_.SetRes(CmdRes::kInvalidInt);
-  } else if (s.IsInvalidArgument()) {
+  } else if (s_.IsInvalidArgument()) {
     res_.SetRes(CmdRes::kOverFlow);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void DecrbyCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void DecrbyCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->DecrByxx(CachePrefixKeyK, by_);
   }
 }
 
@@ -329,17 +457,28 @@ void GetsetCmd::DoInitial() {
 
 void GetsetCmd::Do(std::shared_ptr<Slot> slot) {
   std::string old_value;
-  rocksdb::Status s = slot->db()->GetSet(key_, new_value_, &old_value);
-  if (s.ok()) {
+  s_ = slot->db()->GetSet(key_, new_value_, &old_value);
+  if (s_.ok()) {
     if (old_value.empty()) {
       res_.AppendContent("$-1");
     } else {
-      res_.AppendStringLen(old_value.size());
+      res_.AppendStringLenUint64(old_value.size());
       res_.AppendContent(old_value);
     }
     AddSlotKey("k", key_, slot);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void GetsetCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void GetsetCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->SetxxWithoutTTL(CachePrefixKeyK, new_value_);
   }
 }
 
@@ -354,12 +493,23 @@ void AppendCmd::DoInitial() {
 
 void AppendCmd::Do(std::shared_ptr<Slot> slot) {
   int32_t new_len = 0;
-  rocksdb::Status s = slot->db()->Append(key_, value_, &new_len);
-  if (s.ok() || s.IsNotFound()) {
+  s_ = slot->db()->Append(key_, value_, &new_len);
+  if (s_.ok() || s_.IsNotFound()) {
     res_.AppendInteger(new_len);
     AddSlotKey("k", key_, slot);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void AppendCmd::DoThroughDB(std::shared_ptr<Slot> slot){
+  Do(slot);
+}
+
+void AppendCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->Appendxx(CachePrefixKeyK, value_);
   }
 }
 
@@ -374,20 +524,20 @@ void MgetCmd::DoInitial() {
 }
 
 void MgetCmd::Do(std::shared_ptr<Slot> slot) {
-  std::vector<storage::ValueStatus> vss;
-  rocksdb::Status s = slot->db()->MGet(keys_, &vss);
-  if (s.ok()) {
-    res_.AppendArrayLen(vss.size());
-    for (const auto& vs : vss) {
+  db_value_status_array_.clear();
+  s_ = slot->db()->MGetWithTTL(keys_, &db_value_status_array_);
+  if (s_.ok()) {
+    res_.AppendArrayLenUint64(db_value_status_array_.size());
+    for (const auto& vs : db_value_status_array_) {
       if (vs.status.ok()) {
-        res_.AppendStringLen(vs.value.size());
+        res_.AppendStringLenUint64(vs.value.size());
         res_.AppendContent(vs.value);
       } else {
         res_.AppendContent("$-1");
       }
     }
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
@@ -409,13 +559,44 @@ void MgetCmd::Split(std::shared_ptr<Slot> slot, const HintKeys& hint_keys) {
 }
 
 void MgetCmd::Merge() {
-  res_.AppendArrayLen(split_res_.size());
+  res_.AppendArrayLenUint64(split_res_.size());
   for (const auto& vs : split_res_) {
     if (vs.status.ok()) {
-      res_.AppendStringLen(vs.value.size());
+      res_.AppendStringLenUint64(vs.value.size());
       res_.AppendContent(vs.value);
     } else {
       res_.AppendContent("$-1");
+    }
+  }
+}
+
+void MgetCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  if (1 < keys_.size()) {
+    res_.SetRes(CmdRes::kCacheMiss);
+    return;
+  }
+  std::string CachePrefixKeyK = PCacheKeyPrefixK + keys_[0];
+  auto s = slot->cache()->Get(CachePrefixKeyK, &value_);
+  if (s.ok()) {
+    res_.AppendArrayLen(1);
+    res_.AppendStringLen(value_.size());
+    res_.AppendContent(value_);
+  } else {
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void MgetCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
+}
+
+void MgetCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  for (size_t i = 0; i < keys_.size(); i++) {
+    if (db_value_status_array_[i].status.ok()) {
+      std::string CachePrefixKeyK;
+      CachePrefixKeyK = PCacheKeyPrefixK + keys_[i];
+      slot->cache()->WriteKVToCache(CachePrefixKeyK, db_value_status_array_[i].value, db_value_status_array_[i].ttl);
     }
   }
 }
@@ -456,14 +637,14 @@ void KeysCmd::Do(std::shared_ptr<Slot> slot) {
     keys.clear();
     cursor = slot->db()->Scan(type_, cursor, pattern_, PIKA_SCAN_STEP_LENGTH, &keys);
     for (const auto& key : keys) {
-      RedisAppendLen(raw, key.size(), "$");
+      RedisAppendLenUint64(raw, key.size(), "$");
       RedisAppendContent(raw, key);
     }
     if (raw.size() >= raw_limit) {
       res_.SetRes(CmdRes::kErrOther, "Response exceeds the max-client-response-size limit");
       return;
     }
-    total_key += keys.size();
+    total_key += static_cast<int64_t>(keys.size());
   } while (cursor != 0);
 
   res_.AppendArrayLen(total_key);
@@ -481,17 +662,16 @@ void SetnxCmd::DoInitial() {
 
 void SetnxCmd::Do(std::shared_ptr<Slot> slot) {
   success_ = 0;
-  rocksdb::Status s = slot->db()->Setnx(key_, value_, &success_);
-  if (s.ok()) {
+  s_ = slot->db()->Setnx(key_, value_, &success_);
+  if (s_.ok()) {
     res_.AppendInteger(success_);
     AddSlotKey("k", key_, slot);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
-std::string SetnxCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                               uint64_t offset) {
+std::string SetnxCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, 3, "*");
@@ -499,17 +679,15 @@ std::string SetnxCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t lo
   // don't check variable 'success_', because if 'success_' was false, an empty binlog will be saved into file.
   // to setnx cmd
   std::string set_cmd("setnx");
-  RedisAppendLen(content, set_cmd.size(), "$");
+  RedisAppendLenUint64(content, set_cmd.size(), "$");
   RedisAppendContent(content, set_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // value
-  RedisAppendLen(content, value_.size(), "$");
+  RedisAppendLenUint64(content, value_.size(), "$");
   RedisAppendContent(content, value_);
-
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+  return content;
 }
 
 void SetexCmd::DoInitial() {
@@ -526,40 +704,49 @@ void SetexCmd::DoInitial() {
 }
 
 void SetexCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Setex(key_, value_, sec_);
-  if (s.ok()) {
+  s_ = slot->db()->Setex(key_, value_, static_cast<int32_t>(sec_));
+  if (s_.ok()) {
     res_.SetRes(CmdRes::kOk);
     AddSlotKey("k", key_, slot);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
-std::string SetexCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                               uint64_t offset) {
+void SetexCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void SetexCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->Setxx(CachePrefixKeyK, value_, sec_);
+  }
+}
+
+std::string SetexCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, 4, "*");
 
   // to pksetexat cmd
   std::string pksetexat_cmd("pksetexat");
-  RedisAppendLen(content, pksetexat_cmd.size(), "$");
+  RedisAppendLenUint64(content, pksetexat_cmd.size(), "$");
   RedisAppendContent(content, pksetexat_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // time_stamp
   char buf[100];
-  int32_t time_stamp = time(nullptr) + sec_;
+  auto time_stamp = static_cast<int32_t>(time(nullptr) + sec_);
   pstd::ll2string(buf, 100, time_stamp);
   std::string at(buf);
-  RedisAppendLen(content, at.size(), "$");
+  RedisAppendLenUint64(content, at.size(), "$");
   RedisAppendContent(content, at);
   // value
-  RedisAppendLen(content, value_.size(), "$");
+  RedisAppendLenUint64(content, value_.size(), "$");
   RedisAppendContent(content, value_);
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+  return content;
 }
 
 void PsetexCmd::DoInitial() {
@@ -576,39 +763,48 @@ void PsetexCmd::DoInitial() {
 }
 
 void PsetexCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->Setex(key_, value_, usec_ / 1000);
-  if (s.ok()) {
+  s_ = slot->db()->Setex(key_, value_, static_cast<int32_t>(usec_ / 1000));
+  if (s_.ok()) {
     res_.SetRes(CmdRes::kOk);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
-std::string PsetexCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                                uint64_t offset) {
+void PsetexCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void PsetexCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->WriteKVToCache(CachePrefixKeyK, value_, static_cast<int32_t>(usec_ / 1000));
+  }
+}
+
+std::string PsetexCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, 4, "*");
 
   // to pksetexat cmd
   std::string pksetexat_cmd("pksetexat");
-  RedisAppendLen(content, pksetexat_cmd.size(), "$");
+  RedisAppendLenUint64(content, pksetexat_cmd.size(), "$");
   RedisAppendContent(content, pksetexat_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // time_stamp
   char buf[100];
-  int32_t time_stamp = time(nullptr) + usec_ / 1000;
+  auto time_stamp = static_cast<int32_t>(time(nullptr) + usec_ / 1000);
   pstd::ll2string(buf, 100, time_stamp);
   std::string at(buf);
-  RedisAppendLen(content, at.size(), "$");
+  RedisAppendLenUint64(content, at.size(), "$");
   RedisAppendContent(content, at);
   // value
-  RedisAppendLen(content, value_.size(), "$");
+  RedisAppendLenUint64(content, value_.size(), "$");
   RedisAppendContent(content, value_);
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+  return content;
 }
 
 void DelvxCmd::DoInitial() {
@@ -646,15 +842,29 @@ void MsetCmd::DoInitial() {
 }
 
 void MsetCmd::Do(std::shared_ptr<Slot> slot) {
-  storage::Status s = slot->db()->MSet(kvs_);
-  if (s.ok()) {
+  s_ = slot->db()->MSet(kvs_);
+  if (s_.ok()) {
     res_.SetRes(CmdRes::kOk);
     std::vector<storage::KeyValue>::const_iterator it;
     for (it = kvs_.begin(); it != kvs_.end(); it++) {
       AddSlotKey("k", it->key, slot);
     }
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void MsetCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void MsetCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK;
+    for (auto key : kvs_) {
+      CachePrefixKeyK = PCacheKeyPrefixK + key.key;
+      slot->cache()->SetxxWithoutTTL(CachePrefixKeyK, key.value);
+    }
   }
 }
 
@@ -683,6 +893,7 @@ void MsetCmd::Split(std::shared_ptr<Slot> slot, const HintKeys& hint_keys) {
 }
 
 void MsetCmd::Merge() {}
+
 void MsetCmd::DoBinlog(const std::shared_ptr<SyncMasterSlot>& slot) {
   PikaCmdArgsType set_argv;
   set_argv.resize(3);
@@ -727,8 +938,9 @@ void MsetnxCmd::Do(std::shared_ptr<Slot> slot) {
     res_.SetRes(CmdRes::kErrOther, s.ToString());
   }
 }
+
 void MsetnxCmd::DoBinlog(const std::shared_ptr<SyncMasterSlot>& slot) {
-  if(!success_){
+  if (!success_) {
     //some keys already exist, set operations aborted, no need of binlog
     return;
   }
@@ -738,7 +950,7 @@ void MsetnxCmd::DoBinlog(const std::shared_ptr<SyncMasterSlot>& slot) {
   set_argv[0] = "set";
   set_cmd_->SetConn(GetConn());
   set_cmd_->SetResp(resp_.lock());
-  for(auto& kv: kvs_){
+  for (auto& kv: kvs_) {
     set_argv[1] = kv.key;
     set_argv[2] = kv.value;
     set_cmd_->Initial(set_argv, db_name_);
@@ -764,12 +976,46 @@ void GetrangeCmd::DoInitial() {
 
 void GetrangeCmd::Do(std::shared_ptr<Slot> slot) {
   std::string substr;
-  rocksdb::Status s = slot->db()->Getrange(key_, start_, end_, &substr);
-  if (s.ok() || s.IsNotFound()) {
+  s_= slot->db()->Getrange(key_, start_, end_, &substr);
+  if (s_.ok() || s_.IsNotFound()) {
+    res_.AppendStringLenUint64(substr.size());
+    res_.AppendContent(substr);
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void GetrangeCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  std::string substr;
+  std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+  auto s = slot->cache()->GetRange(CachePrefixKeyK, start_, end_, &substr);
+  if (s.ok()) {
     res_.AppendStringLen(substr.size());
     res_.AppendContent(substr);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void GetrangeCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  std::string substr;
+  s_ = slot->db()->GetrangeWithValue(key_, start_, end_, &substr, &value_, &sec_);
+  if (s_.ok()) {
+    res_.AppendStringLen(substr.size());
+    res_.AppendContent(substr);
+  } else if (s_.IsNotFound()) {
+    res_.AppendStringLen(substr.size());
+    res_.AppendContent(substr);
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void GetrangeCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->WriteKVToCache(CachePrefixKeyK, value_, sec_);
   }
 }
 
@@ -787,13 +1033,24 @@ void SetrangeCmd::DoInitial() {
 }
 
 void SetrangeCmd::Do(std::shared_ptr<Slot> slot) {
-  int32_t new_len;
-  rocksdb::Status s = slot->db()->Setrange(key_, offset_, value_, &new_len);
-  if (s.ok()) {
+  int32_t new_len = 0;
+  s_ = slot->db()->Setrange(key_, offset_, value_, &new_len);
+  if (s_.ok()) {
     res_.AppendInteger(new_len);
     AddSlotKey("k", key_, slot);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void SetrangeCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void SetrangeCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->SetRangexx(CachePrefixKeyK, offset_, value_);
   }
 }
 
@@ -807,11 +1064,40 @@ void StrlenCmd::DoInitial() {
 
 void StrlenCmd::Do(std::shared_ptr<Slot> slot) {
   int32_t len = 0;
-  rocksdb::Status s = slot->db()->Strlen(key_, &len);
-  if (s.ok() || s.IsNotFound()) {
+  s_ = slot->db()->Strlen(key_, &len);
+  if (s_.ok() || s_.IsNotFound()) {
+    res_.AppendInteger(len);
+
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void StrlenCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  int32_t len = 0;
+  std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+  auto s= slot->cache()->Strlen(CachePrefixKeyK, &len);
+  if (s.ok()) {
     res_.AppendInteger(len);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void StrlenCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  s_ = slot->db()->GetWithTTL(key_, &value_, &sec_);
+  if (s_.ok() || s_.IsNotFound()) {
+    res_.AppendInteger(value_.size());
+  } else {
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
+  }
+}
+
+void StrlenCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::string CachePrefixKeyK = PCacheKeyPrefixK + key_;
+    slot->cache()->WriteKVToCache(CachePrefixKeyK, value_, sec_);
   }
 }
 
@@ -846,6 +1132,36 @@ void ExistsCmd::Split(std::shared_ptr<Slot> slot, const HintKeys& hint_keys) {
 
 void ExistsCmd::Merge() { res_.AppendInteger(split_res_); }
 
+void ExistsCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  if (1 < keys_.size()) {
+    res_.SetRes(CmdRes::kCacheMiss);
+    return;
+  }
+  uint32_t nums = 0;
+  std::vector<std::string> v;
+  v.emplace_back(PCacheKeyPrefixK + keys_[0]);
+  v.emplace_back(PCacheKeyPrefixL + keys_[0]);
+  v.emplace_back(PCacheKeyPrefixZ + keys_[0]);
+  v.emplace_back(PCacheKeyPrefixS + keys_[0]);
+  v.emplace_back(PCacheKeyPrefixH + keys_[0]);
+  for (auto key : v) {
+    bool exist = slot->cache()->Exists(key);
+    if (exist) {
+      nums++;
+    }
+  }
+  if (nums > 0) {
+    res_.AppendInteger(nums);
+  } else {
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void ExistsCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
+}
+
 void ExpireCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
     res_.SetRes(CmdRes::kWrongNum, kCmdNameExpire);
@@ -860,37 +1176,54 @@ void ExpireCmd::DoInitial() {
 
 void ExpireCmd::Do(std::shared_ptr<Slot> slot) {
   std::map<storage::DataType, rocksdb::Status> type_status;
-  int64_t res = slot->db()->Expire(key_, sec_, &type_status);
+  int64_t res = slot->db()->Expire(key_, static_cast<int32_t>(sec_), &type_status);
   if (res != -1) {
     res_.AppendInteger(res);
+    s_ = rocksdb::Status::OK();
   } else {
     res_.SetRes(CmdRes::kErrOther, "expire internal error");
+    s_ = rocksdb::Status::Corruption("expire internal error");
   }
 }
 
-std::string ExpireCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                                uint64_t offset) {
+std::string ExpireCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
   RedisAppendLen(content, 3, "*");
 
   // to expireat cmd
   std::string expireat_cmd("expireat");
-  RedisAppendLen(content, expireat_cmd.size(), "$");
+  RedisAppendLenUint64(content, expireat_cmd.size(), "$");
   RedisAppendContent(content, expireat_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // sec
   char buf[100];
   int64_t expireat = time(nullptr) + sec_;
   pstd::ll2string(buf, 100, expireat);
   std::string at(buf);
-  RedisAppendLen(content, at.size(), "$");
+  RedisAppendLenUint64(content, at.size(), "$");
   RedisAppendContent(content, at);
+  return content;
+}
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+void ExpireCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void ExpireCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    v.emplace_back(PCacheKeyPrefixK + key_);
+    v.emplace_back(PCacheKeyPrefixL + key_);
+    v.emplace_back(PCacheKeyPrefixZ + key_);
+    v.emplace_back(PCacheKeyPrefixS + key_);
+    v.emplace_back(PCacheKeyPrefixH + key_);
+    for (auto key : v) {
+      slot->cache()->Expire(key, sec_);
+    }
+  }
 }
 
 void PexpireCmd::DoInitial() {
@@ -907,37 +1240,54 @@ void PexpireCmd::DoInitial() {
 
 void PexpireCmd::Do(std::shared_ptr<Slot> slot) {
   std::map<storage::DataType, rocksdb::Status> type_status;
-  int64_t res = slot->db()->Expire(key_, msec_ / 1000, &type_status);
+  int64_t res = slot->db()->Expire(key_, static_cast<int32_t>(msec_ / 1000), &type_status);
   if (res != -1) {
     res_.AppendInteger(res);
+    s_ = rocksdb::Status::OK();
   } else {
     res_.SetRes(CmdRes::kErrOther, "expire internal error");
+    s_ = rocksdb::Status::Corruption("expire internal error");
   }
 }
 
-std::string PexpireCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                                 uint64_t offset) {
+std::string PexpireCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
-  RedisAppendLen(content, argv_.size(), "*");
+  RedisAppendLenUint64(content, argv_.size(), "*");
 
   // to expireat cmd
   std::string expireat_cmd("expireat");
-  RedisAppendLen(content, expireat_cmd.size(), "$");
+  RedisAppendLenUint64(content, expireat_cmd.size(), "$");
   RedisAppendContent(content, expireat_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // sec
   char buf[100];
   int64_t expireat = time(nullptr) + msec_ / 1000;
   pstd::ll2string(buf, 100, expireat);
   std::string at(buf);
-  RedisAppendLen(content, at.size(), "$");
+  RedisAppendLenUint64(content, at.size(), "$");
   RedisAppendContent(content, at);
+  return content;
+}
 
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+void PexpireCmd::DoThroughDB(std::shared_ptr<Slot> slot){
+  Do(slot);
+}
+
+void PexpireCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    v.emplace_back(PCacheKeyPrefixK + key_);
+    v.emplace_back(PCacheKeyPrefixL + key_);
+    v.emplace_back(PCacheKeyPrefixZ + key_);
+    v.emplace_back(PCacheKeyPrefixS + key_);
+    v.emplace_back(PCacheKeyPrefixH + key_);
+    for (auto key : v){
+      slot->cache()->Expire(key, msec_/1000);
+    }
+  }
 }
 
 void ExpireatCmd::DoInitial() {
@@ -954,11 +1304,32 @@ void ExpireatCmd::DoInitial() {
 
 void ExpireatCmd::Do(std::shared_ptr<Slot> slot) {
   std::map<storage::DataType, rocksdb::Status> type_status;
-  int32_t res = slot->db()->Expireat(key_, time_stamp_, &type_status);
+  int32_t res = slot->db()->Expireat(key_, static_cast<int32_t>(time_stamp_), &type_status);
   if (res != -1) {
     res_.AppendInteger(res);
+    s_ = rocksdb::Status::OK();
+
   } else {
     res_.SetRes(CmdRes::kErrOther, "expireat internal error");
+    s_ = rocksdb::Status::Corruption("expireat internal error");
+  }
+}
+
+void ExpireatCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void ExpireatCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    v.emplace_back(PCacheKeyPrefixK + key_);
+    v.emplace_back(PCacheKeyPrefixL + key_);
+    v.emplace_back(PCacheKeyPrefixZ + key_);
+    v.emplace_back(PCacheKeyPrefixS + key_);
+    v.emplace_back(PCacheKeyPrefixH + key_);
+    for (auto key : v) {
+      slot->cache()->Expireat(key, time_stamp_);
+    }
   }
 }
 
@@ -974,38 +1345,55 @@ void PexpireatCmd::DoInitial() {
   }
 }
 
-std::string PexpireatCmd::ToBinlog(uint32_t exec_time, uint32_t term_id, uint64_t logic_id, uint32_t filenum,
-                                   uint64_t offset) {
+std::string PexpireatCmd::ToRedisProtocol() {
   std::string content;
   content.reserve(RAW_ARGS_LEN);
-  RedisAppendLen(content, argv_.size(), "*");
+  RedisAppendLenUint64(content, argv_.size(), "*");
 
   // to expireat cmd
   std::string expireat_cmd("expireat");
-  RedisAppendLen(content, expireat_cmd.size(), "$");
+  RedisAppendLenUint64(content, expireat_cmd.size(), "$");
   RedisAppendContent(content, expireat_cmd);
   // key
-  RedisAppendLen(content, key_.size(), "$");
+  RedisAppendLenUint64(content, key_.size(), "$");
   RedisAppendContent(content, key_);
   // sec
   char buf[100];
   int64_t expireat = time_stamp_ms_ / 1000;
   pstd::ll2string(buf, 100, expireat);
   std::string at(buf);
-  RedisAppendLen(content, at.size(), "$");
+  RedisAppendLenUint64(content, at.size(), "$");
   RedisAppendContent(content, at);
-
-  return PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst, exec_time, term_id, logic_id, filenum, offset,
-                                             content, {});
+  return content;
 }
 
 void PexpireatCmd::Do(std::shared_ptr<Slot> slot) {
   std::map<storage::DataType, rocksdb::Status> type_status;
-  int32_t res = slot->db()->Expireat(key_, time_stamp_ms_ / 1000, &type_status);
+  int32_t res = slot->db()->Expireat(key_, static_cast<int32_t>(time_stamp_ms_ / 1000), &type_status);
   if (res != -1) {
     res_.AppendInteger(res);
+    s_ = rocksdb::Status::OK();
   } else {
     res_.SetRes(CmdRes::kErrOther, "pexpireat internal error");
+    s_ = rocksdb::Status::Corruption("pexpireat internal error");
+  }
+}
+
+void PexpireatCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void PexpireatCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    v.emplace_back(PCacheKeyPrefixK + key_);
+    v.emplace_back(PCacheKeyPrefixL + key_);
+    v.emplace_back(PCacheKeyPrefixZ + key_);
+    v.emplace_back(PCacheKeyPrefixS + key_);
+    v.emplace_back(PCacheKeyPrefixH + key_);
+    for (auto key : v) {
+      slot->cache()->Expireat(key, time_stamp_ms_ / 1000);
+    }
   }
 }
 
@@ -1042,6 +1430,39 @@ void TtlCmd::Do(std::shared_ptr<Slot> slot) {
     // mean this key not exist
     res_.AppendInteger(-2);
   }
+}
+
+void TtlCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  rocksdb::Status s;
+  std::map<storage::DataType, int64_t> type_timestamp;
+  std::map<storage::DataType, rocksdb::Status> type_status;
+  type_timestamp = slot->cache()->TTL(key_, &type_status);
+  for (const auto& item : type_timestamp) {
+    // mean operation exception errors happen in database
+    if (item.second == -3) {
+      res_.SetRes(CmdRes::kErrOther, "ttl internal error");
+      return;
+    }
+  }
+  if (type_timestamp[storage::kStrings] != -2) {
+    res_.AppendInteger(type_timestamp[storage::kStrings]);
+  } else if (type_timestamp[storage::kHashes] != -2) {
+    res_.AppendInteger(type_timestamp[storage::kHashes]);
+  } else if (type_timestamp[storage::kLists] != -2) {
+    res_.AppendInteger(type_timestamp[storage::kLists]);
+  } else if (type_timestamp[storage::kZSets] != -2) {
+    res_.AppendInteger(type_timestamp[storage::kZSets]);
+  } else if (type_timestamp[storage::kSets] != -2) {
+    res_.AppendInteger(type_timestamp[storage::kSets]);
+  } else {
+    // mean this key not exist
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void TtlCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
 }
 
 void PttlCmd::DoInitial() {
@@ -1099,6 +1520,58 @@ void PttlCmd::Do(std::shared_ptr<Slot> slot) {
   }
 }
 
+void PttlCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  std::map<storage::DataType, int64_t> type_timestamp;
+  std::map<storage::DataType, rocksdb::Status> type_status;
+  type_timestamp = slot->cache()->TTL(key_, &type_status);
+  for (const auto& item : type_timestamp) {
+    // mean operation exception errors happen in database
+    if (item.second == -3) {
+      res_.SetRes(CmdRes::kErrOther, "ttl internal error");
+      return;
+    }
+  }
+  if (type_timestamp[storage::kStrings] != -2) {
+    if (type_timestamp[storage::kStrings] == -1) {
+      res_.AppendInteger(-1);
+    } else {
+      res_.AppendInteger(type_timestamp[storage::kStrings] * 1000);
+    }
+  } else if (type_timestamp[storage::kHashes] != -2) {
+    if (type_timestamp[storage::kHashes] == -1) {
+      res_.AppendInteger(-1);
+    } else {
+      res_.AppendInteger(type_timestamp[storage::kHashes] * 1000);
+    }
+  } else if (type_timestamp[storage::kLists] != -2) {
+    if (type_timestamp[storage::kLists] == -1) {
+      res_.AppendInteger(-1);
+    } else {
+      res_.AppendInteger(type_timestamp[storage::kLists] * 1000);
+    }
+  } else if (type_timestamp[storage::kSets] != -2) {
+    if (type_timestamp[storage::kSets] == -1) {
+      res_.AppendInteger(-1);
+    } else {
+      res_.AppendInteger(type_timestamp[storage::kSets] * 1000);
+    }
+  } else if (type_timestamp[storage::kZSets] != -2) {
+    if (type_timestamp[storage::kZSets] == -1) {
+      res_.AppendInteger(-1);
+    } else {
+      res_.AppendInteger(type_timestamp[storage::kZSets] * 1000);
+    }
+  } else {
+    // mean this key not exist
+    res_.SetRes(CmdRes::kCacheMiss);
+  }
+}
+
+void PttlCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
+}
+
 void PersistCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
     res_.SetRes(CmdRes::kWrongNum, kCmdNamePersist);
@@ -1112,8 +1585,28 @@ void PersistCmd::Do(std::shared_ptr<Slot> slot) {
   int32_t res = slot->db()->Persist(key_, &type_status);
   if (res != -1) {
     res_.AppendInteger(res);
+    s_ = rocksdb::Status::OK();
   } else {
     res_.SetRes(CmdRes::kErrOther, "persist internal error");
+    s_ = rocksdb::Status::Corruption("persist internal error");
+  }
+}
+
+void PersistCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  Do(slot);
+}
+
+void PersistCmd::DoUpdateCache(std::shared_ptr<Slot> slot) {
+  if (s_.ok()) {
+    std::vector<std::string> v;
+    v.emplace_back(PCacheKeyPrefixK + key_);
+    v.emplace_back(PCacheKeyPrefixL + key_);
+    v.emplace_back(PCacheKeyPrefixZ + key_);
+    v.emplace_back(PCacheKeyPrefixS + key_);
+    v.emplace_back(PCacheKeyPrefixH + key_);
+    for (auto key : v) {
+      slot->cache()->Persist(key);
+    }
   }
 }
 
@@ -1135,6 +1628,21 @@ void TypeCmd::Do(std::shared_ptr<Slot> slot) {
   }
 }
 
+void TypeCmd::ReadCache(std::shared_ptr<Slot> slot) {
+  std::vector<std::string> types(1);
+  rocksdb::Status s = slot->db()->GetType(key_, true, types);
+  if (s.ok()) {
+    res_.AppendContent("+" + types[0]);
+  } else {
+    res_.SetRes(CmdRes::kCacheMiss, s.ToString());
+  }
+}
+
+void TypeCmd::DoThroughDB(std::shared_ptr<Slot> slot) {
+  res_.clear();
+  Do(slot);
+}
+
 void PTypeCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
     res_.SetRes(CmdRes::kWrongNum, kCmdNameType);
@@ -1148,9 +1656,9 @@ void PTypeCmd::Do(std::shared_ptr<Slot> slot) {
   rocksdb::Status s = slot->db()->GetType(key_, false, types);
 
   if (s.ok()) {
-    res_.AppendArrayLen(types.size());
+    res_.AppendArrayLenUint64(types.size());
     for (const auto& vs : types) {
-      res_.AppendStringLen(vs.size());
+      res_.AppendStringLenUint64(vs.size());
       res_.AppendContent(vs);
     }
   } else {
@@ -1223,14 +1731,14 @@ void ScanCmd::Do(std::shared_ptr<Slot> slot) {
     left = left > PIKA_SCAN_STEP_LENGTH ? left - PIKA_SCAN_STEP_LENGTH : 0;
     cursor_ret = slot->db()->Scan(type_, cursor_ret, pattern_, batch_count, &keys);
     for (const auto& key : keys) {
-      RedisAppendLen(raw, key.size(), "$");
+      RedisAppendLenUint64(raw, key.size(), "$");
       RedisAppendContent(raw, key);
     }
     if (raw.size() >= raw_limit) {
       res_.SetRes(CmdRes::kErrOther, "Response exceeds the max-client-response-size limit");
       return;
     }
-    total_key += keys.size();
+    total_key += static_cast<int64_t>(keys.size());
   } while (cursor_ret != 0 && (left != 0));
 
   res_.AppendArrayLen(2);
@@ -1296,10 +1804,10 @@ void ScanxCmd::Do(std::shared_ptr<Slot> slot) {
 
   if (s.ok()) {
     res_.AppendArrayLen(2);
-    res_.AppendStringLen(next_key.size());
+    res_.AppendStringLenUint64(next_key.size());
     res_.AppendContent(next_key);
 
-    res_.AppendArrayLen(keys.size());
+    res_.AppendArrayLenUint64(keys.size());
     std::vector<std::string>::iterator iter;
     for (const auto& key : keys) {
       res_.AppendString(key);
@@ -1323,11 +1831,11 @@ void PKSetexAtCmd::DoInitial() {
 }
 
 void PKSetexAtCmd::Do(std::shared_ptr<Slot> slot) {
-  rocksdb::Status s = slot->db()->PKSetexAt(key_, value_, time_stamp_);
-  if (s.ok()) {
+  s_ = slot->db()->PKSetexAt(key_, value_, static_cast<int32_t>(time_stamp_));
+  if (s_.ok()) {
     res_.SetRes(CmdRes::kOk);
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
@@ -1389,15 +1897,15 @@ void PKScanRangeCmd::Do(std::shared_ptr<Slot> slot) {
   std::string next_key;
   std::vector<std::string> keys;
   std::vector<storage::KeyValue> kvs;
-  rocksdb::Status s = slot->db()->PKScanRange(type_, key_start_, key_end_, pattern_, limit_, &keys, &kvs, &next_key);
+  s_ = slot->db()->PKScanRange(type_, key_start_, key_end_, pattern_, static_cast<int32_t>(limit_), &keys, &kvs, &next_key);
 
-  if (s.ok()) {
+  if (s_.ok()) {
     res_.AppendArrayLen(2);
-    res_.AppendStringLen(next_key.size());
+    res_.AppendStringLenUint64(next_key.size());
     res_.AppendContent(next_key);
 
     if (type_ == storage::kStrings) {
-      res_.AppendArrayLen(string_with_value ? 2 * kvs.size() : kvs.size());
+      res_.AppendArrayLenUint64(string_with_value ? 2 * kvs.size() : kvs.size());
       for (const auto& kv : kvs) {
         res_.AppendString(kv.key);
         if (string_with_value) {
@@ -1405,13 +1913,13 @@ void PKScanRangeCmd::Do(std::shared_ptr<Slot> slot) {
         }
       }
     } else {
-      res_.AppendArrayLen(keys.size());
+      res_.AppendArrayLenUint64(keys.size());
       for (const auto& key : keys) {
         res_.AppendString(key);
       }
     }
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }
 
@@ -1473,15 +1981,16 @@ void PKRScanRangeCmd::Do(std::shared_ptr<Slot> slot) {
   std::string next_key;
   std::vector<std::string> keys;
   std::vector<storage::KeyValue> kvs;
-  rocksdb::Status s = slot->db()->PKRScanRange(type_, key_start_, key_end_, pattern_, limit_, &keys, &kvs, &next_key);
+  s_ = slot->db()->PKRScanRange(type_, key_start_, key_end_, pattern_, static_cast<int32_t>(limit_),
+                                &keys, &kvs, &next_key);
 
-  if (s.ok()) {
+  if (s_.ok()) {
     res_.AppendArrayLen(2);
-    res_.AppendStringLen(next_key.size());
+    res_.AppendStringLenUint64(next_key.size());
     res_.AppendContent(next_key);
 
     if (type_ == storage::kStrings) {
-      res_.AppendArrayLen(string_with_value ? 2 * kvs.size() : kvs.size());
+      res_.AppendArrayLenUint64(string_with_value ? 2 * kvs.size() : kvs.size());
       for (const auto& kv : kvs) {
         res_.AppendString(kv.key);
         if (string_with_value) {
@@ -1489,12 +1998,12 @@ void PKRScanRangeCmd::Do(std::shared_ptr<Slot> slot) {
         }
       }
     } else {
-      res_.AppendArrayLen(keys.size());
+      res_.AppendArrayLenUint64(keys.size());
       for (const auto& key : keys) {
         res_.AppendString(key);
       }
     }
   } else {
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    res_.SetRes(CmdRes::kErrOther, s_.ToString());
   }
 }

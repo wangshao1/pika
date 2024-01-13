@@ -6,6 +6,7 @@
 #include <glog/logging.h>
 #include <sys/resource.h>
 #include <csignal>
+#include <memory.h>
 
 #include "include/build_version.h"
 #include "include/pika_cmd_table_manager.h"
@@ -14,8 +15,9 @@
 #include "include/pika_define.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
-#include "include/pika_version.h"
 #include "include/pika_slot_command.h"
+#include "include/pika_version.h"
+#include "net/include/net_stats.h"
 #include "pstd/include/env.h"
 #include "pstd/include/pstd_defer.h"
 
@@ -25,6 +27,8 @@ PikaServer* g_pika_server = nullptr;
 std::unique_ptr<PikaReplicaManager> g_pika_rm;
 
 std::unique_ptr<PikaCmdTableManager> g_pika_cmd_table_manager;
+
+extern std::unique_ptr<net::NetworkStatistic> g_network_statistic;
 
 static void version() {
   char version[32];
@@ -37,6 +41,18 @@ static void version() {
   std::cout << "redis_version: " << version << std::endl;
 }
 
+static void PrintPikaLogo() {
+  printf("   .............          ....     .....       .....           .....         \n"
+         "   #################      ####     #####      #####           #######        \n"
+         "   ####         #####     ####     #####    #####            #########       \n"
+         "   ####          #####    ####     #####  #####             ####  #####      \n"
+         "   ####         #####     ####     ##### #####             ####    #####     \n"
+         "   ################       ####     ##### #####            ####      #####    \n"
+         "   ####                   ####     #####   #####         #################   \n"
+         "   ####                   ####     #####    ######      #####         #####  \n"
+         "   ####                   ####     #####      ######   #####           ##### \n");
+}
+
 static void PikaConfInit(const std::string& path) {
   printf("path : %s\n", path.c_str());
   g_pika_conf = std::make_unique<PikaConf>(path);
@@ -46,6 +62,7 @@ static void PikaConfInit(const std::string& path) {
   version();
   printf("-----------Pika config list----------\n");
   g_pika_conf->DumpConf();
+  PrintPikaLogo();
   printf("-----------Pika config end----------\n");
 }
 
@@ -135,7 +152,7 @@ int main(int argc, char* argv[]) {
   bool path_opt = false;
   signed char c;
   char path[1024];
-  while (-1 != (c = getopt(argc, argv, "c:hv"))) {
+  while (-1 != (c = static_cast<int8_t>(getopt(argc, argv, "c:hv")))) {
     switch (c) {
       case 'c':
         snprintf(path, 1024, "%s", optarg);
@@ -192,6 +209,8 @@ int main(int argc, char* argv[]) {
   g_pika_cmd_table_manager = std::make_unique<PikaCmdTableManager>();
   g_pika_server = new PikaServer();
   g_pika_rm = std::make_unique<PikaReplicaManager>();
+  g_network_statistic = std::make_unique<net::NetworkStatistic>();
+  g_pika_server->InitDBStruct();
 
   if (g_pika_conf->daemonize()) {
     close_std();
@@ -202,6 +221,7 @@ int main(int argc, char* argv[]) {
     g_pika_server = nullptr;
     g_pika_rm.reset();
     g_pika_cmd_table_manager.reset();
+    g_network_statistic.reset();
     ::google::ShutdownGoogleLogging();
     g_pika_conf.reset();
   };

@@ -80,7 +80,7 @@ bool DB::FlushSlotSubDB(const std::string& db_name) {
 }
 
 void DB::SetBinlogIoError() { return binlog_io_error_.store(true); }
-
+void DB::SetBinlogIoErrorrelieve() { return binlog_io_error_.store(false); }
 bool DB::IsBinlogIoError() { return binlog_io_error_.load(); }
 
 uint32_t DB::SlotNum() { return slot_num_; }
@@ -97,6 +97,8 @@ Status DB::AddSlots(const std::set<uint32_t>& slot_ids) {
 
   for (const uint32_t& id : slot_ids) {
     slots_.emplace(id, std::make_shared<Slot>(db_name_, id, db_path_));
+    slots_[id]->Init();
+
   }
   return Status::OK();
 }
@@ -162,7 +164,7 @@ void DB::RunKeyScan() {
       break;
     }
   }
-  key_scan_info_.duration = time(nullptr) - key_scan_info_.start_time;
+  key_scan_info_.duration = static_cast<int32_t>(time(nullptr) - key_scan_info_.start_time);
 
   std::lock_guard lm(key_scan_protector_);
   if (s.ok()) {
@@ -212,6 +214,13 @@ void DB::Compact(const storage::DataType& type) {
   }
 }
 
+void DB::CompactRange(const storage::DataType& type, const std::string& start, const std::string& end) {
+  std::lock_guard rwl(slots_rw_);
+  for (const auto& item : slots_) {
+    item.second->CompactRange(type, start, end);
+  }
+}
+
 void DB::DoKeyScan(void* arg) {
   std::unique_ptr <BgTaskArg> bg_task_arg(static_cast<BgTaskArg*>(arg));
   bg_task_arg->db->RunKeyScan();
@@ -220,7 +229,7 @@ void DB::DoKeyScan(void* arg) {
 void DB::InitKeyScan() {
   key_scan_info_.start_time = time(nullptr);
   char s_time[32];
-  int len = strftime(s_time, sizeof(s_time), "%Y-%m-%d %H:%M:%S", localtime(&key_scan_info_.start_time));
+  size_t len = strftime(s_time, sizeof(s_time), "%Y-%m-%d %H:%M:%S", localtime(&key_scan_info_.start_time));
   key_scan_info_.s_start_time.assign(s_time, len);
   key_scan_info_.duration = -1;  // duration -1 mean the task in processing
 }

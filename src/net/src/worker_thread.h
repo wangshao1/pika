@@ -15,12 +15,11 @@
 
 #include "pstd/include/pstd_mutex.h"
 #include "pstd/include/xdebug.h"
-
 #include "net/include/net_define.h"
 #include "net/include/net_thread.h"
 #include "net/include/server_thread.h"
 #include "net/src/net_multiplexer.h"
-
+#include "net/src/dispatch_thread.h"
 namespace net {
 
 class NetItem;
@@ -48,6 +47,8 @@ class WorkerThread : public Thread {
 
   NetMultiplexer* net_multiplexer() { return net_multiplexer_.get(); }
   bool TryKillConn(const std::string& ip_port);
+
+  ServerThread* GetServerThread() { return server_thread_; }
 
   mutable pstd::RWMutex rwlock_; /* For external statistics */
   std::map<int, std::shared_ptr<NetConn>> conns_;

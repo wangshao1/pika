@@ -68,9 +68,9 @@ void PikaReplClient::Schedule(net::TaskFunc func, void* arg) {
 
 void PikaReplClient::ScheduleWriteBinlogTask(const std::string& db_slot,
                                              const std::shared_ptr<InnerMessage::InnerResponse>& res,
-                                             std::shared_ptr<net::PbConn> conn, void* res_private_data) {
+                                             const std::shared_ptr<net::PbConn>& conn, void* res_private_data) {
   size_t index = GetHashIndex(db_slot, true);
-  auto task_arg = new ReplClientWriteBinlogTaskArg(res, std::move(conn), res_private_data, bg_workers_[index].get());
+  auto task_arg = new ReplClientWriteBinlogTaskArg(res, conn, res_private_data, bg_workers_[index].get());
   bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteBinlog, static_cast<void*>(task_arg));
 }
 
@@ -161,7 +161,7 @@ Status PikaReplClient::SendSlotDBSync(const std::string& ip, uint32_t port, cons
     LOG(WARNING) << "Serialize Slot DBSync Request Failed, to Master (" << ip << ":" << port << ")";
     return Status::Corruption("Serialize Failed");
   }
-  return client_thread_->Write(ip, port + kPortShiftReplServer, to_send);
+  return client_thread_->Write(ip, static_cast<int32_t>(port) + kPortShiftReplServer, to_send);
 }
 
 Status PikaReplClient::SendSlotTrySync(const std::string& ip, uint32_t port, const std::string& db_name,
@@ -181,33 +181,12 @@ Status PikaReplClient::SendSlotTrySync(const std::string& ip, uint32_t port, con
   binlog_offset->set_filenum(boffset.filenum);
   binlog_offset->set_offset(boffset.offset);
 
-  if (g_pika_conf->consensus_level() != 0) {
-    std::shared_ptr<SyncMasterSlot> slot =
-        g_pika_rm->GetSyncMasterSlotByName(SlotInfo(db_name, slot_id));
-    if (!slot) {
-      return Status::Corruption("Slot not found");
-    }
-    LogOffset last_index = slot->ConsensusLastIndex();
-    uint32_t term = slot->ConsensusTerm();
-    LOG(INFO) << SlotInfo(db_name, slot_id).ToString() << " TrySync Increase self term from " << term
-              << " to " << term + 1;
-    term++;
-    slot->ConsensusUpdateTerm(term);
-    InnerMessage::ConsensusMeta* consensus_meta = request.mutable_consensus_meta();
-    consensus_meta->set_term(term);
-    InnerMessage::BinlogOffset* pb_offset = consensus_meta->mutable_log_offset();
-    pb_offset->set_filenum(last_index.b_offset.filenum);
-    pb_offset->set_offset(last_index.b_offset.offset);
-    pb_offset->set_term(last_index.l_offset.term);
-    pb_offset->set_index(last_index.l_offset.index);
-  }
-
   std::string to_send;
   if (!request.SerializeToString(&to_send)) {
     LOG(WARNING) << "Serialize Slot TrySync Request Failed, to Master (" << ip << ":" << port << ")";
     return Status::Corruption("Serialize Failed");
   }
-  return client_thread_->Write(ip, port + kPortShiftReplServer, to_send);
+  return client_thread_->Write(ip, static_cast<int32_t>(port + kPortShiftReplServer), to_send);
 }
 
 Status PikaReplClient::SendSlotBinlogSync(const std::string& ip, uint32_t port, const std::string& db_name,
@@ -250,7 +229,7 @@ Status PikaReplClient::SendSlotBinlogSync(const std::string& ip, uint32_t port, 
     LOG(WARNING) << "Serialize Slot BinlogSync Request Failed, to Master (" << ip << ":" << port << ")";
     return Status::Corruption("Serialize Failed");
   }
-  return client_thread_->Write(ip, port + kPortShiftReplServer, to_send);
+  return client_thread_->Write(ip, static_cast<int32_t>(port + kPortShiftReplServer), to_send);
 }
 
 Status PikaReplClient::SendRemoveSlaveNode(const std::string& ip, uint32_t port, const std::string& db_name,
@@ -272,5 +251,5 @@ Status PikaReplClient::SendRemoveSlaveNode(const std::string& ip, uint32_t port,
                  << slot_id;
     return Status::Corruption("Serialize Failed");
   }
-  return client_thread_->Write(ip, port + kPortShiftReplServer, to_send);
+  return client_thread_->Write(ip, static_cast<int32_t>(port + kPortShiftReplServer), to_send);
 }

@@ -13,6 +13,7 @@
 
 #include "net/include/net_define.h"
 #include "pstd/include/pstd_mutex.h"
+#include "concurrentqueue/moodycamel/concurrentqueue.h"
 
 namespace net {
 
@@ -21,6 +22,7 @@ using TaskFunc = void (*)(void *);
 struct Task {
   TaskFunc func;
   void* arg;
+  Task() = default;
   Task(TaskFunc _func, void* _arg) : func(_func), arg(_arg) {}
 };
 
@@ -49,7 +51,7 @@ class ThreadPool : public pstd::noncopyable {
     std::string worker_name_;
   };
 
-  explicit ThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name = "ThreadPool");
+  explicit ThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name = "ThreadPool", bool use_concurrent_queue = false);
   virtual ~ThreadPool();
 
   int start_thread_pool();
@@ -58,6 +60,8 @@ class ThreadPool : public pstd::noncopyable {
   void set_should_stop();
 
   void Schedule(TaskFunc func, void* arg);
+  void ScheduleWithStdQueue(TaskFunc func, void* arg);
+  void ScheduleWithConcurrentQueue(TaskFunc func, void* arg);
   void DelaySchedule(uint64_t timeout, TaskFunc func, void* arg);
   size_t max_queue_size();
   size_t worker_size();
@@ -67,12 +71,16 @@ class ThreadPool : public pstd::noncopyable {
 
  private:
   void runInThread();
+  void runInThreadWithStdQueue();
+  void runInThreadWithConcurrentQueue();
 
   size_t worker_num_;
   size_t max_queue_size_;
+  bool use_concurrent_queue_;
   std::string thread_pool_name_;
   std::queue<Task> queue_;
   std::priority_queue<TimeTask> time_queue_;
+  moodycamel::ConcurrentQueue<Task> concurrent_queue_;
   std::vector<Worker*> workers_;
   std::atomic<bool> running_;
   std::atomic<bool> should_stop_;

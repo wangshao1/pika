@@ -41,10 +41,11 @@ int ThreadPool::Worker::stop() {
   return 0;
 }
 
-ThreadPool::ThreadPool(size_t worker_num, size_t max_queue_size, std::string  thread_pool_name)
+ThreadPool::ThreadPool(size_t worker_num, size_t max_queue_size, std::string thread_pool_name, bool use_concurrent_queue)
     : worker_num_(worker_num),
       max_queue_size_(max_queue_size),
       thread_pool_name_(std::move(thread_pool_name)),
+      concurrent_queue_(use_concurrent_queue ? max_queue_size : 0),
       running_(false),
       should_stop_(false) {}
 
@@ -90,6 +91,13 @@ bool ThreadPool::should_stop() { return should_stop_.load(); }
 void ThreadPool::set_should_stop() { should_stop_.store(true); }
 
 void ThreadPool::Schedule(TaskFunc func, void* arg) {
+  if (use_concurrent_queue_) {
+    return ScheduleWithConcurrentQueue(func, arg);
+  }
+  return ScheduleWithStdQueue(func, arg);
+}
+
+void ThreadPool::ScheduleWithStdQueue(TaskFunc func, void* arg) {
   std::unique_lock lock(mu_);
   wsignal_.wait(lock, [this]() { return queue_.size() < max_queue_size_ || should_stop(); });
 
@@ -99,10 +107,31 @@ void ThreadPool::Schedule(TaskFunc func, void* arg) {
   }
 }
 
+void ThreadPool::ScheduleWithConcurrentQueue(TaskFunc func, void* arg) {
+  Task task{func, arg};
+  int retry_cnt = 0;
+  bool success = false;
+  while (retry_cnt++ < 100 && !success) {
+    success = concurrent_queue_.try_enqueue(task);
+    if (success) {
+      rsignal_.notify_one();
+      return;
+    }
+  }
+
+  std::unique_lock<std::mutex> lock(mu_);
+  wsignal_.wait(lock, [this, &task]() { return concurrent_queue_.try_enqueue(task) || should_stop(); });
+
+  if (!should_stop()) {
+    rsignal_.notify_one();
+  }
+}
+
 /*
  * timeout is in millisecond
  */
 void ThreadPool::DelaySchedule(uint64_t timeout, TaskFunc func, void* arg) {
+  assert(!use_concurrent_queue_);
   auto now = std::chrono::system_clock::now();
   uint64_t unow = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
   uint64_t exec_time = unow + timeout * 1000;
@@ -117,11 +146,16 @@ void ThreadPool::DelaySchedule(uint64_t timeout, TaskFunc func, void* arg) {
 size_t ThreadPool::max_queue_size() { return max_queue_size_; }
 
 void ThreadPool::cur_queue_size(size_t* qsize) {
+  if (use_concurrent_queue_) {
+    *qsize = concurrent_queue_.size_approx();
+    return;
+  }
   std::lock_guard lock(mu_);
   *qsize = queue_.size();
 }
 
 void ThreadPool::cur_time_queue_size(size_t* qsize) {
+  assert(!use_concurrent_queue_);
   std::lock_guard lock(mu_);
   *qsize = time_queue_.size();
 }
@@ -129,6 +163,13 @@ void ThreadPool::cur_time_queue_size(size_t* qsize) {
 std::string ThreadPool::thread_pool_name() { return thread_pool_name_; }
 
 void ThreadPool::runInThread() {
+  if (use_concurrent_queue_) {
+    return runInThreadWithConcurrentQueue();
+  }
+  return runInThreadWithStdQueue();
+}
+
+void ThreadPool::runInThreadWithStdQueue() {
   while (!should_stop()) {
     std::unique_lock lock(mu_);
     rsignal_.wait(lock, [this]() { return !queue_.empty() || !time_queue_.empty() || should_stop(); });
@@ -160,6 +201,31 @@ void ThreadPool::runInThread() {
       lock.unlock();
       (*func)(arg);
     }
+  }
+}
+
+void ThreadPool::runInThreadWithConcurrentQueue() {
+  while (!should_stop()) {
+    bool success = false;
+    int retry_cnt = 0;
+    Task task;
+    while (retry_cnt++ < 3 && !success) {
+      success = concurrent_queue_.try_dequeue(task);
+      wsignal_.notify_one();
+      if (success) {
+        break;
+      }
+    }
+    if (!success) {
+      std::unique_lock<std::mutex> lock(mu_);
+      rsignal_.wait(lock, [this, &task]() { return concurrent_queue_.try_dequeue(task) || should_stop(); });
+      if (should_stop()) {
+        break;
+      }
+      wsignal_.notify_one();
+    }
+
+    (*task.func)(task.arg);
   }
 }
 }  // namespace net

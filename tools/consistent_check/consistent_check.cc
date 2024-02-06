@@ -3,23 +3,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <map>
-#include <unordered_map>
-#include <chrono>
-#include <ctime>
-#include <functional>
-#include <iostream>
 #include <set>
+#include <ctime>
+#include <chrono>
 #include <random>
 #include <vector>
+#include <iostream>
+#include <functional>
+#include <unordered_map>
 
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "hiredis/hiredis.h"
 
+#include "pstd/include/env.h"
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/pstd_string.h"
-#include "pstd/include/env.h"
 
 DEFINE_string(host, "127.0.0.1", "target server's host");
 DEFINE_int32(port, 9221, "target server's listen port");
@@ -57,6 +56,28 @@ void FreeAndReconnect(redisContext*& c, ThreadArg* arg) {
   redisFree(c);
   while (!c) {
     c = Prepare(arg);
+  }
+}
+
+void DoSet(std::vector<const char*>& argv, std::vector<size_t>& argvlen, ThreadArg* arg, redisContext*& c, int expect_type = REDIS_REPLY_STATUS) {
+  redisReply* res = nullptr;
+  while (true) {
+    res = reinterpret_cast<redisReply*>(
+        redisCommandArgv(c, argv.size(), &(argv[0]), &(argvlen[0])));
+    if (!res) {
+      FreeAndReconnect(c, arg);
+      continue;
+    }
+
+    if (res->type != expect_type ||
+        (res->type == REDIS_REPLY_STATUS && strcasecmp(res->str, "OK"))) {
+      LOG(INFO) << "set response error, type: " << res->type << " str: " << res->str;
+      freeReplyObject(res);
+      continue;
+    }
+
+    freeReplyObject(res);
+    break;
   }
 }
 
@@ -186,13 +207,13 @@ void PrintInfo(const std::time_t& now) {
 }
 
 void RunGenerate(int index) {
+  int pid = (int)getpid();
   char hostname[255];
   if (gethostname(hostname, sizeof(hostname)) == -1) {
     LOG(WARNING) << "get hostname failed";
     exit(1);
   }
 
-  int pid = (int)getpid();
 
   std::string prefix(hostname, 8);
   prefix.append("_");
@@ -303,26 +324,7 @@ Status RunSingleStringCheck(redisContext*& c, ThreadArg* arg) {
     set_argvlen[1] = key.size();
     set_argv[2] = value.c_str();
     set_argvlen[2] = value.size();
-
-    while (true) {
-      res = reinterpret_cast<redisReply*>(
-          redisCommandArgv(c, set_argv.size(), &(set_argv[0]), &(set_argvlen[0])));
-      if (!res) {
-        LOG(INFO) << "string set timeout key: " << key;
-        FreeAndReconnect(c, arg);
-        continue;
-      }
-
-      if (res->type != REDIS_REPLY_STATUS || strcasecmp(res->str, "OK")) {
-        LOG(INFO) << "string set response invalid type: "
-                  << res->type << " res->str: " << res->str
-                  << " key: " << key;
-        freeReplyObject(res);
-        continue;
-      }
-      freeReplyObject(res);
-      break;
-    }
+    DoSet(set_argv, set_argvlen, arg, c);
 
     std::vector<const char*> get_argv(2);
     std::vector<size_t> get_argvlen(2);
@@ -378,7 +380,6 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
   std::string value = std::to_string(value_version);
 
   int total = FLAGS_count * FLAGS_element_count;
-
   for (int idx = 0; idx < total / FLAGS_batch_size; ++idx) {
     if (idx % 10000 == 0) {
       LOG(INFO) << "finish " << idx << " consistent check";
@@ -395,27 +396,7 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
       set_argv[2 * i + 2] = value.c_str();
       set_argvlen[2 * i + 2] = value.size();
     }
-
-    while (true) {
-      redisReply* res = nullptr;
-      res = reinterpret_cast<redisReply*>(
-          redisCommandArgv(c, set_argv.size(), &(set_argv[0]), &(set_argvlen[0])));
-      if (!res) {
-        FreeAndReconnect(c, arg);
-        continue;
-      }
-
-      if (res->type != REDIS_REPLY_STATUS || strcasecmp(res->str, "OK")) {
-        LOG(INFO) << "string mset response wrong type: "
-                  << res->type << " res->str: " << res->str
-                  << " first key: " << keys[idx * FLAGS_batch_size];
-        freeReplyObject(res);
-        continue;
-      }
-
-      freeReplyObject(res);
-      break;
-    }
+    DoSet(set_argv, set_argvlen, arg, c);
 
     std::vector<std::string> expect_values(FLAGS_batch_size, value);
     std::vector<const char*> get_argv(FLAGS_batch_size + 1);
@@ -473,6 +454,85 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
   return Status::OK();
 }
 
+Status RunSingleHashCheck(redisContext*& c, ThreadArg* arg) {
+  Status s;
+  redisReply* res = nullptr;
+  std::vector<std::pair<std::string, std::set<std::string>>> keys;
+  PreparePkeyMembers(arg->idx, &keys);
+  uint64_t value_version = arg->value_version++;
+  std::string value = std::to_string(value_version);
+
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
+    if (idx % 10000 == 0) {
+      LOG(INFO) << "finish " << idx << " single hash consistent check";
+    }
+
+    std::string pkey = keys[idx].first;
+    std::set<std::string> members = std::move(keys[idx].second);
+    auto member_iter = members.cbegin();
+    while (member_iter != members.cend()) {
+      std::vector<const char*> set_argv(4);
+      std::vector<size_t> set_argvlen(4);
+      set_argv[0] = "hset";
+      set_argvlen[0] = 4;
+      set_argv[1] = pkey.c_str();
+      set_argvlen[1] = pkey.size();
+      set_argv[2] = member_iter->c_str();
+      set_argvlen[2] = member_iter->size();
+      set_argv[3] = value.c_str();
+      set_argvlen[3] = value.size();
+      DoSet(set_argv, set_argvlen, arg, c, REDIS_REPLY_INTEGER);
+
+      std::vector<const char*> get_argv(3);
+      std::vector<size_t> get_argvlen(3);
+      get_argv[0] = "hget";
+      get_argvlen[0] = 4;
+      get_argv[1] = pkey.c_str();
+      get_argvlen[1] = pkey.size();
+      get_argv[2] = member_iter->c_str();
+      get_argvlen[2] = member_iter->size();
+
+      int retry_times = 0;
+      while (true) {
+        res = reinterpret_cast<redisReply*>(
+            redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
+
+        // nullptr res, reconnect
+        if (!res) {
+          FreeAndReconnect(c, arg);
+          continue;
+        }
+
+        // success
+        if (res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(res->str, res->len))) {
+          freeReplyObject(res);
+          break;
+        }
+
+        // can retry
+        if (++retry_times < FLAGS_max_retries) {
+          freeReplyObject(res);
+          usleep(5000);
+          continue;
+        }
+
+        // log and terminate process
+        LOG(ERROR) << "hash single key consistent_check failed,"
+                   << " pkey: " << pkey
+                   << " expect type : " << REDIS_REPLY_ARRAY
+                   << " actual type : " << res->type
+                   << " request key : " << (*member_iter)
+                   << " expect value : " << value
+                   << " actual value : " << std::string(res->str, res->len);
+        freeReplyObject(res);
+        exit(1);
+      }
+      member_iter++;
+    }
+  }
+
+  return s;
+}
 
 Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
   redisReply* res = nullptr;
@@ -512,26 +572,7 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
       if (i != FLAGS_batch_size) {
         set_argv.resize(2 + i * 2);
       }
-
-      while (true) {
-        res = reinterpret_cast<redisReply*>(
-            redisCommandArgv(c, set_argv.size(), &(set_argv[0]), &(set_argvlen[0])));
-        if (!res) {
-          FreeAndReconnect(c, arg);
-          continue;
-        }
-
-        if (res->type != REDIS_REPLY_STATUS || strcasecmp(res->str, "OK")) {
-          LOG(INFO) << "hash hmset response wrong type: "
-                    << res->type << " res->str: " << res->str
-                    << " pkey: " << pkey;
-          freeReplyObject(res);
-          continue;
-        }
-
-        freeReplyObject(res);
-        break;
-      }
+      DoSet(set_argv, set_argvlen, arg, c);
     }
 
     member_iter = members.cbegin();
@@ -674,7 +715,7 @@ void* ThreadMain(void* arg) {
     } else if (FLAGS_type == "hash" && FLAGS_is_batch) {
       s = RunBatchHashCheck(c, ta);
     } else if (FLAGS_type == "hash" && !FLAGS_is_batch) {
-     // s = RunSingleHashCheck(c, ta);
+      s = RunSingleHashCheck(c, ta);
     }
   }
 
@@ -728,7 +769,6 @@ int main(int argc, char* argv[]) {
   auto hours = std::chrono::duration_cast<std::chrono::hours>(end_time - start_time).count();
   auto minutes = std::chrono::duration_cast<std::chrono::minutes>(end_time - start_time).count();
   auto seconds = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
-
 
   std::cout << "Total Time Cost : " << hours << " hours " << minutes % 60 << " minutes " << seconds % 60 << " seconds "
             << std::endl;

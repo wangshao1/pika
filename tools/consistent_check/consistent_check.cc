@@ -53,7 +53,9 @@ std::vector<std::string> tables;
 
 redisContext* Prepare(ThreadArg* arg);
 void FreeAndReconnect(redisContext*& c, ThreadArg* arg) {
+  LOG(INFO) << "request timeout, reconnect";
   redisFree(c);
+  c = nullptr;
   while (!c) {
     c = Prepare(arg);
   }
@@ -334,14 +336,12 @@ Status RunSingleStringCheck(redisContext*& c, ThreadArg* arg) {
     get_argvlen[1] = key.size();
 
     int retry_times = 0;
-    bool log_and_exit = false;
     while (true) {
       res = reinterpret_cast<redisReply*>(
           redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
 
       // nullptr res, reconnect
       if (!res) {
-        LOG(INFO) << "string get timeout key: " << key;
         FreeAndReconnect(c, arg);
         continue;
       }
@@ -438,12 +438,12 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
                  << " expect type : " << REDIS_REPLY_ARRAY
                  << " actual type : " << res->type;
       LOG(ERROR) << "request keys: ";
-      for (int i = 1; i < get_argv.size(); i++) {
+      for (size_t i = 1; i < get_argv.size(); i++) {
         LOG(ERROR) << "key: " << std::string(get_argv[i], get_argvlen[i]);
       }
 
       LOG(ERROR) << "expect vs actual value: ";
-      for (int i = 0; i < res->elements; i++) {
+      for (size_t i = 0; i < res->elements; i++) {
         LOG(ERROR) << "expect: " << value << " actual: "
                    << std::string(res->element[i]->str, res->element[i]->len);
       }
@@ -625,11 +625,11 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
                    << " expect type : " << REDIS_REPLY_ARRAY
                    << " actual type : " << res->type;
         LOG(ERROR) << "request members: ";
-        for (int i = 2; i < get_argv.size(); i++) {
+        for (size_t i = 2; i < get_argv.size(); i++) {
           LOG(ERROR) << "member: " << std::string(get_argv[i], get_argvlen[i]);
         }
         LOG(ERROR) << "expect vs actual value: ";
-        for (int i = 0; i < res->elements; i++) {
+        for (size_t i = 0; i < res->elements; i++) {
           LOG(ERROR) << "expect: " << value << " actual: "
                      << std::string(res->element[i]->str, res->element[i]->len);
         }
@@ -652,7 +652,6 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
 
       // nullptr res, reconnect
       if (!res) {
-        LOG(INFO) << " hash type hgetall timeout, key: " << pkey;
         FreeAndReconnect(c, arg);
         continue;
       }
@@ -681,7 +680,7 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
       }
 
       LOG(ERROR) << "expect vs actual value: ";
-      for (int i = 0; i < res->elements; i++) {
+      for (size_t i = 0; i < res->elements; i++) {
         LOG(ERROR) << "expect: " << value << " actual: "
                    << std::string(res->element[i]->str, res->element[i]->len);
       }
@@ -734,7 +733,7 @@ int main(int argc, char* argv[]) {
     exit(-1);
   }
 
-  FLAGS_logtostdout = true;
+  FLAGS_logtostderr = true;
   FLAGS_minloglevel = 0;
   FLAGS_logbufsecs = 0;
   ::google::InitGoogleLogging("consistent_check");

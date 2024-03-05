@@ -3,8 +3,8 @@
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
 
-#ifndef PIKA_BINLOG_H_
-#define PIKA_BINLOG_H_
+#ifndef PIKA_CLOUD_BINLOG_H_
+#define PIKA_CLOUD_BINLOG_H_
 
 #include <atomic>
 
@@ -13,13 +13,14 @@
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/noncopyable.h"
 #include "include/pika_define.h"
+#include "include/pika_binlog.h"
 
 std::string NewFileName(const std::string& name, uint32_t current);
 
-class Version final : public pstd::noncopyable {
+class CloudVersion final : public pstd::noncopyable {
  public:
-  Version(const std::shared_ptr<pstd::RWFile>& save);
-  ~Version();
+  CloudVersion(const std::shared_ptr<pstd::RWFile>& save);
+  ~CloudVersion();
 
   pstd::Status Init();
 
@@ -28,7 +29,6 @@ class Version final : public pstd::noncopyable {
 
   uint32_t pro_num_ = 0;
   uint64_t pro_offset_ = 0;
-  uint64_t logic_id_ = 0;
   uint32_t term_ = 0;
 
   std::shared_mutex rwlock_;
@@ -43,34 +43,31 @@ class Version final : public pstd::noncopyable {
   std::shared_ptr<pstd::RWFile> save_;
 };
 
-class Binlog : public pstd::noncopyable {
+class CloudBinlog : public Binlog {
  public:
-  Binlog(std::string  Binlog_path, int file_size = 100 * 1024 * 1024);
-  virtual ~Binlog();
+  CloudBinlog(std::string  Binlog_path, int file_size = 100 * 1024 * 1024);
+  ~CloudBinlog() {}
 
-  void Lock() { mutex_.lock(); }
-  void Unlock() { mutex_.unlock(); }
+  pstd::Status Put(const std::string& item);
 
-  virtual pstd::Status Put(const std::string& item);
-
-  virtual pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
+  pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
   /*
    * Set Producer pro_num and pro_offset with lock
    */
-  virtual pstd::Status SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term = 0, uint64_t index = 0);
+  pstd::Status SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term = 0, uint64_t index = 0);
   // Need to hold Lock();
-  virtual pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index);
+  pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index = 0);
 
   std::string filename() { return filename_; }
 
   // need to hold mutex_
-  virtual void SetTerm(uint32_t term) {
+  void SetTerm(uint32_t term) {
     std::lock_guard l(version_->rwlock_);
     version_->term_ = term;
     version_->StableSave();
   }
 
-  virtual uint32_t term() {
+  uint32_t term() {
     std::shared_lock l(version_->rwlock_);
     return version_->term_;
   }
@@ -90,7 +87,7 @@ class Binlog : public pstd::noncopyable {
 
   std::atomic<bool> opened_;
 
-  std::unique_ptr<Version> version_;
+  std::unique_ptr<CloudVersion> version_;
   std::unique_ptr<pstd::WritableFile> queue_;
   // versionfile_ can only be used as a shared_ptr, and it will be used as a variable version_ in the ~Version() function.
   std::shared_ptr<pstd::RWFile> versionfile_;

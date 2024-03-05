@@ -309,6 +309,11 @@ const int PIKA_ROLE_MASTER = 2;
  */
 constexpr int PIKA_CACHE_NONE = 0;
 constexpr int PIKA_CACHE_READ = 1;
+/*
+ * cloud model
+ */
+constexpr int PIKA_LOCAL = 0;
+constexpr int PIKA_CLOUD = 1;
 
 /*
  * cache size

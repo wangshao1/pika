@@ -2899,9 +2899,12 @@ void PaddingCmd::DoInitial() {
 void PaddingCmd::Do() { res_.SetRes(CmdRes::kOk); }
 
 std::string PaddingCmd::ToRedisProtocol() {
-  return PikaBinlogTransverter::ConstructPaddingBinlog(
+  if (g_pika_conf->pika_model() == PIKA_LOCAL)
+    return PikaBinlogTransverter::ConstructPaddingBinlog(
       BinlogType::TypeFirst,
       argv_[1].size() + BINLOG_ITEM_HEADER_SIZE + PADDING_BINLOG_PROTOCOL_SIZE + SPACE_STROE_PARAMETER_LENGTH);
+  else if (g_pika_conf->pika_model() == PIKA_CLOUD)
+    return PikaBinlogTransverter::ConstructPaddingBinlog(BinlogType::TypeFirst, argv_[1].size());
 }
 
 void PKPatternMatchDelCmd::DoInitial() {

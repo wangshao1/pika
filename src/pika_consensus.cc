@@ -31,8 +31,10 @@ Status Context::StableSave() {
   memcpy(p, &(applied_index_.b_offset.offset), sizeof(uint64_t));
   p += 8;
   memcpy(p, &(applied_index_.l_offset.term), sizeof(uint32_t));
-  p += 4;
-  memcpy(p, &(applied_index_.l_offset.index), sizeof(uint64_t));
+  if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+    p += 4;
+    memcpy(p, &(applied_index_.l_offset.index), sizeof(uint64_t));
+  }
   return Status::OK();
 }
 
@@ -55,13 +57,15 @@ Status Context::Init() {
     memcpy(reinterpret_cast<char*>(&(applied_index_.b_offset.filenum)), save_->GetData(), sizeof(uint32_t));
     memcpy(reinterpret_cast<char*>(&(applied_index_.b_offset.offset)), save_->GetData() + 4, sizeof(uint64_t));
     memcpy(reinterpret_cast<char*>(&(applied_index_.l_offset.term)), save_->GetData() + 12, sizeof(uint32_t));
-    memcpy(reinterpret_cast<char*>(&(applied_index_.l_offset.index)), save_->GetData() + 16, sizeof(uint64_t));
+    if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+      memcpy(reinterpret_cast<char*>(&(applied_index_.l_offset.index)), save_->GetData() + 16, sizeof(uint64_t));
+    }
     return Status::OK();
   } else {
     return Status::Corruption("Context init error");
   }
 }
-
+//not used func
 void Context::UpdateAppliedIndex(const LogOffset& offset) {
   std::lock_guard l(rwlock_);
   LogOffset cur_offset;
@@ -71,7 +75,7 @@ void Context::UpdateAppliedIndex(const LogOffset& offset) {
     StableSave();
   }
 }
-
+//bx check 查看是否需要在外层修改
 void Context::Reset(const LogOffset& offset) {
   std::lock_guard l(rwlock_);
   applied_index_ = offset;

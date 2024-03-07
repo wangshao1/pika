@@ -68,9 +68,10 @@ Binlog::Binlog(std::string  binlog_path, const int file_size)
   // To intergrate with old version, we don't set mmap file size to 100M;
   // pstd::SetMmapBoundSize(file_size);
   // pstd::kMmapBoundSize = 1024 * 1024 * 100;
+  // bin log not init
+  if (binlog_path_ == "" || file_size_ == 0) return;
 
   Status s;
-
   pstd::CreateDir(binlog_path_);
 
   filename_ = binlog_path_ + kBinlogPrefix;

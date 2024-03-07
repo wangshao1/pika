@@ -55,11 +55,70 @@ Status CloudVersion::Init() {
  */
 
 CloudBinlog::CloudBinlog(std::string binlog_path, const int file_size)
-    : Binlog(binlog_path, file_size),
+    : Binlog("", 0),
       opened_(false),
       binlog_path_(std::move(binlog_path)),
       file_size_(file_size),
-      binlog_io_error_(false) {}
+      binlog_io_error_(false) {
+  // To intergrate with old version, we don't set mmap file size to 100M;
+  // pstd::SetMmapBoundSize(file_size);
+  // pstd::kMmapBoundSize = 1024 * 1024 * 100;
+  // bin log not init
+  if (binlog_path_ == "" || file_size_ == 0) return;
+
+  Status s;
+  pstd::CreateDir(binlog_path_);
+
+  filename_ = binlog_path_ + kBinlogPrefix;
+  const std::string manifest = binlog_path_ + kManifest;
+  std::string profile;
+
+  if (!pstd::FileExists(manifest)) {
+    LOG(INFO) << "Cloud Binlog: Manifest file not exist, we create a new one.";
+
+    profile = NewFileName(filename_, pro_num_);
+    s = pstd::NewWritableFile(profile, queue_);
+    if (!s.ok()) {
+      LOG(FATAL) << "Cloud Binlog: new " << filename_ << " " << s.ToString();
+    }
+    std::unique_ptr<pstd::RWFile> tmp_file;
+    s = pstd::NewRWFile(manifest, tmp_file);
+    versionfile_.reset(tmp_file.release());
+    if (!s.ok()) {
+      LOG(FATAL) << "Cloud Binlog: new versionfile error " << s.ToString();
+    }
+
+    version_ = std::make_unique<CloudVersion>(versionfile_);
+    version_->StableSave();
+  } else {
+    LOG(INFO) << "Cloud Binlog: Find the exist file.";
+    std::unique_ptr<pstd::RWFile> tmp_file;
+    s = pstd::NewRWFile(manifest, tmp_file);
+    versionfile_.reset(tmp_file.release());
+    if (s.ok()) {
+      version_ = std::make_unique<CloudVersion>(versionfile_);
+      version_->Init();
+      pro_num_ = version_->pro_num_;
+
+      // Debug
+      // version_->debug();
+    } else {
+      LOG(FATAL) << "Cloud Binlog: open versionfile error";
+    }
+
+    profile = NewFileName(filename_, pro_num_);
+    DLOG(INFO) << "Cloud Binlog: open profile " << profile;
+    s = pstd::AppendWritableFile(profile, queue_, version_->pro_offset_);
+    if (!s.ok()) {
+      LOG(FATAL) << "Cloud Binlog: Open file " << profile << " error " << s.ToString();
+    }
+
+    uint64_t filesize = queue_->Filesize();
+    DLOG(INFO) << "Cloud Binlog: filesize is " << filesize;
+  }
+
+  InitLogFile();
+}
 
 void CloudBinlog::InitLogFile() {
   assert(queue_ != nullptr);
@@ -70,7 +129,7 @@ void CloudBinlog::InitLogFile() {
 
 Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term, uint64_t* logic_id) {
   if (!opened_.load()) {
-    return Status::Busy("Binlog is not open yet");
+    return Status::Busy("Cloud Binlog is not open yet");
   }
 
   std::shared_lock l(version_->rwlock_);

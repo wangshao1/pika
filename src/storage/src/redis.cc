@@ -482,18 +482,84 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
   std::string s3_path = db_path[0] == '.' ? db_path.substr(1) : db_path;
   opts.src_bucket.SetObjectPath(s3_path);
   opts.dest_bucket.SetObjectPath(s3_path);
-  rocksdb::CloudFileSystem* cfs = nullptr;
   Status s = rocksdb::CloudFileSystem::NewAwsFileSystem(
     rocksdb::FileSystem::Default(), 
     opts, 
     nullptr, 
-    &cfs
+    &cfs_
   );
   if (s.ok()) {
-    std::shared_ptr<rocksdb::CloudFileSystem> cloud_fs(cfs);
+    std::shared_ptr<rocksdb::CloudFileSystem> cloud_fs(cfs_);
     cloud_env_ = NewCompositeEnv(cloud_fs);
   }
   return s;
+}
+
+Status Redis::ReOpenRocksDB(const std::unordered_map<std::string, std::string>& db_options,
+                            const std::unordered_map<std::string, std::string>& cfs_options) {
+  return Status::OK();
+}
+
+Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
+  if (is_old_master && is_new_master) {
+    // Do nothing
+    return Status::OK();
+  }
+  
+  std::unordered_map<std::string, std::string> db_options, cfs_options;
+  if (is_old_master && !is_new_master) {
+    db_options["disable_auto_compactions"] = "true";
+    db_options["disable_auto_flush"] = "true";
+    for (const auto& cf : handles_) {
+      db_->SetOptions(cf, db_options);
+    }
+    rocksdb::FlushOptions fops;
+    fops.wait = true;
+    db_->Flush(fops, handles_);
+    cfs_->SwitchMaster(false);
+    cfs_options["is_master"] = "false";
+    return ReOpenRocksDB(db_options, cfs_options);
+  }
+
+  // slaveof another pika master, just reopen
+  if (!is_old_master && !is_new_master) {
+    return ReOpenRocksDB(db_options, cfs_options);
+  }
+
+  // slave promotes to master
+  if (!is_old_master && is_new_master) {
+    db_options["disable_auto_compactions"] = "true";
+    db_options["disable_auto_flush"] = "true";
+    cfs_options["is_master"] = "true";
+
+    // compare manifest_sequence
+    uint64_t local_manifest_sequence = db_->GetManifestUpdateSequence();
+    uint64_t remote_manifest_sequence = 0;
+    cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
+    // local version behind remote, directly reopen
+    if (local_manifest_sequence < remote_manifest_sequence) {
+      return ReOpenRocksDB(db_options, cfs_options);
+    }
+    // local's version cannot beyond remote's, just holding extra data in memtables
+    assert(local_manifest_sequence == remote_manifest_sequence);
+
+    db_options["disable_auto_compactions"] = "false";
+    db_options["disable_auto_flush"] = "false";
+    for (const auto& cf : handles_) {
+      db_->SetOptions(cf, db_options);
+    }
+    db_->NewManifestOnNextUpdate();
+    cfs_options["is_master"] = "master";
+
+    rocksdb::FlushOptions fops;
+    fops.wait = true;
+    db_->Flush(fops, handles_);
+    cfs_->SwitchMaster(false);
+    //TODO
+    //cfs_->UploadManifest();
+    return Status::OK();
+  }
+  return Status::OK();
 }
 #endif
 

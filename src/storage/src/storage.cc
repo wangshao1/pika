@@ -2448,4 +2448,19 @@ void Storage::DisableWal(const bool is_wal_disable) {
   }
 }
 
+#ifdef USE_S3
+Status Storage::SwitchMaster(bool is_old_master, bool is_new_master) {
+  Status s = Status::OK();
+  for (const auto& inst : insts_) {
+    s = inst->SwitchMaster(is_old_master, is_new_master);
+    if (!s.ok()) {
+      LOG(WARNING) << "switch mode failed, when switch from "
+                   << (is_old_master ? "master" : "slave") << " to "
+                   << (is_new_master ? "master" : "slave");
+      return s;
+    }
+  }
+  return s;
+}
+#endif
 }  //  namespace storage

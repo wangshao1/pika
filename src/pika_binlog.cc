@@ -164,9 +164,11 @@ Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32
 
   return Status::OK();
 }
+
 Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
   Put(item);
 }
+
 // Note: mutex lock should be held
 Status Binlog::Put(const std::string& item) {
   if (!opened_.load()) {

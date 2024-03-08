@@ -374,12 +374,12 @@ Status ConsensusCoordinator::InternalAppendBinlog(const std::shared_ptr<Cmd>& cm
   if (keys.empty()) {
     //需要特殊处理，比如flushdb bx check
   } else {
-    //多key也需要特殊处理 bx check
+    //多key也需要特殊处理 带hashtag bx check
     uint32_t slot_id = GetSlotsID(g_pika_conf->default_slot_num(), keys[0], nullptr, nullptr);
     if (g_pika_conf->pika_model() == PIKA_LOCAL) {
-      s = stable_logger_->Logger()->Put(content, db_id, slot_id);
+      s = stable_logger_->Logger()->Put(content);
     }else if (g_pika_conf->pika_model() == PIKA_CLOUD) {
-     s = stable_logger_->Logger()->Put(content);
+      s = stable_logger_->Logger()->Put(content, db_id, slot_id);
     }
   }
 

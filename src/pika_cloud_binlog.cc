@@ -143,8 +143,11 @@ Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, u
   return Status::OK();
 }
 
-// Note: mutex lock should be held
 Status CloudBinlog::Put(const std::string& item) {
+  Put(item, 0, 0);
+}
+// Note: mutex lock should be held
+Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
   if (!opened_.load()) {
     return Status::Busy("Cloud Binlog is not open yet");
   }
@@ -159,8 +162,7 @@ Status CloudBinlog::Put(const std::string& item) {
   if (!s.ok()) {
     return s;
   }
-  // bx check 暂时默认db_id ,rocksdb_id为0
-  std::string data = PikaCloudBinlogTransverter::BinlogEncode(0, 0, time(nullptr), term, filenum, offset, item);
+  std::string data = PikaCloudBinlogTransverter::BinlogEncode(db_id, rocksdb_id, time(nullptr), term, filenum, offset, item);
 
   s = Put(data.c_str(), static_cast<int>(data.size()));
   if (!s.ok()) {

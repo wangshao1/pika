@@ -12,6 +12,7 @@
 #include "include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
+#include "pika_codis_slot.h"
 
 using pstd::Status;
 
@@ -364,10 +365,25 @@ Status ConsensusCoordinator::UpdateSlave(const std::string& ip, int port, const 
 }
 
 Status ConsensusCoordinator::InternalAppendBinlog(const std::shared_ptr<Cmd>& cmd_ptr) {
+  Status s;
   std::string content = cmd_ptr->ToRedisProtocol();
-  Status s = stable_logger_->Logger()->Put(content);
+  std::string db_name = cmd_ptr->db_name().empty() ? g_pika_conf->default_db() : cmd_ptr->db_name();
+  uint32_t db_id = std::stoi(db_name.substr(strlen("db")));
+  std::vector<std::string> keys = cmd_ptr->current_key();
+
+  if (keys.empty()) {
+    //需要特殊处理，比如flushdb bx check
+  } else {
+    //多key也需要特殊处理 bx check
+    uint32_t slot_id = GetSlotsID(g_pika_conf->default_slot_num(), keys[0], nullptr, nullptr);
+    if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+      s = stable_logger_->Logger()->Put(content, db_id, slot_id);
+    }else if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+     s = stable_logger_->Logger()->Put(content);
+    }
+  }
+
   if (!s.ok()) {
-    std::string db_name = cmd_ptr->db_name().empty() ? g_pika_conf->default_db() : cmd_ptr->db_name();
     std::shared_ptr<DB> db = g_pika_server->GetDB(db_name);
     if (db) {
       db->SetBinlogIoError();

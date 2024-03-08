@@ -50,6 +50,8 @@ class CloudBinlog : public Binlog {
 
   pstd::Status Put(const std::string& item);
 
+  pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id);
+
   pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
   /*
    * Set Producer pro_num and pro_offset with lock

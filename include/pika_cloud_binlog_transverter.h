@@ -15,10 +15,6 @@
 
 //#define CLOUD_BINLOG_ENCODE_LEN 34
 
-enum BinlogType {
-  TypeFirst = 1,
-};
-
 const int PADDING_BINLOG_PROTOCOL_SIZE = 22;
 const int SPACE_STROE_PARAMETER_LENGTH = 5;
 

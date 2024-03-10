@@ -120,6 +120,18 @@ CloudBinlog::CloudBinlog(std::string binlog_path, const int file_size)
   InitLogFile();
 }
 
+CloudBinlog::~CloudBinlog() {
+  std::lock_guard l(mutex_);
+  Close();
+}
+
+void CloudBinlog::Close() {
+  if (!opened_.load()) {
+    return;
+  }
+  opened_.store(false);
+}
+
 void CloudBinlog::InitLogFile() {
   assert(queue_ != nullptr);
   uint64_t filesize = queue_->Filesize();

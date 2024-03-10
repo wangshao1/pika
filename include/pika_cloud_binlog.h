@@ -46,30 +46,30 @@ class CloudVersion final : public pstd::noncopyable {
 class CloudBinlog : public Binlog {
  public:
   CloudBinlog(std::string  Binlog_path, int file_size = 100 * 1024 * 1024);
-  ~CloudBinlog() {}
+  ~CloudBinlog();
 
-  pstd::Status Put(const std::string& item);
+  pstd::Status Put(const std::string& item) override;
 
-  pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id);
+  pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) override;
 
-  pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
+  pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
   /*
    * Set Producer pro_num and pro_offset with lock
    */
-  pstd::Status SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term = 0, uint64_t index = 0);
+  pstd::Status SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term = 0, uint64_t index = 0) override;
   // Need to hold Lock();
-  pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index = 0);
+  pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index = 0) override;
 
-  std::string filename() { return filename_; }
+  std::string filename()  { return filename_; }
 
   // need to hold mutex_
-  void SetTerm(uint32_t term) {
+  void SetTerm(uint32_t term) override{
     std::lock_guard l(version_->rwlock_);
     version_->term_ = term;
     version_->StableSave();
   }
 
-  uint32_t term() {
+  uint32_t term() override{
     std::shared_lock l(version_->rwlock_);
     return version_->term_;
   }

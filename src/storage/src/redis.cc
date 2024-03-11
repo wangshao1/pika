@@ -35,9 +35,12 @@ Redis::Redis(Storage* const s, int32_t index)
   spop_counts_store_ = std::make_unique<LRUCache<std::string, size_t>>();
   default_compact_range_options_.exclusive_manual_compaction = false;
   default_compact_range_options_.change_level = true;
+  default_write_options_.disableWAL = true;
   spop_counts_store_->SetCapacity(1000);
   scan_cursors_store_->SetCapacity(5000);
   //env_ = rocksdb::Env::Instance();
+
+  listener_ = std::make_shared<Listener>(index_, this);
   handles_.clear();
 }
 
@@ -54,9 +57,26 @@ Redis::~Redis() {
   if (default_compact_range_options_.canceled) {
     delete default_compact_range_options_.canceled;
   }
+  opened_ = false;
 }
 
-Status Redis::Open(const StorageOptions& storage_options, const std::string& db_path) {
+Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string& db_path) {
+
+  StorageOptions storage_options(tmp_storage_options);
+#ifdef USE_S3
+  storage_options.cloud_fs_options.roll_cloud_manifest_on_open = true;
+  storage_options.cloud_fs_options.resync_on_open = true;
+  storage_options.cloud_fs_options.resync_manifest_on_open = true;
+  storage_options.cloud_fs_options.skip_dbid_verification = true;
+  if (tmp_storage_options.cloud_fs_options.is_master) {
+    storage_options.options.replication_log_listener = listener_;
+  } else {
+    storage_options.options.disable_auto_flush = true;
+    storage_options.options.disable_auto_compactions = true;
+  }
+  storage_options.options.atomic_flush = true;
+#endif
+
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
   small_compaction_threshold_ = storage_options.small_compaction_threshold;
 
@@ -186,7 +206,9 @@ Status Redis::Open(const StorageOptions& storage_options, const std::string& db_
   db_ops.env = cloud_env_.get();
   return rocksdb::DBCloud::Open(db_ops, db_path, column_families, "", 0, &handles_, &db_);
 #else
-  return rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
+  auto s = rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
+  opened_ = true;
+  return s;
 #endif
 }
 
@@ -529,7 +551,11 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     db_options["disable_auto_flush"] = "false";
     cfs_options["is_master"] = "true";
     // compare manifest_sequence
-    uint64_t local_manifest_sequence = db_->GetManifestUpdateSequence();
+    uint64_t local_manifest_sequence = 0;
+    auto s = db_->GetManifestUpdateSequence(&local_manifest_sequence);
+    if (!s.ok()) {
+      LOG(ERROR) << "get manifestupdatesequence error: " << s.ToString();
+    }
     uint64_t remote_manifest_sequence = 0;
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
     // local version behind remote, directly reopen

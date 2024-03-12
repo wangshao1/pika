@@ -513,9 +513,6 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
-    rocksdb::FlushOptions fops;
-    fops.wait = true;
-    db_->Flush(fops, handles_);
     cfs_->SwitchMaster(false);
     cfs_options["is_master"] = "false";
     return ReOpenRocksDB(db_options, cfs_options);
@@ -528,10 +525,9 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
 
   // slave promotes to master
   if (!is_old_master && is_new_master) {
-    db_options["disable_auto_compactions"] = "true";
-    db_options["disable_auto_flush"] = "true";
+    db_options["disable_auto_compactions"] = "false";
+    db_options["disable_auto_flush"] = "false";
     cfs_options["is_master"] = "true";
-
     // compare manifest_sequence
     uint64_t local_manifest_sequence = db_->GetManifestUpdateSequence();
     uint64_t remote_manifest_sequence = 0;
@@ -543,18 +539,15 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     // local's version cannot beyond remote's, just holding extra data in memtables
     assert(local_manifest_sequence == remote_manifest_sequence);
 
-    db_options["disable_auto_compactions"] = "false";
-    db_options["disable_auto_flush"] = "false";
+    db_->NewManifestOnNextUpdate();
+    cfs_->SwitchMaster(true);
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
-    db_->NewManifestOnNextUpdate();
-    cfs_options["is_master"] = "master";
 
     rocksdb::FlushOptions fops;
     fops.wait = true;
     db_->Flush(fops, handles_);
-    cfs_->SwitchMaster(false);
     //TODO
     //cfs_->UploadManifest();
     return Status::OK();

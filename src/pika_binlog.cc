@@ -166,7 +166,7 @@ Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32
 }
 
 Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
-  Put(item);
+  return Status::Error("data err");
 }
 
 // Note: mutex lock should be held

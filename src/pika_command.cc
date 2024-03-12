@@ -880,7 +880,9 @@ void Cmd::InternalProcessCommand(const HintKeys& hint_keys) {
     do_duration_ += pstd::NowMicros() - start_us;
   }
 
+#ifndef USE_S3
   DoBinlog();
+#endif
 
   if (is_write()) {
     record_lock.Unlock(current_key());

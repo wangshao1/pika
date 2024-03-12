@@ -4,13 +4,13 @@ package cloud;
 
 message BinlogCloudItem {
   //belong to which db
-  uint32 db_id      = 1;
+  uint64 db_id      = 1;
   //belong to whicn rocksdb
-  uint32 rocksdb_id = 2;
+  uint64 rocksdb_id = 2;
   //data write time
-  uint32 exec_time  = 3;
-  uint32 term_id    = 4;
-  uint32 file_num   = 5;
+  uint64 exec_time  = 3;
+  uint64 term_id    = 4;
+  uint64 file_num   = 5;
   uint64 offset     = 6;
   bytes content     = 7;
 }

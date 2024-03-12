@@ -156,7 +156,7 @@ Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, u
 }
 
 Status CloudBinlog::Put(const std::string& item) {
-  Put(item, 0, 0);
+  return Status::Error("data err: db_id and rocksdb_id empty");
 }
 // Note: mutex lock should be held
 Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
@@ -209,7 +209,7 @@ Status CloudBinlog::Put(const char* item, int len) {
     InitLogFile();
   }
 
-  int pro_offset;
+  int pro_offset = 0;
   s = Produce(pstd::Slice(item, len), &pro_offset);
   if (s.ok()) {
     std::lock_guard l(version_->rwlock_);
@@ -226,7 +226,7 @@ Status CloudBinlog::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n, 
   assert(block_offset_ + kHeaderSize + n <= kBlockSize);
   char buf[kHeaderSize];
 
-  uint64_t now;
+  uint64_t now = 0;
   struct timeval tv;
   gettimeofday(&tv, nullptr);
   now = tv.tv_sec;
@@ -303,7 +303,7 @@ Status CloudBinlog::AppendPadding(pstd::WritableFile* file, uint64_t* len) {
 
   Status s;
   char buf[kBlockSize];
-  uint64_t now;
+  uint64_t now = 0;
   struct timeval tv;
   gettimeofday(&tv, nullptr);
   now = tv.tv_sec;

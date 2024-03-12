@@ -7,9 +7,11 @@
 #define PIKA_CLOUD_BINLOG_TRANSVERTER_H_
 
 #include <glog/logging.h>
+
 #include <cstdint>
 #include <iostream>
 #include <vector>
+
 #include "pika_cloud_binlog.pb.h"
 
 const int PADDING_BINLOG_PROTOCOL_SIZE = 22;

@@ -4,9 +4,11 @@
 // of patent rights can be found in the PATENTS file in the same directory.
 
 #include "include/pika_cloud_binlog_transverter.h"
+
 #include <glog/logging.h>
-#include <cassert>
+
 #include <sstream>
+
 #include "include/pika_command.h"
 #include "pstd/include/pstd_coding.h"
 

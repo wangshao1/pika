@@ -13,6 +13,7 @@
 #include "include/pika_stable_log.h"
 #include "pstd/include/env.h"
 #include "include/pika_conf.h"
+#include "include/pika_cloud_binlog.h"
 
 using pstd::Status;
 
@@ -21,7 +22,11 @@ extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
 
 StableLog::StableLog(std::string db_name, std::string log_path)
     : purging_(false), db_name_(std::move(db_name)), log_path_(std::move(log_path)) {
-  stable_logger_ = std::make_shared<Binlog>(log_path_, g_pika_conf->binlog_file_size());
+  if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+    stable_logger_ = std::make_shared<Binlog>(log_path_, g_pika_conf->binlog_file_size());
+  } else if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    stable_logger_ = std::make_shared<CloudBinlog>(log_path_, g_pika_conf->binlog_file_size());
+  }
   std::map<uint32_t, std::string> binlogs;
   if (!GetBinlogFiles(&binlogs)) {
     LOG(FATAL) << log_path_ << " Could not get binlog files!";

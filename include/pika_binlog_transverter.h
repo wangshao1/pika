@@ -7,6 +7,7 @@
 #define PIKA_BINLOG_TRANSVERTER_H_
 
 #include <glog/logging.h>
+
 #include <cstdint>
 #include <iostream>
 #include <vector>

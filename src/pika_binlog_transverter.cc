@@ -6,14 +6,13 @@
 #include "include/pika_binlog_transverter.h"
 
 #include <glog/logging.h>
+
 #include <cassert>
 #include <sstream>
 
 #include "pstd/include/pstd_coding.h"
-
 #include "include/pika_command.h"
 #include "include/pika_define.h"
-#include "storage/storage.h"
 
 
 uint32_t BinlogItem::exec_time() const { return exec_time_; }

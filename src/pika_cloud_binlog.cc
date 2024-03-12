@@ -2,8 +2,7 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
-
-#include "include/pika_binlog.h"
+#include "include/pika_cloud_binlog.h"
 
 #include <fcntl.h>
 #include <glog/logging.h>
@@ -11,46 +10,42 @@
 
 #include <utility>
 
-#include "include/pika_binlog_transverter.h"
 #include "pstd/include/pstd_defer.h"
 #include "pstd_status.h"
+#include "include/pika_cloud_binlog_transverter.h"
+
 
 using pstd::Status;
 
-std::string NewFileName(const std::string& name, const uint32_t current) {
+std::string NewCloudFileName(const std::string& name, const uint32_t current) {
   char buf[256];
   snprintf(buf, sizeof(buf), "%s%u", name.c_str(), current);
   return {buf};
 }
 
 /*
- * Version
+ * CloudVersion
  */
-Version::Version(const std::shared_ptr<pstd::RWFile>& save) :  save_(save) {
-  assert(save_ != nullptr);
-}
+CloudVersion::CloudVersion(const std::shared_ptr<pstd::RWFile>& save) : save_(save) { assert(save_ != nullptr); }
 
-Version::~Version() { StableSave(); }
+CloudVersion::~CloudVersion() { StableSave(); }
 
-Status Version::StableSave() {
+Status CloudVersion::StableSave() {
   char* p = save_->GetData();
   memcpy(p, &pro_num_, sizeof(uint32_t));
   p += 4;
   memcpy(p, &pro_offset_, sizeof(uint64_t));
   p += 8;
-  memcpy(p, &logic_id_, sizeof(uint64_t));
-  p += 8;
   memcpy(p, &term_, sizeof(uint32_t));
   return Status::OK();
 }
 
-Status Version::Init() {
+Status CloudVersion::Init() {
   Status s;
   if (save_->GetData()) {
     memcpy(reinterpret_cast<char*>(&pro_num_), save_->GetData(), sizeof(uint32_t));
     memcpy(reinterpret_cast<char*>(&pro_offset_), save_->GetData() + 4, sizeof(uint64_t));
-    memcpy(reinterpret_cast<char*>(&logic_id_), save_->GetData() + 12, sizeof(uint64_t));
-    memcpy(reinterpret_cast<char*>(&term_), save_->GetData() + 20, sizeof(uint32_t));
+    memcpy(reinterpret_cast<char*>(&term_), save_->GetData() + 12, sizeof(uint32_t));
     return Status::OK();
   } else {
     return Status::Corruption("version init error");
@@ -60,8 +55,10 @@ Status Version::Init() {
 /*
  * Binlog
  */
-Binlog::Binlog(std::string  binlog_path, const int file_size)
-    : opened_(false),
+
+CloudBinlog::CloudBinlog(std::string binlog_path, const int file_size)
+    : Binlog("", 0),
+      opened_(false),
       binlog_path_(std::move(binlog_path)),
       file_size_(file_size),
       binlog_io_error_(false) {
@@ -79,85 +76,80 @@ Binlog::Binlog(std::string  binlog_path, const int file_size)
   std::string profile;
 
   if (!pstd::FileExists(manifest)) {
-    LOG(INFO) << "Binlog: Manifest file not exist, we create a new one.";
+    LOG(INFO) << "Cloud Binlog: Manifest file not exist, we create a new one.";
 
     profile = NewFileName(filename_, pro_num_);
     s = pstd::NewWritableFile(profile, queue_);
     if (!s.ok()) {
-      LOG(FATAL) << "Binlog: new " << filename_ << " " << s.ToString();
+      LOG(FATAL) << "Cloud Binlog: new " << filename_ << " " << s.ToString();
     }
     std::unique_ptr<pstd::RWFile> tmp_file;
     s = pstd::NewRWFile(manifest, tmp_file);
     versionfile_.reset(tmp_file.release());
     if (!s.ok()) {
-      LOG(FATAL) << "Binlog: new versionfile error " << s.ToString();
+      LOG(FATAL) << "Cloud Binlog: new versionfile error " << s.ToString();
     }
 
-    version_ = std::make_unique<Version>(versionfile_);
+    version_ = std::make_unique<CloudVersion>(versionfile_);
     version_->StableSave();
   } else {
-    LOG(INFO) << "Binlog: Find the exist file.";
+    LOG(INFO) << "Cloud Binlog: Find the exist file.";
     std::unique_ptr<pstd::RWFile> tmp_file;
     s = pstd::NewRWFile(manifest, tmp_file);
     versionfile_.reset(tmp_file.release());
     if (s.ok()) {
-      version_ = std::make_unique<Version>(versionfile_);
+      version_ = std::make_unique<CloudVersion>(versionfile_);
       version_->Init();
       pro_num_ = version_->pro_num_;
 
       // Debug
       // version_->debug();
     } else {
-      LOG(FATAL) << "Binlog: open versionfile error";
+      LOG(FATAL) << "Cloud Binlog: open versionfile error";
     }
 
     profile = NewFileName(filename_, pro_num_);
-    DLOG(INFO) << "Binlog: open profile " << profile;
+    DLOG(INFO) << "Cloud Binlog: open profile " << profile;
     s = pstd::AppendWritableFile(profile, queue_, version_->pro_offset_);
     if (!s.ok()) {
-      LOG(FATAL) << "Binlog: Open file " << profile << " error " << s.ToString();
+      LOG(FATAL) << "Cloud Binlog: Open file " << profile << " error " << s.ToString();
     }
 
     uint64_t filesize = queue_->Filesize();
-    DLOG(INFO) << "Binlog: filesize is " << filesize;
+    DLOG(INFO) << "Cloud Binlog: filesize is " << filesize;
   }
 
   InitLogFile();
 }
 
-Binlog::~Binlog() {
+CloudBinlog::~CloudBinlog() {
   std::lock_guard l(mutex_);
   Close();
 }
 
-void Binlog::Close() {
+void CloudBinlog::Close() {
   if (!opened_.load()) {
     return;
   }
   opened_.store(false);
 }
 
-void Binlog::InitLogFile() {
+void CloudBinlog::InitLogFile() {
   assert(queue_ != nullptr);
-
   uint64_t filesize = queue_->Filesize();
   block_offset_ = static_cast<int32_t>(filesize % kBlockSize);
-
   opened_.store(true);
 }
 
-Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term, uint64_t* logic_id) {
+Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term, uint64_t* logic_id) {
   if (!opened_.load()) {
-    return Status::Busy("Binlog is not open yet");
+    return Status::Busy("Cloud Binlog is not open yet");
   }
 
   std::shared_lock l(version_->rwlock_);
 
   *filenum = version_->pro_num_;
   *pro_offset = version_->pro_offset_;
-  if (logic_id) {
-    *logic_id = version_->logic_id_;
-  }
   if (term) {
     *term = version_->term_;
   }
@@ -165,32 +157,26 @@ Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32
   return Status::OK();
 }
 
-Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
-  return Status::Error("data err");
+Status CloudBinlog::Put(const std::string& item) {
+  return Status::Error("data err: db_id and rocksdb_id empty");
 }
-
 // Note: mutex lock should be held
-Status Binlog::Put(const std::string& item) {
+Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
   if (!opened_.load()) {
-    return Status::Busy("Binlog is not open yet");
+    return Status::Busy("Cloud Binlog is not open yet");
   }
   uint32_t filenum = 0;
   uint32_t term = 0;
   uint64_t offset = 0;
-  uint64_t logic_id = 0;
 
   Lock();
-  DEFER {
-    Unlock();
-  };
+  DEFER { Unlock(); };
 
-  Status s = GetProducerStatus(&filenum, &offset, &term, &logic_id);
+  Status s = GetProducerStatus(&filenum, &offset, &term, nullptr);
   if (!s.ok()) {
     return s;
   }
-  logic_id++;
-  std::string data = PikaBinlogTransverter::BinlogEncode(BinlogType::TypeFirst,
-      time(nullptr), term, logic_id, filenum, offset, item, {});
+  std::string data = PikaCloudBinlogTransverter::BinlogEncode(db_id, rocksdb_id, time(nullptr), term, filenum, offset, item);
 
   s = Put(data.c_str(), static_cast<int>(data.size()));
   if (!s.ok()) {
@@ -200,17 +186,16 @@ Status Binlog::Put(const std::string& item) {
 }
 
 // Note: mutex lock should be held
-Status Binlog::Put(const char* item, int len) {
+Status CloudBinlog::Put(const char* item, int len) {
   Status s;
-
   /* Check to roll log file */
   uint64_t filesize = queue_->Filesize();
   if (filesize > file_size_) {
     std::unique_ptr<pstd::WritableFile> queue;
-    std::string profile = NewFileName(filename_, pro_num_ + 1);
+    std::string profile = NewCloudFileName(filename_, pro_num_ + 1);
     s = pstd::NewWritableFile(profile, queue);
     if (!s.ok()) {
-      LOG(ERROR) << "Binlog: new " << filename_ << " " << s.ToString();
+      LOG(ERROR) << "Cloud Binlog: new " << filename_ << " " << s.ToString();
       return s;
     }
     queue_.reset();
@@ -226,26 +211,24 @@ Status Binlog::Put(const char* item, int len) {
     InitLogFile();
   }
 
-  int pro_offset;
+  int pro_offset = 0;
   s = Produce(pstd::Slice(item, len), &pro_offset);
   if (s.ok()) {
     std::lock_guard l(version_->rwlock_);
     version_->pro_offset_ = pro_offset;
-    version_->logic_id_++;
     version_->StableSave();
   }
 
   return s;
 }
 
-Status Binlog::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n, int* temp_pro_offset) {
+Status CloudBinlog::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n, int* temp_pro_offset) {
   Status s;
   assert(n <= 0xffffff);
   assert(block_offset_ + kHeaderSize + n <= kBlockSize);
-
   char buf[kHeaderSize];
 
-  uint64_t now;
+  uint64_t now = 0;
   struct timeval tv;
   gettimeofday(&tv, nullptr);
   now = tv.tv_sec;
@@ -271,7 +254,7 @@ Status Binlog::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n, int* 
   return s;
 }
 
-Status Binlog::Produce(const pstd::Slice& item, int* temp_pro_offset) {
+Status CloudBinlog::Produce(const pstd::Slice& item, int* temp_pro_offset) {
   Status s;
   const char* ptr = item.data();
   size_t left = item.size();
@@ -315,14 +298,14 @@ Status Binlog::Produce(const pstd::Slice& item, int* temp_pro_offset) {
   return s;
 }
 
-Status Binlog::AppendPadding(pstd::WritableFile* file, uint64_t* len) {
+Status CloudBinlog::AppendPadding(pstd::WritableFile* file, uint64_t* len) {
   if (*len < kHeaderSize) {
     return Status::OK();
   }
 
   Status s;
   char buf[kBlockSize];
-  uint64_t now;
+  uint64_t now = 0;
   struct timeval tv;
   gettimeofday(&tv, nullptr);
   now = tv.tv_sec;
@@ -356,14 +339,14 @@ Status Binlog::AppendPadding(pstd::WritableFile* file, uint64_t* len) {
   }
   *len -= left;
   if (left != 0) {
-    LOG(WARNING) << "AppendPadding left bytes: " << left << " is less then kHeaderSize";
+    LOG(WARNING) << "Cloud AppendPadding left bytes: " << left << " is less then kHeaderSize";
   }
   return s;
 }
 
-Status Binlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term, uint64_t index) {
+Status CloudBinlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t term, uint64_t index) {
   if (!opened_.load()) {
-    return Status::Busy("Binlog is not open yet");
+    return Status::Busy("Cloud Binlog is not open yet");
   }
 
   std::lock_guard l(mutex_);
@@ -375,18 +358,18 @@ Status Binlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t
 
   queue_.reset();
 
-  std::string init_profile = NewFileName(filename_, 0);
+  std::string init_profile = NewCloudFileName(filename_, 0);
   if (pstd::FileExists(init_profile)) {
     pstd::DeleteFile(init_profile);
   }
 
-  std::string profile = NewFileName(filename_, pro_num);
+  std::string profile = NewCloudFileName(filename_, pro_num);
   if (pstd::FileExists(profile)) {
     pstd::DeleteFile(profile);
   }
 
   pstd::NewWritableFile(profile, queue_);
-  Binlog::AppendPadding(queue_.get(), &pro_offset);
+  CloudBinlog::AppendPadding(queue_.get(), &pro_offset);
 
   pro_num_ = pro_num;
 
@@ -395,7 +378,6 @@ Status Binlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t
     version_->pro_num_ = pro_num;
     version_->pro_offset_ = pro_offset;
     version_->term_ = term;
-    version_->logic_id_ = index;
     version_->StableSave();
   }
 
@@ -403,9 +385,9 @@ Status Binlog::SetProducerStatus(uint32_t pro_num, uint64_t pro_offset, uint32_t
   return Status::OK();
 }
 
-Status Binlog::Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index) {
+Status CloudBinlog::Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index) {
   queue_.reset();
-  std::string profile = NewFileName(filename_, pro_num);
+  std::string profile = NewCloudFileName(filename_, pro_num);
   const int fd = open(profile.c_str(), O_RDWR | O_CLOEXEC, 0644);
   if (fd < 0) {
     return Status::IOError("fd open failed");
@@ -420,7 +402,6 @@ Status Binlog::Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index) {
     std::lock_guard l(version_->rwlock_);
     version_->pro_num_ = pro_num;
     version_->pro_offset_ = pro_offset;
-    version_->logic_id_ = index;
     version_->StableSave();
   }
 

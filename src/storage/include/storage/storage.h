@@ -1104,6 +1104,10 @@ class Storage {
 
 #ifdef USE_S3
   rocksdb::DBCloud* GetDBByIndex(int index);
+
+  // called when switch master-slave
+  Status SwitchMaster(bool is_old_master, bool is_new_master);
+
 #else
   rocksdb::DB* GetDBByIndex(int index);
 #endif

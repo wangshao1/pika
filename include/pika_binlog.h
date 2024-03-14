@@ -63,7 +63,7 @@ class Binlog : public pstd::noncopyable {
   // Need to hold Lock();
   virtual pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index);
 
-  std::string filename() { return filename_; }
+  virtual std::string filename() { return filename_; }
 
   // need to hold mutex_
   virtual void SetTerm(uint32_t term) {
@@ -77,7 +77,7 @@ class Binlog : public pstd::noncopyable {
     return version_->term_;
   }
 
-  void Close();
+  virtual void Close();
 
  private:
   pstd::Status Put(const char* item, int len);

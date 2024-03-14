@@ -60,21 +60,21 @@ class CloudBinlog : public Binlog {
   // Need to hold Lock();
   pstd::Status Truncate(uint32_t pro_num, uint64_t pro_offset, uint64_t index = 0) override;
 
-  std::string filename()  { return filename_; }
+  std::string filename() override { return filename_; }
 
   // need to hold mutex_
-  void SetTerm(uint32_t term) override{
+  void SetTerm(uint32_t term) override {
     std::lock_guard l(version_->rwlock_);
     version_->term_ = term;
     version_->StableSave();
   }
 
-  uint32_t term() override{
+  uint32_t term() override {
     std::shared_lock l(version_->rwlock_);
     return version_->term_;
   }
 
-  void Close();
+  void Close() override;
 
  private:
   pstd::Status Put(const char* item, int len);

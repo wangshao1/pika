@@ -5,8 +5,8 @@
 
 #include <iostream>
 
-#include "../../include/pika_binlog_reader.h"
-#include "../../include/pika_cloud_binlog.h"
+#include "include/pika_binlog_reader.h"
+#include "include/pika_cloud_binlog.h"
 #include "include/pika_cloud_binlog_transverter.h"
 
 class CloudBinlogTransverterTest : public ::testing::Test {};

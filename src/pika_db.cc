@@ -638,3 +638,9 @@ bool DB::FlushDB() {
   std::lock_guard l(bgsave_protector_);
   return FlushDBWithoutLock();
 }
+
+pstd::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
+#ifdef USE_S3
+  return storage_.SwitchMaster(is_old_master, is_new_master);
+#endif
+}

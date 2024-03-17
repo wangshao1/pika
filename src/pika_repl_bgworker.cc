@@ -208,7 +208,6 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
   std::unique_ptr<ReplClientWriteDBTaskArg> task_arg(static_cast<ReplClientWriteDBTaskArg*>(arg));
   const std::shared_ptr<Cmd> c_ptr = task_arg->cmd_ptr;
   const PikaCmdArgsType& argv = c_ptr->argv();
-  LogOffset offset = task_arg->offset;
   std::string db_name = task_arg->db_name;
 
   uint64_t start_us = 0;
@@ -220,6 +219,18 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
   record_lock.Lock(c_ptr->current_key());
   if (!c_ptr->IsSuspend()) {
     c_ptr->GetDB()->DbRWLockReader();
+  }
+  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    //Waiting for interface support
+    //Invoke the corresponding 'compact' or 'flush' interface on the db.
+    if (c_ptr->name() == kCmdNameRocksdbFlush) {
+      g_pika_rm->GetSyncMasterDBByName(db_name);
+      //execFlushInRocksdb(db_)
+    }
+    if (c_ptr->name() == kCmdNameRocksdbCompact) {
+      g_pika_rm->GetSyncMasterDBByName(db_name);
+      //execCompactInRocksdb(db_)
+    }
   }
   if (c_ptr->IsNeedCacheDo()
       && PIKA_CACHE_NONE != g_pika_conf->cache_model()

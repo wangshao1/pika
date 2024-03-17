@@ -347,6 +347,16 @@ Status ConsensusCoordinator::ProcessLeaderLog(const std::shared_ptr<Cmd>& cmd_pt
     return Status::OK();
   }
 
+  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+      //Waiting for interface support
+      //get master binlog drop point
+      g_pika_rm->GetSyncMasterDBByName(db_name_);
+      /*
+       * point =getpoint()
+       * if point.filenum>binlogitem.filenum || (point.filenum==binlogitem.filenum && point.offset>=binlogitem.offset)
+       * {return;}*/
+  }
+
   Status s = InternalAppendLog(cmd_ptr);
 
   InternalApplyFollower(MemLog::LogItem(LogOffset(), cmd_ptr, nullptr, nullptr));

@@ -248,6 +248,11 @@ const std::string kCmdNameXInfo = "xinfo";
 
 const std::string kClusterPrefix = "pkcluster";
 
+//cloud
+//Waiting for interface support
+const std::string kCmdNameRocksdbFlush = "rocksdbflush";
+const std::string kCmdNameRocksdbCompact = "rocksdbcompact";
+
 using PikaCmdArgsType = net::RedisCmdArgsType;
 static const int RAW_ARGS_LEN = 1024 * 1024;
 

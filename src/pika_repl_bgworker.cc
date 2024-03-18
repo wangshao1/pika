@@ -220,18 +220,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
   if (!c_ptr->IsSuspend()) {
     c_ptr->GetDB()->DbRWLockReader();
   }
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
-    //Waiting for interface support
-    //Invoke the corresponding 'compact' or 'flush' interface on the db.
-    if (c_ptr->name() == kCmdNameRocksdbFlush) {
-      g_pika_rm->GetSyncMasterDBByName(db_name);
-      //execFlushInRocksdb(db_)
-    }
-    if (c_ptr->name() == kCmdNameRocksdbCompact) {
-      g_pika_rm->GetSyncMasterDBByName(db_name);
-      //execCompactInRocksdb(db_)
-    }
-  }
+
   if (c_ptr->IsNeedCacheDo()
       && PIKA_CACHE_NONE != g_pika_conf->cache_model()
       && c_ptr->GetDB()->cache()->CacheStatus() == PIKA_CACHE_STATUS_OK) {

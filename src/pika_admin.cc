@@ -150,7 +150,7 @@ void SlaveofCmd::Do() {
   g_pika_server->RemoveMaster();
 
   if (is_none_) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_SLAVE) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
         db_item.second->SwitchMaster(false, true);
@@ -168,7 +168,7 @@ void SlaveofCmd::Do() {
   bool sm_ret = g_pika_server->SetMaster(master_ip_, static_cast<int32_t>(master_port_));
 
   if (sm_ret) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_MASTER) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
         db_item.second->SwitchMaster(true, false);

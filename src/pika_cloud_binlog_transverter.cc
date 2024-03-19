@@ -12,6 +12,9 @@
 #include "include/pika_command.h"
 #include "pstd/include/pstd_coding.h"
 
+const int PADDING_BINLOG_PROTOCOL_SIZE = 22;
+const int SPACE_STROE_PARAMETER_LENGTH = 5;
+
 std::string PikaCloudBinlogTransverter::BinlogEncode(uint32_t db_id, uint32_t rocksdb_id, uint32_t exec_time,
                                                      uint32_t term_id, uint32_t filenum, uint64_t offset,
                                                      const std::string& content) {

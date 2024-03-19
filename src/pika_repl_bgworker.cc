@@ -5,13 +5,15 @@
 
 #include <glog/logging.h>
 
-#include "include/pika_repl_bgworker.h"
+#include "include/pika_cloud_binlog_transverter.h"
 #include "include/pika_cmd_table_manager.h"
+#include "include/pika_conf.h"
+#include "include/pika_repl_bgworker.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "pstd/include/pstd_defer.h"
 #include "src/pstd/include/scope_record_lock.h"
-#include "include/pika_conf.h"
+#include "pika_cloud_binlog.pb.h"
 
 extern PikaServer* g_pika_server;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
@@ -132,20 +134,48 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     if (binlog_res.binlog().empty()) {
       continue;
     }
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
-      LOG(WARNING) << "Binlog item decode failed";
-      slave_db->SetReplState(ReplState::kTryConnect);
-      return;
+
+    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+      cloud::BinlogCloudItem binlog_item;
+      if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &binlog_item)) {
+        LOG(WARNING) << "Cloud Binlog item decode failed";
+        slave_db->SetReplState(ReplState::kTryConnect);
+        return;
+      }
+      //Waiting for interface support
+      //get master binlog drop point
+      /*
+       * point =getpoint()
+       * if point.filenum>binlogitem_.filenum || (point.filenum==binlogitem_.filenum && point.offset>=binlogitem_.offset)
+       * {continue;}*/
+    } else {
+      if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
+        LOG(WARNING) << "Binlog item decode failed";
+        slave_db->SetReplState(ReplState::kTryConnect);
+        return;
+      }
     }
-    const char* redis_parser_start = binlog_res.binlog().data() + BINLOG_ENCODE_LEN;
-    int redis_parser_len = static_cast<int>(binlog_res.binlog().size()) - BINLOG_ENCODE_LEN;
-    int processed_len = 0;
-    net::RedisParserStatus ret =
-        worker->redis_parser_.ProcessInputBuffer(redis_parser_start, redis_parser_len, &processed_len);
-    if (ret != net::kRedisParserDone) {
-      LOG(WARNING) << "Redis parser failed";
-      slave_db->SetReplState(ReplState::kTryConnect);
-      return;
+
+    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+      //1.write to binlog
+      std::shared_ptr<SyncMasterDB> db =
+          g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
+      if (!db) {
+        LOG(WARNING) << worker->db_name_ << "Not found.";
+      }
+      db->Logger()->Put(binlog_res.binlog());
+      //2.Waiting for interface support:write into rocksdb
+    } else {
+      const char* redis_parser_start = binlog_res.binlog().data() + BINLOG_ENCODE_LEN;
+      int redis_parser_len = static_cast<int>(binlog_res.binlog().size()) - BINLOG_ENCODE_LEN;
+      int processed_len = 0;
+      net::RedisParserStatus ret =
+          worker->redis_parser_.ProcessInputBuffer(redis_parser_start, redis_parser_len, &processed_len);
+      if (ret != net::kRedisParserDone) {
+        LOG(WARNING) << "Redis parser failed";
+        slave_db->SetReplState(ReplState::kTryConnect);
+        return;
+      }
     }
   }
 

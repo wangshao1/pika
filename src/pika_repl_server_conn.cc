@@ -126,7 +126,6 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
   if (g_pika_conf->pika_model() == PIKA_CLOUD) {
     if (pre_success) {
       try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kSyncPointBePurged);
-      TrySyncUpdateSlaveNode(db, try_sync_request, conn, try_sync_response);
     }
   } else {
     if (pre_success && TrySyncOffsetCheck(db, try_sync_request, try_sync_response)) {

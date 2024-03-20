@@ -63,7 +63,7 @@ Status OpenMaster(storage::Redis*& inst, StorageOptions storage_options) {
 
   inst = new storage::Redis(&str, 0);
   auto listener = std::make_shared<MockReplicationListener>();
-  inst->ResetListener(listener);
+  inst->ResetLogListener(listener);
   storage_options.cloud_fs_options.is_master = true;
   auto s = inst->Open(storage_options, "cloud_test");
   return s;

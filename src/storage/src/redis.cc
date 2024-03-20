@@ -40,7 +40,7 @@ Redis::Redis(Storage* const s, int32_t index)
   scan_cursors_store_->SetCapacity(5000);
   //env_ = rocksdb::Env::Instance();
 
-  listener_ = std::make_shared<Listener>(index_, this);
+  log_listener_ = std::make_shared<LogListener>(index_, this);
   handles_.clear();
 }
 
@@ -69,7 +69,7 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
   storage_options.cloud_fs_options.skip_dbid_verification = true;
   if (tmp_storage_options.cloud_fs_options.is_master) {
-    storage_options.options.replication_log_listener = listener_;
+    storage_options.options.replication_log_listener = log_listener_;
   } else {
     storage_options.options.disable_auto_flush = true;
     storage_options.options.disable_auto_compactions = true;

@@ -122,9 +122,15 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
               << ", pro_offset: " << slave_boffset.offset();
     response.set_code(InnerMessage::kOk);
   }
-
-  if (pre_success && TrySyncOffsetCheck(db, try_sync_request, try_sync_response)) {
-    TrySyncUpdateSlaveNode(db, try_sync_request, conn, try_sync_response);
+  //In cloud mode, only full synchronization is possible.
+  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (pre_success) {
+      try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kSyncPointBePurged);
+    }
+  } else {
+    if (pre_success && TrySyncOffsetCheck(db, try_sync_request, try_sync_response)) {
+      TrySyncUpdateSlaveNode(db, try_sync_request, conn, try_sync_response);
+    }
   }
 
   std::string reply_str;

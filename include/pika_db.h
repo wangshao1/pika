@@ -154,6 +154,10 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   bool IsBgSaving();
   BgSaveInfo bgsave_info();
   pstd::Status GetKeyNum(std::vector<storage::KeyInfo>* key_info);
+  /*
+   * Switch Master/Slave role use
+   */
+  pstd::Status SwitchMaster(bool is_old_master, bool is_new_master);
 
  private:
   bool opened_ = false;

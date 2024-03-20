@@ -14,9 +14,6 @@
 
 #include "pika_cloud_binlog.pb.h"
 
-const int PADDING_BINLOG_PROTOCOL_SIZE = 22;
-const int SPACE_STROE_PARAMETER_LENGTH = 5;
-
 class PikaCloudBinlogTransverter {
  public:
   PikaCloudBinlogTransverter() = default;

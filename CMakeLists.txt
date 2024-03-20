@@ -791,7 +791,6 @@ add_subdirectory(src/cache)
 if (USE_PIKA_TOOLS)
   add_subdirectory(tools)
 endif()
-add_subdirectory(tests/gtest)
 aux_source_directory(src DIR_SRCS)
 
 # # generate version

@@ -454,6 +454,7 @@ class PikaServer : public pstd::noncopyable {
   friend class InfoCmd;
   friend class PikaReplClientConn;
   friend class PkClusterInfoCmd;
+  friend class SlaveofCmd;
 
   struct BGCacheTaskArg {
     BGCacheTaskArg() : conf(nullptr), reenable_cache(false) {}

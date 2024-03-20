@@ -517,6 +517,7 @@ func (s *Topom) doSwitchGroupMaster(g *models.Group, newMasterAddr string, newMa
 	g.Servers[newMasterIndex].Role = models.RoleMaster
 	g.Servers[newMasterIndex].Action.State = models.ActionSynced
 	g.Servers[0], g.Servers[newMasterIndex] = g.Servers[newMasterIndex], g.Servers[0]
+	g.TermId++
 	defer func() {
 		err = s.storeUpdateGroup(g)
 		// clean cache whether err is nil or not
@@ -783,4 +784,24 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 			return promoteServerToNewMaster(addr, s.config.ProductAuth)
 		}
 	}, nil
+}
+
+func (s *Topom) UploadManifestToS3(gid int, tid int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+
+	if gid <= 0 || gid > models.MaxGroupId {
+		return errors.Errorf("invalid group id = %d, out of range", gid)
+	}
+	if ctx.group[gid].TermId == tid {
+		//waiting for upload to s3
+		return nil
+	} else {
+		return errors.Errorf("group-[%d] term id:[%d] not equal to pika term id:[%d]",
+			gid, ctx.group[gid].TermId, tid)
+	}
 }

@@ -99,6 +99,7 @@ func newApiServer(t *Topom) http.Handler {
 				r.Put("/remove/:xauth/:addr", api.SyncRemoveAction)
 			})
 			r.Get("/info/:addr", api.InfoServer)
+			r.Put("/upload-s3/:xauth/:gid/:tid/:manifest", api.UploadManifestToS3)
 		})
 		r.Group("/slots", func(r martini.Router) {
 			r.Group("/action", func(r martini.Router) {
@@ -494,6 +495,26 @@ func (s *apiServer) SyncRemoveAction(params martini.Params) (int, string) {
 		return rpc.ApiResponseError(err)
 	}
 	if err := s.topom.SyncRemoveAction(addr); err != nil {
+		return rpc.ApiResponseError(err)
+	} else {
+		return rpc.ApiResponseJson("OK")
+	}
+}
+
+func (s *apiServer) UploadManifestToS3(params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	gid, err := s.parseInteger(params, "gid")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	tid, err := s.parseInteger(params, "tid")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+
+	if err := s.topom.UploadManifestToS3(gid, tid); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")

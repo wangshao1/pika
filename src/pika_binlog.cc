@@ -165,7 +165,7 @@ Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32
   return Status::OK();
 }
 
-Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) {
+Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, const std::string& rep_seq) {
   return Status::Error("data err");
 }
 

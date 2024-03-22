@@ -40,7 +40,7 @@ using Slice = rocksdb::Slice;
 class LogListener;
 class Redis {
  public:
-  Redis(Storage* storage, int32_t index);
+  Redis(Storage* storage, int32_t index, void* wal_logger = nullptr);
   virtual ~Redis();
 
 #ifdef USE_S3
@@ -112,6 +112,7 @@ class Redis {
 
   // Common Commands
   Status Open(const StorageOptions& storage_options, const std::string& db_path);
+  void Close();
 
   virtual Status CompactRange(const DataType& option_type, const rocksdb::Slice* begin, const rocksdb::Slice* end,
                               const ColumnFamilyType& type = kMetaAndData);
@@ -438,6 +439,7 @@ private:
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
 #ifdef USE_S3
+  std::string db_path_ = "";
   rocksdb::DBCloud* db_ = nullptr;
   std::shared_ptr<rocksdb::ReplicationLogListener> log_listener_;
 #else
@@ -472,23 +474,28 @@ private:
   Status OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::string& db_path);
   std::unique_ptr<rocksdb::Env> cloud_env_;
   rocksdb::CloudFileSystem* cfs_;
-  Status ReOpenRocksDB(const std::unordered_map<std::string, std::string>& db_options,
-                       const std::unordered_map<std::string, std::string>& cfs_options);
+  Status ReOpenRocksDB(const storage::StorageOptions& opt);
+  Status ApplyWAL(const std::string& replication_sequence, int type, const std::string& content);
 #endif
 };
 
 // TODO(wangshaoyi): implement details
 class LogListener : public rocksdb::ReplicationLogListener {
 public:
-  LogListener(int rocksdb_id, void* inst) : rocksdb_id_(rocksdb_id), counter_(0), inst_(inst) {}
-  std::string OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) override {
-    auto id = counter_.fetch_add(1);
-    return std::to_string(id);
+  LogListener(int rocksdb_id, void* inst, void* wal_writer)
+      : rocksdb_id_(rocksdb_id), counter_(0),
+        inst_(inst), wal_writer_(wal_writer) {}
+  std::string OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) override;
+
+  // reset when switch master or process start
+  void ResetSequence(uint64_t seq) {
+    counter_.store(seq);
   }
 private:
   int rocksdb_id_ = 0;
   std::atomic<int> counter_ = {0};
   void* inst_ = nullptr;
+  void* wal_writer_ = nullptr;
 };
 
 }  //  namespace storage

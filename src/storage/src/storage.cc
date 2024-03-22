@@ -89,12 +89,16 @@ static std::string AppendSubDirectory(const std::string& db_path, int index) {
   }
 }
 
-Status Storage::Open(const StorageOptions& storage_options, const std::string& db_path) {
+Status Storage::Open(const StorageOptions& storage_options, const std::string& db_path, void* wal_writer) {
   mkpath(db_path.c_str(), 0755);
 
   int inst_count = db_instance_num_;
   for (int index = 0; index < inst_count; index++) {
+#ifdef USE_S3
+    insts_.emplace_back(std::make_unique<Redis>(this, index, wal_writer));
+#else
     insts_.emplace_back(std::make_unique<Redis>(this, index));
+#endif
     Status s = insts_.back()->Open(storage_options, AppendSubDirectory(db_path, index));
     if (!s.ok()) {
       LOG(FATAL) << "open db failed" << s.ToString();
@@ -2315,11 +2319,7 @@ Status Storage::StopScanKeyNum() {
   return Status::OK();
 }
 
-#ifdef USE_S3
-rocksdb::DBCloud* Storage::GetDBByIndex(int index) {
-#else
 rocksdb::DB* Storage::GetDBByIndex(int index) {
-#endif
   if (index < 0 || index >= db_instance_num_) {
     LOG(WARNING) << "Invalid DB Index: " << index << "total: "
                  << db_instance_num_;
@@ -2401,7 +2401,7 @@ Status Storage::EnableAutoCompaction(const OptionType& option_type,
 void Storage::GetRocksDBInfo(std::string& info) {
   char temp[12] = {0};
   for (const auto& inst : insts_) {
-    snprintf(temp, sizeof(temp), "instance:%2d", inst->GetIndex());
+    snprintf(temp, sizeof(temp), "instance%d_", inst->GetIndex());
     inst->GetRocksDBInfo(info, temp);
   }
 }
@@ -2449,18 +2449,12 @@ void Storage::DisableWal(const bool is_wal_disable) {
 }
 
 #ifdef USE_S3
-Status Storage::SwitchMaster(bool is_old_master, bool is_new_master) {
-  Status s = Status::OK();
-  for (const auto& inst : insts_) {
-    s = inst->SwitchMaster(is_old_master, is_new_master);
-    if (!s.ok()) {
-      LOG(WARNING) << "switch mode failed, when switch from "
-                   << (is_old_master ? "master" : "slave") << " to "
-                   << (is_new_master ? "master" : "slave");
-      return s;
-    }
-  }
-  return s;
+
+Status Storage::ApplyWAL(int rocksdb_id, const std::string& repli_seq,
+                         int type, const std::string& content) {
+  auto& inst = insts_[rocksdb_id];
+  return inst->ApplyWAL(replication_sequence, type, content);
 }
 #endif
+
 }  //  namespace storage

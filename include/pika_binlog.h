@@ -53,7 +53,7 @@ class Binlog : public pstd::noncopyable {
 
   virtual pstd::Status Put(const std::string& item);
 
-  virtual pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id);
+  virtual pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, const std::string& rep_seq);
 
   virtual pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
   /*

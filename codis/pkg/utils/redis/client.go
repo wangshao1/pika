@@ -436,6 +436,16 @@ func (c *Client) Role() (string, error) {
 	}
 }
 
+func (c *Client) PKPing(group_info []byte) (*InfoReplication, error) {
+	//waiting to complete
+	text, err := redigo.String(c.Do("PKPing", group_info))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	return parseInfoReplication(text)
+}
+
 var ErrClosedPool = errors.New("use of closed redis pool")
 
 type Pool struct {

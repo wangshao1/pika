@@ -16,12 +16,21 @@ func (s *Topom) CheckStateAndSwitchSlavesAndMasters(filter func(index int, g *mo
 		return err
 	}
 
+	var states []*redis.ReplicationState
 	groupServers := filterGroupServer(ctx.getGroupServers(), filter)
 	if len(groupServers) == 0 {
 		return nil
 	}
+	if s.Config().SentinelPikaLocalModel {
+		states = checkGroupServersReplicationState(s.Config(), groupServers)
+	} else {
+		var groups_info map[int]int
+		for gid, _ := range groupServers {
+			groups_info[gid] = ctx.group[gid].TermId
+		}
+		states = checkGroupServersPKPingState(s.Config(), groupServers, groups_info)
+	}
 
-	states := checkGroupServersReplicationState(s.Config(), groupServers)
 	var slaveOfflineGroups []*models.Group
 	var masterOfflineGroups []*models.Group
 	var recoveredGroupServersState []*redis.ReplicationState
@@ -109,6 +118,20 @@ func checkGroupServersReplicationState(conf *Config, gs map[int][]*models.GroupS
 
 	sentinel := redis.NewCodisSentinel(conf.ProductName, conf.ProductAuth)
 	return sentinel.RefreshMastersAndSlavesClient(config.ParallelSyncs, gs)
+}
+
+func checkGroupServersPKPingState(conf *Config, gs map[int][]*models.GroupServer, groups_info map[int]int) []*redis.ReplicationState {
+	config := &redis.MonitorConfig{
+		Quorum:               conf.SentinelQuorum,
+		ParallelSyncs:        conf.SentinelParallelSyncs,
+		DownAfter:            conf.SentinelDownAfter.Duration(),
+		FailoverTimeout:      conf.SentinelFailoverTimeout.Duration(),
+		NotificationScript:   conf.SentinelNotificationScript,
+		ClientReconfigScript: conf.SentinelClientReconfigScript,
+	}
+
+	sentinel := redis.NewCodisSentinel(conf.ProductName, conf.ProductAuth)
+	return sentinel.RefreshMastersAndSlavesClientWithPKPing(config.ParallelSyncs, gs, groups_info)
 }
 
 func filterGroupServer(groupServers map[int][]*models.GroupServer,

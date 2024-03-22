@@ -43,7 +43,8 @@ class CodisDashboard(Process):
             f.write('sentinel_failover_timeout = "10m"\n')
             path = os.getcwd()
             f.write('sentinel_notification_script = "{}"\n'.format(os.path.join(path, "sentinel_notify.sh")))
-            f.write('sentinel_client_reconfig_script = "{}"\n'.format(os.path.join(path, "sentinel_reconfig.sh")))
+            f.write('sentinel_client_reconfig_script = "{}"\n'.format(os.path.join(path, "sentinel_reconfig.sh"))
+            f.write('sentinel_pika_local_model = "true"\n'))
         return config
 
 

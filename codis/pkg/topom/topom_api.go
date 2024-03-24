@@ -43,6 +43,7 @@ func newApiServer(t *Topom) http.Handler {
 					break
 				}
 			}
+			log.Warnf("req [%s]", req.GetBody)
 			log.Warnf("[%p] API call %s from %s [%s]", t, path, remoteAddr, headerAddr)
 		}
 		c.Next()
@@ -74,6 +75,8 @@ func newApiServer(t *Topom) http.Handler {
 		r.Get("/xping/:xauth", api.XPing)
 		r.Get("/stats/:xauth", api.Stats)
 		r.Get("/slots/:xauth", api.Slots)
+		r.Post("/upload-s3/:gid/:tid/:bucket/:filename/:manifest",
+			api.UploadManifestToS3)
 		r.Put("/reload/:xauth", api.Reload)
 		r.Put("/shutdown/:xauth", api.Shutdown)
 		r.Put("/loglevel/:xauth/:value", api.LogLevel)
@@ -99,7 +102,6 @@ func newApiServer(t *Topom) http.Handler {
 				r.Put("/remove/:xauth/:addr", api.SyncRemoveAction)
 			})
 			r.Get("/info/:addr", api.InfoServer)
-			r.Put("/upload-s3/:xauth/:gid/:tid/:manifest", api.UploadManifestToS3)
 		})
 		r.Group("/slots", func(r martini.Router) {
 			r.Group("/action", func(r martini.Router) {
@@ -502,9 +504,6 @@ func (s *apiServer) SyncRemoveAction(params martini.Params) (int, string) {
 }
 
 func (s *apiServer) UploadManifestToS3(params martini.Params) (int, string) {
-	if err := s.verifyXAuth(params); err != nil {
-		return rpc.ApiResponseError(err)
-	}
 	gid, err := s.parseInteger(params, "gid")
 	if err != nil {
 		return rpc.ApiResponseError(err)
@@ -513,8 +512,12 @@ func (s *apiServer) UploadManifestToS3(params martini.Params) (int, string) {
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
+	//:gid/:tid/:bucket/:filename/:manifest",
+	bucket := params["bucket"]
+	filename := params["filename"]
+	manifest := params["manifest"]
 
-	if err := s.topom.UploadManifestToS3(gid, tid); err != nil {
+	if err := s.topom.UploadManifestToS3(gid, tid, bucket, filename, manifest); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")

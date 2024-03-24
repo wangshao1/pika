@@ -97,6 +97,10 @@ type Config struct {
 	SentinelNotificationScript          string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript        string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
 	SentinelPikaLocalModel              bool              `toml:"sentinel_pika_local_model" json:"sentinel_pika_local_model"`
+	CloudAccessKey                      string            `toml:"cloud_access_key" json:"cloud_access_key"`
+	CloudSecretKey                      string            `toml:"cloud_secret_key" json:"cloud_secret_key"`
+	CloudEndPointOverride               string            `toml:"cloud_endpoint_override" json:"cloud_endpoint_override"`
+	CloudSrcBucketRegion                string            `toml:"cloud_src_bucket_region" json:"cloud_src_bucket_region"`
 }
 
 func NewDefaultConfig() *Config {

@@ -5,6 +5,9 @@ package topom
 
 import (
 	"encoding/json"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"time"
 
 	"pika/codis/v2/pkg/models"
@@ -31,6 +34,7 @@ func (s *Topom) CreateGroup(gid int) error {
 
 	g := &models.Group{
 		Id:      gid,
+		TermId:  0,
 		Servers: []*models.GroupServer{},
 	}
 	return s.storeCreateGroup(g)
@@ -319,6 +323,7 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		g = &models.Group{
 			Id:      g.Id,
+			TermId:  g.TermId,
 			Servers: g.Servers,
 		}
 		return s.storeUpdateGroup(g)
@@ -786,7 +791,7 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 	}, nil
 }
 
-func (s *Topom) UploadManifestToS3(gid int, tid int) error {
+func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, manifest string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, err := s.newContext()
@@ -797,11 +802,50 @@ func (s *Topom) UploadManifestToS3(gid int, tid int) error {
 	if gid <= 0 || gid > models.MaxGroupId {
 		return errors.Errorf("invalid group id = %d, out of range", gid)
 	}
-	if ctx.group[gid].TermId == tid {
-		//waiting for upload to s3
-		return nil
+
+	group, exists := ctx.group[gid]
+	//if true {
+	if exists {
+		//if true {
+		if group.TermId == tid {
+			sess, err := session.NewSession(&aws.Config{
+				Credentials: credentials.NewStaticCredentials(s.Config().CloudAccessKey,
+					s.Config().CloudSecretKey, ""),
+				Endpoint:                  aws.String(s.Config().CloudEndPointOverride),
+				Region:                    aws.String(s.Config().CloudSrcBucketRegion),
+				DisableSSL:                aws.Bool(true),
+				S3ForcePathStyle:          aws.Bool(true),
+				DisableEndpointHostPrefix: aws.Bool(true),
+			})
+
+			//waiting for pika trans manifest
+			//bucket := "pika"
+			//filename := "db/db0/bz.cc"
+
+			file, err := os.Open("/Users/charlieqiao/Desktop/bz.cc")
+			//ioutil.ReadAll(strings.NewReader(params["manifest"]))
+			if err != nil {
+				//exitErrorf("Unable to open file %q, %v", err)
+				println(err)
+			}
+			defer file.Close()
+			//over
+
+			uploader := s3manager.NewUploader(sess)
+			_, err = uploader.Upload(&s3manager.UploadInput{
+				Bucket: aws.String(bucket),
+				Key:    aws.String(filename),
+				Body:   file,
+			})
+			if err != nil {
+				return errors.Errorf("Unable to upload [%s] to [%s], [%s]", filename, bucket, err)
+			}
+		} else {
+			return errors.Errorf("group-[%d] term id:[%d] not equal to pika term id:[%d]",
+				gid, ctx.group[gid].TermId, tid)
+		}
 	} else {
-		return errors.Errorf("group-[%d] term id:[%d] not equal to pika term id:[%d]",
-			gid, ctx.group[gid].TermId, tid)
+		return errors.Errorf("group-[%d] not exists", gid)
 	}
+	return nil
 }

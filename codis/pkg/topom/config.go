@@ -62,6 +62,10 @@ sentinel_failover_timeout = "5m"
 sentinel_notification_script = ""
 sentinel_client_reconfig_script = ""
 sentinel_pika_local_model = true
+cloud_access_key = "minioadmin"
+cloud_secret_key = "minioadmin"
+cloud_endpoint_override = "http://10.224.129.40:9000"
+cloud_src_bucket_region = "us-east-1"
 `
 
 type Config struct {

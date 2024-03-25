@@ -4,7 +4,9 @@
 package topom
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -74,8 +76,7 @@ func newApiServer(t *Topom) http.Handler {
 		r.Get("/xping/:xauth", api.XPing)
 		r.Get("/stats/:xauth", api.Stats)
 		r.Get("/slots/:xauth", api.Slots)
-		r.Post("/upload-s3/:group_id/:term_id/:s3_bucket/:s3_path/:content",
-			api.UploadManifestToS3)
+		r.Post("/upload-s3", api.UploadManifestToS3)
 		r.Put("/reload/:xauth", api.Reload)
 		r.Put("/shutdown/:xauth", api.Shutdown)
 		r.Put("/loglevel/:xauth/:value", api.LogLevel)
@@ -502,21 +503,26 @@ func (s *apiServer) SyncRemoveAction(params martini.Params) (int, string) {
 	}
 }
 
-func (s *apiServer) UploadManifestToS3(params martini.Params) (int, string) {
-	gid, err := s.parseInteger(params, "group_id")
+func (s *apiServer) UploadManifestToS3(req *http.Request) (int, string) {
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	tid, err := s.parseInteger(params, "term_id")
-	if err != nil {
-		return rpc.ApiResponseError(err)
-	}
-	//:gid/:tid/:bucket/:filename/:manifest",
-	bucket := params["s3_bucket"]
-	filename := params["s3_path"]
-	manifest := params["content"]
 
-	if err := s.topom.UploadManifestToS3(gid, tid, bucket, filename, manifest); err != nil {
+	type UploadRequest struct {
+		GroupId  int    `json:"group_id"`
+		TermId   int    `json:"term_id"`
+		S3Bucket string `json:"s3_bucket"`
+		S3Path   string `json:"s3_path"`
+		Content  string `json:"content"`
+	}
+	var uploadReq UploadRequest
+	err = json.Unmarshal(body, &uploadReq)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.UploadManifestToS3(uploadReq.GroupId, uploadReq.TermId, uploadReq.S3Bucket,
+		uploadReq.S3Path, uploadReq.Content); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")

@@ -793,7 +793,7 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 	}, nil
 }
 
-func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, manifest string) error {
+func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, err := s.newContext()
@@ -820,18 +820,15 @@ func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename str
 				DisableEndpointHostPrefix: aws.Bool(true),
 			})
 
-			//waiting for pika trans manifest
-
-			//bucket := "pika"
-			//filename := "db/db0/bz.cc"
-			file, err := os.Open("/Users/charlieqiao/Desktop/bz.cc")
-			//ioutil.ReadAll(strings.NewReader(params["manifest"]))
+			file, err := os.Create("./tmp")
 			if err != nil {
-				//exitErrorf("Unable to open file %q, %v", err)
-				println(err)
+				return errors.Errorf("Create manifest file err :[%s]", err)
 			}
 			defer file.Close()
-			//waiting for pika trans manifest over
+			_, err = file.WriteString(content)
+			if err != nil {
+				return errors.Errorf("Write manifest err :[%s]", err)
+			}
 
 			uploader := s3manager.NewUploader(sess)
 			_, err = uploader.Upload(&s3manager.UploadInput{

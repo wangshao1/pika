@@ -11,6 +11,18 @@
 #include <fstream>
 #include <memory>
 #include <utility>
+
+#include <aws/core/http/curl/CurlHttpClient.h>
+#include <aws/core/http/HttpRequest.h>
+#include <aws/core/http/HttpResponse.h>
+#include <aws/core/utils/json/JsonSerializer.h>
+#include <aws/core/http/HttpRequest.h>
+#include <aws/core/http/HttpResponse.h>
+#include <aws/core/http/HttpClientFactory.h>
+#include <aws/core/http/HttpClient.h>
+#include <aws/core/http/standard/StandardHttpRequest.h>
+#include <aws/core/client/ClientConfiguration.h>
+
 #include "net/include/net_cli.h"
 #include "net/include/net_interfaces.h"
 #include "net/include/net_stats.h"
@@ -25,6 +37,10 @@
 #include "include/pika_monotonic_time.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
+
+using namespace Aws::Http;
+using namespace Aws::Utils;
+using namespace Aws::Client;
 
 using pstd::Status;
 extern PikaServer* g_pika_server;
@@ -1800,3 +1816,54 @@ void PikaServer::CacheConfigInit(cache::CacheConfig& cache_cfg) {
   cache_cfg.maxmemory_samples = g_pika_conf->cache_maxmemory_samples();
   cache_cfg.lfu_decay_time = g_pika_conf->cache_lfu_decay_time();
 }
+
+#ifdef USE_S3
+bool PikaServer::UploadMetaToSentinel(const std::string& s3_bucket,
+                                      const std::string& remote_path,
+                                      const std::string& content) {
+  Aws::String url(sentinel_addr_);
+  if (sentinel_client_ == nullptr) {
+    sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());
+  }
+
+  // construct request body
+  Json::JsonValue request_doc;
+  request_doc.WithString("term_id", Aws::String(lease_term_id_));
+  request_doc.WithString("group_id", Aws::String(group_id_));
+  request_doc.WithString("s3_bucket", Aws::String(s3_bucket));
+  request_doc.WithString("s3_path", Aws::String(remote_path));
+  request_doc.WithString("content", Aws::String(content));
+
+  std::shared_ptr<Aws::IOStream> body = Aws::MakeShared<Aws::StringStream>("wsy demo");
+  *body << request_doc.View().WriteReadable();
+
+  auto request = CreateHttpRequest(url, HttpMethod::HTTP_POST,
+      Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
+  request->AddContentBody(body);
+  body->seekg(0, body->end);
+  auto streamSize = body->tellg();
+  body->seekg(0, body->beg);
+  Aws::StringStream contentLength;
+  contentLength << streamSize;
+  request->SetContentLength(contentLength.str());
+  request->SetContentType("application/json");
+
+  auto response = sentinel_client_->MakeRequest(request);
+  if (response->HasClientError()) {
+    exit(1);
+  }
+  if (response->GetResponseCode() == HttpResponseCode::OK) {
+    LOG(ERROR) << "UploadMetaToSentinel success"
+               << " s3_bucket: " << s3_bucket
+               << " group_id: " << group_id_
+               << " remote path: " << remote_path;
+    return true;
+  }
+
+  LOG(ERROR) << "UploadMetaToSentinel failed "
+             << " s3_bucket: " << s3_bucket
+             << " group_id: " << group_id_
+             << " remote path: " << remote_path;
+  return false;
+}
+#endif

@@ -16,6 +16,10 @@
 #include <memory>
 #include <set>
 
+#ifdef USE_S3
+#include <aws/core/http/HttpClientFactory.h>
+#endif
+
 #include "src/cache/include/config.h"
 #include "net/include/bg_thread.h"
 #include "net/include/net_pubsub.h"
@@ -307,6 +311,12 @@ class PikaServer : public pstd::noncopyable {
   std::shared_mutex bgsave_protector_;
   BgSaveInfo bgsave_info_;
 
+#ifdef USE_S3
+  bool UploadMetaToSentinel(const std::string& s3_bucket, const std::string& remote_path,
+                            const std::string& content);
+#endif
+
+
   /*
    * BGSlotsReload used
    */
@@ -507,6 +517,14 @@ class PikaServer : public pstd::noncopyable {
   std::string host_;
   int port_ = 0;
   time_t start_time_s_ = 0;
+
+#ifdef USE_S3
+  std::string sentinel_addr_;
+  //TODO(wangshaoyi): make it thread loacal
+  std::shared_ptr<Aws::Http::HttpClient> sentinel_client_;
+  std::string lease_term_id_;
+  std::string group_id_;
+#endif
 
   std::shared_mutex storage_options_rw_;
   storage::StorageOptions storage_options_;

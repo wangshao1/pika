@@ -152,6 +152,8 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
           g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
       if (!db) {
         LOG(WARNING) << woker->db_name_ <<" not found";
+        slave_db->SetReplState(ReplState::kTryConnect);
+        return;
       }
       db->Logger()->Put(binlog_res.binlog());
       auto storage = g_pika_server->GetDB(worker->db_name_)->storage();

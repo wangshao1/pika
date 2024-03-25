@@ -598,7 +598,8 @@ Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const 
   rlr.contents = content;
   rlr.type = rtype;
 
-  auto s = db_->ApplyReplicationLogRecord(rlr, repli_seq, nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
+  auto s = db_->ApplyReplicationLogRecord(rlr, replication_sequence,
+      nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
   LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
                << " replication sequence: " << replication_sequence
                << " log record type: " << rtype

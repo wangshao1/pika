@@ -74,7 +74,7 @@ func newApiServer(t *Topom) http.Handler {
 		r.Get("/xping/:xauth", api.XPing)
 		r.Get("/stats/:xauth", api.Stats)
 		r.Get("/slots/:xauth", api.Slots)
-		r.Post("/upload-s3/:gid/:tid/:bucket/:filename/:manifest",
+		r.Post("/upload-s3/:group_id/:term_id/:s3_bucket/:s3_path/:content",
 			api.UploadManifestToS3)
 		r.Put("/reload/:xauth", api.Reload)
 		r.Put("/shutdown/:xauth", api.Shutdown)
@@ -503,18 +503,18 @@ func (s *apiServer) SyncRemoveAction(params martini.Params) (int, string) {
 }
 
 func (s *apiServer) UploadManifestToS3(params martini.Params) (int, string) {
-	gid, err := s.parseInteger(params, "gid")
+	gid, err := s.parseInteger(params, "group_id")
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	tid, err := s.parseInteger(params, "tid")
+	tid, err := s.parseInteger(params, "term_id")
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
 	//:gid/:tid/:bucket/:filename/:manifest",
-	bucket := params["bucket"]
-	filename := params["filename"]
-	manifest := params["manifest"]
+	bucket := params["s3_bucket"]
+	filename := params["s3_path"]
+	manifest := params["content"]
 
 	if err := s.topom.UploadManifestToS3(gid, tid, bucket, filename, manifest); err != nil {
 		return rpc.ApiResponseError(err)

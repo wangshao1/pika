@@ -43,7 +43,6 @@ func newApiServer(t *Topom) http.Handler {
 					break
 				}
 			}
-			log.Warnf("req [%s]", req.GetBody)
 			log.Warnf("[%p] API call %s from %s [%s]", t, path, remoteAddr, headerAddr)
 		}
 		c.Next()

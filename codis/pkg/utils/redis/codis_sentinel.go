@@ -149,6 +149,8 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 	}
 
 	var fut sync2.Future
+
+	//build pkping parameter
 	for gid, servers := range groupServers {
 		var group_info GroupInfo
 		group_info.GroupId = gid
@@ -163,7 +165,6 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 			}
 		}
 
-		//build pkping parameter
 		group_inf_json, err := json.Marshal(group_info)
 		if err != nil {
 			log.WarnErrorf(err, "json: %s Serialization Failure failed", group_inf_json)

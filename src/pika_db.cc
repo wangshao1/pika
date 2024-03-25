@@ -40,7 +40,7 @@ DB::DB(std::string db_name, const std::string& db_path,
   storage_ = std::make_shared<storage::Storage>(g_pika_conf->db_instance_num(),
       g_pika_conf->default_slot_num(), g_pika_conf->classic_mode());
 #ifdef USE_S3
-  auto wal_writer = g_pika_rm->GetSyncMasterDBByName(db_name)->StableLogger().get();
+  std::shared_ptr<pstd::WalWriter> wal_writer = g_pika_rm->GetSyncMasterDBByName(db_name)->StableLogger()->Logger();
   rocksdb::Status s = storage_->Open(g_pika_server->storage_options(), db_path_, wal_writer);
 #else
   rocksdb::Status s = storage_->Open(g_pika_server->storage_options(), db_path_);

@@ -12,6 +12,7 @@
 #include "pstd/include/pstd_mutex.h"
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/noncopyable.h"
+#include "pstd/include/pstd_wal.h"
 #include "include/pika_define.h"
 
 std::string NewFileName(const std::string& name, uint32_t current);
@@ -43,7 +44,7 @@ class Version final : public pstd::noncopyable {
   std::shared_ptr<pstd::RWFile> save_;
 };
 
-class Binlog : public pstd::noncopyable {
+class Binlog : public pstd::WalWriter {
  public:
   Binlog(std::string  Binlog_path, int file_size = 100 * 1024 * 1024);
   virtual ~Binlog();
@@ -53,7 +54,7 @@ class Binlog : public pstd::noncopyable {
 
   virtual pstd::Status Put(const std::string& item);
 
-  virtual pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, const std::string& rep_seq);
+  virtual pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, const std::string& rep_seq) override;
 
   virtual pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
   /*

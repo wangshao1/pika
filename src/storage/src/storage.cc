@@ -89,7 +89,7 @@ static std::string AppendSubDirectory(const std::string& db_path, int index) {
   }
 }
 
-Status Storage::Open(const StorageOptions& storage_options, const std::string& db_path, void* wal_writer) {
+Status Storage::Open(const StorageOptions& storage_options, const std::string& db_path, std::shared_ptr<pstd::WalWriter> wal_writer) {
   mkpath(db_path.c_str(), 0755);
 
   int inst_count = db_instance_num_;
@@ -2468,7 +2468,7 @@ Status Storage::SwitchMaster(bool is_old_master, bool is_new_master) {
   return s;
 }
 
-Status Storage::ApplyWAL(int rocksdb_id, const std::string& repli_seq,
+Status Storage::ApplyWAL(int rocksdb_id, const std::string& replication_sequence,
                          int type, const std::string& content) {
   auto& inst = insts_[rocksdb_id];
   return inst->ApplyWAL(replication_sequence, type, content);

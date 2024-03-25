@@ -12,6 +12,7 @@
 
 #ifdef USE_S3
 #include "rocksdb/cloud/db_cloud.h"
+#include "pstd/include/pstd_wal.h"
 #else
 #include "rocksdb/db.h"
 #endif
@@ -40,7 +41,7 @@ using Slice = rocksdb::Slice;
 class LogListener;
 class Redis {
  public:
-  Redis(Storage* storage, int32_t index, void* wal_logger = nullptr);
+  Redis(Storage* storage, int32_t index, std::shared_ptr<pstd::WalWriter> wal_writer = nullptr);
   virtual ~Redis();
 
 #ifdef USE_S3
@@ -432,9 +433,13 @@ private:
   inline Status SetFirstOrLastID(const rocksdb::Slice& key, StreamMetaValue& stream_meta, bool is_set_first,
                                  rocksdb::ReadOptions& read_options);
 
+public:
+  bool opened_ = false;
+#ifdef USE_S3
+  Status ApplyWAL(const std::string& replication_sequence, int type, const std::string& content);
+#endif
 
 private:
-  bool opened_ = false;
   int32_t index_ = 0;
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
@@ -442,6 +447,7 @@ private:
   std::string db_path_ = "";
   rocksdb::DBCloud* db_ = nullptr;
   std::shared_ptr<rocksdb::ReplicationLogListener> log_listener_;
+  StorageOptions storage_options_;
 #else
   rocksdb::DB* db_ = nullptr;
 #endif
@@ -475,14 +481,13 @@ private:
   std::unique_ptr<rocksdb::Env> cloud_env_;
   rocksdb::CloudFileSystem* cfs_;
   Status ReOpenRocksDB(const storage::StorageOptions& opt);
-  Status ApplyWAL(const std::string& replication_sequence, int type, const std::string& content);
 #endif
 };
 
 // TODO(wangshaoyi): implement details
 class LogListener : public rocksdb::ReplicationLogListener {
 public:
-  LogListener(int rocksdb_id, void* inst, void* wal_writer)
+  LogListener(int rocksdb_id, void* inst, std::shared_ptr<pstd::WalWriter> wal_writer)
       : rocksdb_id_(rocksdb_id), counter_(0),
         inst_(inst), wal_writer_(wal_writer) {}
   std::string OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) override;
@@ -495,7 +500,7 @@ private:
   int rocksdb_id_ = 0;
   std::atomic<int> counter_ = {0};
   void* inst_ = nullptr;
-  void* wal_writer_ = nullptr;
+  std::shared_ptr<pstd::WalWriter> wal_writer_ = nullptr;
 };
 
 }  //  namespace storage

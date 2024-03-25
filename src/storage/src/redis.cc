@@ -25,7 +25,7 @@ rocksdb::Comparator* ZSetsScoreKeyComparator() {
   return &zsets_score_key_compare;
 }
 
-Redis::Redis(Storage* const s, int32_t index, void* wal_writer)
+Redis::Redis(Storage* const s, int32_t index, std::shared_ptr<pstd::WalWriter> wal_writer)
     : storage_(s), index_(index),
       lock_mgr_(std::make_shared<LockMgr>(1000, 0, std::make_shared<MutexFactoryImpl>())),
       small_compaction_threshold_(5000),
@@ -598,8 +598,7 @@ Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const 
   rlr.contents = content;
   rlr.type = rtype;
 
-  auto s = db_->ApplyReplicationLogRecord(rlr, replication_sequence,
-      nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
+  auto s = db_->ApplyReplicationLogRecord(rlr, replication_sequence, nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
   LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
                << " replication sequence: " << replication_sequence
                << " log record type: " << rtype
@@ -613,15 +612,15 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   //TODO(wangshaoyi): get from storage
   int db_id = 0;
   if (redis_inst->opened_) {
-    LOG(WANRING) << "rocksdb not opened yet, skip write binlog";
+    LOG(WARNING) << "rocksdb not opened yet, skip write binlog";
     return "0";
   }
   std::string replication_sequence_str = std::to_string(counter_.fetch_add(1));
-  auto s = ((StableLog*)(wal_writer_))->Logger()-> Put(record.contents, db_id,
+  auto s = wal_writer_->Put(record.contents, db_id,
       redis_inst->GetIndex(), replication_sequence_str);
   if (!s.ok()) {
     LOG(ERROR) << "write binlog failed, db_id: " << db_id 
-               << " rocksdb_id: " << rocksdb_id
+               << " rocksdb_id: " << redis_inst->GetIndex()
                << " replication sequence: " << replication_sequence_str;
   }
   return replication_sequence_str; 

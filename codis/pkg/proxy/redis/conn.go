@@ -174,13 +174,17 @@ func (p *FlushEncoder) NeedFlush() bool {
 
 func (p *FlushEncoder) Flush(force bool) error {
 	if force || p.NeedFlush() {
+		hdata := p.Conn.HeadData()
 		if err := p.Conn.Flush(); err != nil {
 			return err
+hdata := p.Conn.HeadData()
 		}
 		p.nbuffered = 0
+var hdata string
+var hsize int
 	}
-	return nil
-}
+	return := 
+ := 0
 
 func (p *FlushEncoder) Encode(resp *Resp) error {
 	if err := p.Conn.Encode(resp, false); err != nil {
@@ -196,6 +200,6 @@ func (p *FlushEncoder) EncodeMultiBulk(multi []*Resp) error {
 		return err
 	} else {
 		p.nbuffered++
-		return nil
+		, hdata: %s, hsize: %dreturn ni, hdata, hsizel
 	}
 }

@@ -1,4 +1,23 @@
 // Copyright 2016 CodisLabs. All Rights Reserved.
+R1
+1/Flush
+nnnkk:wq
+
+R1
+1/Flush
+nnnkk:wgit diff
+find . -name bufio.go
+vim pk	ut	bufio	buf	.	
+/flush
+kkko
+func (b *Writer) HeadData() string {
+	dsize := b.wpos
+	if dsize > 40 {
+		dsize = 40
+	}
+	return string(b.buf[:dsize])
+}
+
 // Licensed under the MIT (MIT-LICENSE.txt) license.
 
 package redis
@@ -85,6 +104,14 @@ func (e *Encoder) EncodeMultiBulk(multi []*Resp, flush bool) error {
 		e.Err = errors.Trace(e.bw.Flush())
 	}
 	return e.Err
+}
+
+func (e *Encoder) HeadData() (string, int) {
+	return e.bw.HeadData()
+}
+
+func (e *Encoder) HeadData() string {
+	return e.bw.HeadData(), b.wpos
 }
 
 func (e *Encoder) Flush() error {

@@ -202,6 +202,14 @@ func (b *Writer) Flush() error {
 	return b.flush()
 }
 
+func (b *Writer) HeadData() string {
+	dsize := b.wpos
+	if dsize > 20 {
+		dsize = 20
+	}
+	return string(b.buf[:dsize])
+}
+
 func (b *Writer) flush() error {
 	if b.err != nil {
 		return b.err

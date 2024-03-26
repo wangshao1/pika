@@ -1419,12 +1419,8 @@ void PikaServer::InitStorageOptions() {
   cloud_fs_opts.src_bucket.SetRegion(g_pika_conf->cloud_src_bucket_region());
   cloud_fs_opts.dest_bucket.SetBucketName(g_pika_conf->cloud_dest_bucket_suffix(), g_pika_conf->cloud_dest_bucket_prefix());
   cloud_fs_opts.dest_bucket.SetRegion(g_pika_conf->cloud_dest_bucket_region());
-
-  //TODO(wangshoyi): implement upload rocksdb-cloud meta to dashboard
-  storage_options.cloud_fs_options.upload_meta_func = [](const std::string& a, const std::string& b, const std::string& c) ->bool {
-    LOG(WARNING) << "args: " << a << " : " << b << " : " << c;
-    return true;
-  };
+  storage_options.cloud_fs_options.upload_meta_func = std::bind(&PikaServer::UploadMetaToSentinel, this,
+      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 #endif
 }
 
@@ -1818,13 +1814,42 @@ void PikaServer::CacheConfigInit(cache::CacheConfig& cache_cfg) {
 }
 
 #ifdef USE_S3
-bool PikaServer::UploadMetaToSentinel(const std::string& s3_bucket,
-                                      const std::string& remote_path,
-                                      const std::string& content) {
+bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
+                                      const std::string& s3_bucket,
+                                      const std::string& object_path) {
   Aws::String url(sentinel_addr_);
   if (sentinel_client_ == nullptr) {
     sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());
   }
+
+  FILE * fp;
+  long f_size;
+  char * buffer;
+  size_t result;
+    
+  fp = fopen(local_path.c_str(), "rb");
+  if (fp == nullptr) {
+    LOG(WANRING) << "read file failed, local_path: " << local_path
+                 << " error msg: " << strerror(errno);
+    return false;
+  }
+ 
+  fseek(fp, 0 , SEEK_END);
+  f_size = ftell(fp);
+  rewind(fp);
+ 
+  DEFER {
+    fclose(fp);
+ .  delete [] buffer;
+  };
+
+  buffer = new char[f_size];
+  result = fread(buffer, 1, f_size, fp);
+  if (result != f_size) {
+    LOG(WANRING) << "read file failed, local_path: " << local_path
+                 << " fread size: " << result << "fsize: " << f_size;
+  }
+  std::string content(buffer, result);
 
   // construct request body
   Json::JsonValue request_doc;

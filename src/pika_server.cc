@@ -5,6 +5,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <functional>
 #include <sys/resource.h>
 #include <algorithm>
 #include <ctime>

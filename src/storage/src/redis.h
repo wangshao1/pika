@@ -444,7 +444,7 @@ private:
   Storage* const storage_;
   std::shared_ptr<LockMgr> lock_mgr_;
 #ifdef USE_S3
-  std::string db_path_ = "";
+  std::string db_path_;
   rocksdb::DBCloud* db_ = nullptr;
   std::shared_ptr<rocksdb::ReplicationLogListener> log_listener_;
   StorageOptions storage_options_;

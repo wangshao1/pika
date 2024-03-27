@@ -1823,13 +1823,8 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
   if (sentinel_client_ == nullptr) {
     sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());
   }
-
-  FILE * fp;
-  long f_size;
-  char * buffer;
-  size_t result;
     
-  fp = fopen(local_path.c_str(), "rb");
+  FILE* fp = fopen(local_path.c_str(), "rb");
   if (fp == nullptr) {
     LOG(WANRING) << "read file failed,"
                  << " local_path: " << local_path
@@ -1838,16 +1833,16 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
   }
  
   fseek(fp, 0 , SEEK_END);
-  f_size = ftell(fp);
+  long f_size = ftell(fp);
   rewind(fp);
+  char* buffer = new char[f_size];
  
   DEFER {
  .  delete [] buffer;
     fclose(fp);
   };
 
-  buffer = new char[f_size];
-  result = fread(buffer, 1, f_size, fp);
+  size_t result = fread(buffer, 1, f_size, fp);
   if (result != f_size) {
     LOG(WANRING) << "read file failed, local_path: " << local_path
                  << " fread size: " << result << "fsize: " << f_size;

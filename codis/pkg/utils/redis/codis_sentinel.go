@@ -131,6 +131,13 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClient(parallel int, groupServers
 	return results
 }
 
+type GroupInfo struct {
+	GroupId     int      `json:"group_id"`
+	TermId      int      `json:"term_id"`
+	MastersAddr []string `json:"master_addr"`
+	SlavesAddr  []string `json:"slaves_addr"`
+}
+
 func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, groupServers map[int][]*models.GroupServer, groups_info map[int]int) []*ReplicationState {
 	if len(groupServers) == 0 {
 		s.printf("there's no groups")
@@ -140,13 +147,6 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 	parallel = math2.MaxInt(10, parallel)
 	limit := make(chan struct{}, parallel)
 	defer close(limit)
-
-	type GroupInfo struct {
-		GroupId     int      `json:"group_id"`
-		TermId      int      `json:"term_id"`
-		MastersAddr []string `json:"master_addr"`
-		SlavesAddr  []string `json:"slaves_addr"`
-	}
 
 	var fut sync2.Future
 

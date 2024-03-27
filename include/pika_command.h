@@ -248,6 +248,8 @@ const std::string kCmdNameXInfo = "xinfo";
 
 const std::string kClusterPrefix = "pkcluster";
 
+const std::string kCmdPkPing = "pkping";
+
 using PikaCmdArgsType = net::RedisCmdArgsType;
 static const int RAW_ARGS_LEN = 1024 * 1024;
 

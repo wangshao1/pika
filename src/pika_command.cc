@@ -820,6 +820,10 @@ void InitCmdTable(CmdTable* cmd_table) {
     std::unique_ptr<Cmd> xinfoptr =
         std::make_unique<XInfoCmd>(kCmdNameXInfo, -2, kCmdFlagsRead |  kCmdFlagsStream | kCmdFlagsSlow);
     cmd_table->insert(std::pair<std::string, std::unique_ptr<Cmd>>(kCmdNameXInfo, std::move(xinfoptr)));
+  ////PKPING
+    std::unique_ptr<Cmd> pkpingptr =
+        std::make_unique<PKPingCmd>(kCmdPkPing, 2, kCmdFlagsRead | kCmdFlagsAdmin | kCmdFlagsSlow);
+    cmd_table->insert(std::pair<std::string, std::unique_ptr<Cmd>>(kCmdPkPing, std::move(pkpingptr)));
 }
 
 Cmd* GetCmdFromDB(const std::string& opt, const CmdTable& cmd_table) {

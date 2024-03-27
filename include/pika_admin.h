@@ -260,6 +260,8 @@ class InfoCmd : public Cmd {
     kInfoCache
   };
 
+  friend class PKPingCmd;
+
   InfoCmd(const std::string& name, int arity, uint32_t flag) : Cmd(name, arity, flag) {}
   void Do() override;
   void Split(const HintKeys& hint_keys) override {};
@@ -593,6 +595,24 @@ class ClearCacheCmd : public Cmd {
 
  private:
   void DoInitial() override;
+};
+
+class PKPingCmd : public Cmd {
+ public:
+  PKPingCmd(const std::string& name, int arity, uint32_t flag) : Cmd(name, arity, flag) {}
+  void Do() override;
+  void Split(const HintKeys& hint_keys) override {};
+  void Merge() override {};
+  Cmd* Clone() override { return new PKPingCmd(*this); }
+
+ private:
+  uint32_t group_id_ = 0;
+  uint32_t term_id_ = 0;
+  std::vector<std::string> masters_addr_;
+  std::vector<std::string> slaves_addr_;
+
+  void DoInitial() override;
+  void Clear() override {}
 };
 
 #ifdef WITH_COMMAND_DOCS

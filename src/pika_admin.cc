@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include <glog/logging.h>
+#include <aws/core/utils/json/JsonSerializer.h>
 
 #include "include/build_version.h"
 #include "include/pika_cmd_table_manager.h"
@@ -22,7 +23,9 @@
 #include "include/pika_conf.h"
 #include "pstd/include/rsync.h"
 
+
 using pstd::Status;
+using namespace Aws::Utils;
 
 extern PikaServer* g_pika_server;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
@@ -3227,6 +3230,53 @@ void ClearCacheCmd::Do() {
     g_pika_server->ClearCacheDbAsync(db_);
   }
   res_.SetRes(CmdRes::kOk, "Cache is cleared");
+}
+
+void PKPingCmd::DoInitial() {
+  if (!CheckArg(argv_.size())) {
+    res_.SetRes(CmdRes::kWrongNum, kCmdPkPing);
+    return;
+  }
+
+  Json::JsonValue json_str(argv_[1]);
+  Json::JsonView jw(json_str);
+
+  group_id_ = jw.GetInt64("group_id");
+  term_id_ = jw.GetInt64("term_id");
+
+
+  auto jsonArrayView = jw.GetArray("mastersAddr");
+  size_t arraySize = jsonArrayView.GetLength();
+  for (size_t i = 0; i < arraySize; ++i) {
+    if (jsonArrayView[i].IsString()) {
+      masters_addr_.push_back(jsonArrayView[i].AsString());
+    }
+  }
+
+  jsonArrayView = jw.GetArray("slavesAddr");
+  arraySize = jsonArrayView.GetLength();
+  for (size_t i = 0; i < arraySize; ++i) {
+    if (jsonArrayView[i].IsString()) {
+      slaves_addr_.push_back(jsonArrayView[i].AsString());
+    }
+  }
+
+  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
+    for (auto const& slave : g_pika_server->slaves_) {
+      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
+        //waiting todo :合并代码后 更新groupid 和 term_id
+        break;
+      }
+    }
+  }
+
+}
+
+void PKPingCmd::Do() {
+  std::string info;
+  InfoCmd cmd(kCmdNameSlotsInfo, -1, kCmdFlagsRead | kCmdFlagsAdmin | kCmdFlagsSlow);
+  cmd.InfoReplication(info);
+  res_.AppendString(info);
 }
 
 #ifdef WITH_COMMAND_DOCS

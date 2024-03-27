@@ -2473,6 +2473,12 @@ Status Storage::ApplyWAL(int rocksdb_id, const std::string& replication_sequence
   auto& inst = insts_[rocksdb_id];
   return inst->ApplyWAL(replication_sequence, type, content);
 }
+
+
+bool Storage::ShouldSkip(int rocksdb_id, const std::string& content) {
+  auto& inst = insts_[rocksdb_id];
+  return inst->ShouldSkip(content);
+}
 #endif
 
 }  //  namespace storage

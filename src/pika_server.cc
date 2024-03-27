@@ -3,8 +3,10 @@
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
 
+#include <errno.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <functional>
 #include <sys/resource.h>
 #include <algorithm>
 #include <ctime>
@@ -1419,12 +1421,8 @@ void PikaServer::InitStorageOptions() {
   cloud_fs_opts.src_bucket.SetRegion(g_pika_conf->cloud_src_bucket_region());
   cloud_fs_opts.dest_bucket.SetBucketName(g_pika_conf->cloud_dest_bucket_suffix(), g_pika_conf->cloud_dest_bucket_prefix());
   cloud_fs_opts.dest_bucket.SetRegion(g_pika_conf->cloud_dest_bucket_region());
-
-  //TODO(wangshoyi): implement upload rocksdb-cloud meta to dashboard
-  storage_options.cloud_fs_options.upload_meta_func = [](const std::string& a, const std::string& b, const std::string& c) ->bool {
-    LOG(WARNING) << "args: " << a << " : " << b << " : " << c;
-    return true;
-  };
+  storage_options.cloud_fs_options.upload_meta_func = std::bind(&PikaServer::UploadMetaToSentinel, this,
+      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 #endif
 }
 
@@ -1818,13 +1816,38 @@ void PikaServer::CacheConfigInit(cache::CacheConfig& cache_cfg) {
 }
 
 #ifdef USE_S3
-bool PikaServer::UploadMetaToSentinel(const std::string& s3_bucket,
-                                      const std::string& remote_path,
-                                      const std::string& content) {
+bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
+                                      const std::string& s3_bucket,
+                                      const std::string& object_path) {
   Aws::String url(sentinel_addr_);
   if (sentinel_client_ == nullptr) {
     sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());
   }
+    
+  FILE* fp = fopen(local_path.c_str(), "rb");
+  if (fp == nullptr) {
+    LOG(WANRING) << "read file failed,"
+                 << " local_path: " << local_path
+                 << " error: " << strerror(errno);
+    return false;
+  }
+ 
+  fseek(fp, 0 , SEEK_END);
+  long f_size = ftell(fp);
+  rewind(fp);
+  char* buffer = new char[f_size];
+ 
+  DEFER {
+ .  delete [] buffer;
+    fclose(fp);
+  };
+
+  size_t result = fread(buffer, 1, f_size, fp);
+  if (result != f_size) {
+    LOG(WANRING) << "read file failed, local_path: " << local_path
+                 << " fread size: " << result << "fsize: " << f_size;
+  }
+  std::string content(buffer, result);
 
   // construct request body
   Json::JsonValue request_doc;
@@ -1834,7 +1857,7 @@ bool PikaServer::UploadMetaToSentinel(const std::string& s3_bucket,
   request_doc.WithString("s3_path", Aws::String(remote_path));
   request_doc.WithString("content", Aws::String(content));
 
-  std::shared_ptr<Aws::IOStream> body = Aws::MakeShared<Aws::StringStream>("wsy demo");
+  std::shared_ptr<Aws::IOStream> body = Aws::MakeShared<Aws::StringStream>("");
   *body << request_doc.View().WriteReadable();
 
   auto request = CreateHttpRequest(url, HttpMethod::HTTP_POST,
@@ -1850,7 +1873,12 @@ bool PikaServer::UploadMetaToSentinel(const std::string& s3_bucket,
 
   auto response = sentinel_client_->MakeRequest(request);
   if (response->HasClientError()) {
-    exit(1);
+    LOG(ERROR) << "UploadMetaToSentinel failed"
+               << " s3_bucket: " << s3_bucket
+               << " group_id: " << group_id_
+               << " remote path: " << remote_path;
+    return false;
+
   }
   if (response->GetResponseCode() == HttpResponseCode::OK) {
     LOG(ERROR) << "UploadMetaToSentinel success"

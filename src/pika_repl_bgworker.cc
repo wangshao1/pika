@@ -142,12 +142,11 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
-      //Waiting for interface support
-      //get master binlog drop point
-      /*
-       * point =getpoint()
-       * if point.filenum>binlogitem_.filenum || (point.filenum==binlogitem_.filenum && point.offset>=binlogitem_.offset)
-       * {continue;}*/
+
+      if (storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item->content())) {
+        continue;
+      }
+      
       std::shared_ptr<SyncMasterDB> db =
           g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
       if (!db) {

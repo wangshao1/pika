@@ -591,6 +591,14 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
   return Status::OK();
 }
 
+
+bool Redis::ShouldSkip(const std::string content) {
+  rocksdb::WriteBatch batch;
+  s = rocksdb::WriteBatchInternal::SetContents(&batch, std::move(record.contents));
+  auto sq_number = db_->GetLatestSequenceNumber();
+  return WriteBatchInternal::Sequence(&batch) != sq_number + 1; 
+}
+
 Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const std::string& content) {
   rocksdb::ReplicationLogRecord::Type rtype = static_cast<rocksdb::ReplicationLogRecord::Type>(type);
   rocksdb::ReplicationLogRecord rlr;

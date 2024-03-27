@@ -1831,8 +1831,9 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
     
   fp = fopen(local_path.c_str(), "rb");
   if (fp == nullptr) {
-    LOG(WANRING) << "read file failed, local_path: " << local_path
-                 << " error msg: " << strerror(errno);
+    LOG(WANRING) << "read file failed,"
+                 << " local_path: " << local_path
+                 << " error: " << strerror(errno);
     return false;
   }
  
@@ -1841,8 +1842,8 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
   rewind(fp);
  
   DEFER {
-    fclose(fp);
  .  delete [] buffer;
+    fclose(fp);
   };
 
   buffer = new char[f_size];
@@ -1861,7 +1862,7 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
   request_doc.WithString("s3_path", Aws::String(remote_path));
   request_doc.WithString("content", Aws::String(content));
 
-  std::shared_ptr<Aws::IOStream> body = Aws::MakeShared<Aws::StringStream>("wsy demo");
+  std::shared_ptr<Aws::IOStream> body = Aws::MakeShared<Aws::StringStream>("");
   *body << request_doc.View().WriteReadable();
 
   auto request = CreateHttpRequest(url, HttpMethod::HTTP_POST,
@@ -1877,7 +1878,12 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
 
   auto response = sentinel_client_->MakeRequest(request);
   if (response->HasClientError()) {
-    exit(1);
+    LOG(ERROR) << "UploadMetaToSentinel failed"
+               << " s3_bucket: " << s3_bucket
+               << " group_id: " << group_id_
+               << " remote path: " << remote_path;
+    return false;
+
   }
   if (response->GetResponseCode() == HttpResponseCode::OK) {
     LOG(ERROR) << "UploadMetaToSentinel success"

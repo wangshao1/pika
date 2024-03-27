@@ -148,24 +148,24 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
        * point =getpoint()
        * if point.filenum>binlogitem_.filenum || (point.filenum==binlogitem_.filenum && point.offset>=binlogitem_.offset)
        * {continue;}*/
+      std::shared_ptr<SyncMasterDB> db =
+          g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
+      if (!db) {
+        LOG(WARNING) << woker->db_name_ <<" not found";
+        slave_db->SetReplState(ReplState::kTryConnect);
+        return;
+      }
+      db->Logger()->Put(binlog_res.binlog());
+      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
+      s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.replication_sequence(), binlog_item.type(), binlog_item->content()); 
+      return;
     } else {
       if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
         LOG(WARNING) << "Binlog item decode failed";
         slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
-    }
 
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
-      //1.write to binlog
-      std::shared_ptr<SyncMasterDB> db =
-          g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
-      if (!db) {
-        LOG(WARNING) << worker->db_name_ << "Not found.";
-      }
-      db->Logger()->Put(binlog_res.binlog());
-      //2.Waiting for interface support:write into rocksdb
-    } else {
       const char* redis_parser_start = binlog_res.binlog().data() + BINLOG_ENCODE_LEN;
       int redis_parser_len = static_cast<int>(binlog_res.binlog().size()) - BINLOG_ENCODE_LEN;
       int processed_len = 0;

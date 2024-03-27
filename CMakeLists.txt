@@ -845,6 +845,12 @@ target_link_directories(${PROJECT_NAME}
   PUBLIC ${INSTALL_LIBDIR_64}
   PUBLIC ${INSTALL_LIBDIR})
 
+if (USE_S3)
+find_package(AWSSDK REQUIRED COMPONENTS)
+target_link_libraries(${PROJECT_NAME}
+   ${AWSSDK_LINK_LIBRARIES})
+endif()
+
 add_dependencies(${PROJECT_NAME}
   gflags
   gtest

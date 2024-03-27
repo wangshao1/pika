@@ -24,6 +24,7 @@
 #ifdef USE_S3
 #include "rocksdb/cloud/db_cloud.h"
 #include "rocksdb/cloud/cloud_file_system.h"
+#include "pstd/include/pstd_wal.h"
 #endif
 
 #include "slot_indexer.h"
@@ -188,7 +189,7 @@ class Storage {
   Storage(int db_instance_num, int slot_num, bool is_classic_mode);
   ~Storage();
 
-  Status Open(const StorageOptions& storage_options, const std::string& db_path);
+  Status Open(const StorageOptions& storage_options, const std::string& db_path, std::shared_ptr<pstd::WalWriter> wal_writer = nullptr);
 
   Status LoadCursorStartKey(const DataType& dtype, int64_t cursor, char* type, std::string* start_key);
 
@@ -197,6 +198,8 @@ class Storage {
   std::unique_ptr<Redis>& GetDBInstance(const Slice& key);
 
   std::unique_ptr<Redis>& GetDBInstance(const std::string& key);
+
+  Status ApplyWAL(int rocksdb_id, const std::string& repli_seq, int type, const std::string& content);
 
   // Strings Commands
 

@@ -25,7 +25,7 @@ rocksdb::Comparator* ZSetsScoreKeyComparator() {
   return &zsets_score_key_compare;
 }
 
-Redis::Redis(Storage* const s, int32_t index)
+Redis::Redis(Storage* const s, int32_t index, std::shared_ptr<pstd::WalWriter> wal_writer)
     : storage_(s), index_(index),
       lock_mgr_(std::make_shared<LockMgr>(1000, 0, std::make_shared<MutexFactoryImpl>())),
       small_compaction_threshold_(5000),
@@ -39,12 +39,17 @@ Redis::Redis(Storage* const s, int32_t index)
   spop_counts_store_->SetCapacity(1000);
   scan_cursors_store_->SetCapacity(5000);
   //env_ = rocksdb::Env::Instance();
-
-  log_listener_ = std::make_shared<LogListener>(index_, this);
+#ifdef USE_S3
+  log_listener_ = std::make_shared<LogListener>(index_, this, wal_writer);
+#endif
   handles_.clear();
 }
 
 Redis::~Redis() {
+  Close();
+}
+
+void Redis::Close() {
   rocksdb::CancelAllBackgroundWork(db_, true);
   std::vector<rocksdb::ColumnFamilyHandle*> tmp_handles = handles_;
   handles_.clear();
@@ -57,13 +62,18 @@ Redis::~Redis() {
   if (default_compact_range_options_.canceled) {
     delete default_compact_range_options_.canceled;
   }
+#ifdef USE_S3
+  log_listener_.reset();
   opened_ = false;
+#endif
 }
 
 Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string& db_path) {
 
   StorageOptions storage_options(tmp_storage_options);
 #ifdef USE_S3
+  db_path_ = db_path;
+  storage_options_ = tmp_storage_options;
   storage_options.cloud_fs_options.roll_cloud_manifest_on_open = true;
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
@@ -517,9 +527,9 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
   return s;
 }
 
-Status Redis::ReOpenRocksDB(const std::unordered_map<std::string, std::string>& db_options,
-                            const std::unordered_map<std::string, std::string>& cfs_options) {
-  return Status::OK();
+Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
+  Close();
+  Open(opt, db_path_);
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
@@ -527,29 +537,31 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     // Do nothing
     return Status::OK();
   }
-  
-  std::unordered_map<std::string, std::string> db_options, cfs_options;
+
+  storage::StorageOptions storage_options(storage_options_);
+  std::unordered_map<std::string, std::string> db_options;
   if (is_old_master && !is_new_master) {
+    storage_options.cloud_fs_options.is_master = false;
     db_options["disable_auto_compactions"] = "true";
     db_options["disable_auto_flush"] = "true";
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
     cfs_->SwitchMaster(false);
-    cfs_options["is_master"] = "false";
-    return ReOpenRocksDB(db_options, cfs_options);
+    return ReOpenRocksDB(storage_options);
   }
 
   // slaveof another pika master, just reopen
   if (!is_old_master && !is_new_master) {
-    return ReOpenRocksDB(db_options, cfs_options);
+    storage_options.cloud_fs_options.is_master = false;
+    return ReOpenRocksDB(storage_options);
   }
 
   // slave promotes to master
   if (!is_old_master && is_new_master) {
+    storage_options.cloud_fs_options.is_master = true;
     db_options["disable_auto_compactions"] = "false";
     db_options["disable_auto_flush"] = "false";
-    cfs_options["is_master"] = "true";
     // compare manifest_sequence
     uint64_t local_manifest_sequence = 0;
     auto s = db_->GetManifestUpdateSequence(&local_manifest_sequence);
@@ -560,7 +572,7 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
     // local version behind remote, directly reopen
     if (local_manifest_sequence < remote_manifest_sequence) {
-      return ReOpenRocksDB(db_options, cfs_options);
+      return ReOpenRocksDB(storage_options);
     }
     // local's version cannot beyond remote's, just holding extra data in memtables
     assert(local_manifest_sequence == remote_manifest_sequence);
@@ -574,12 +586,44 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     rocksdb::FlushOptions fops;
     fops.wait = true;
     db_->Flush(fops, handles_);
-    //TODO
-    //cfs_->UploadManifest();
     return Status::OK();
   }
   return Status::OK();
 }
-#endif
 
+Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const std::string& content) {
+  rocksdb::ReplicationLogRecord::Type rtype = static_cast<rocksdb::ReplicationLogRecord::Type>(type);
+  rocksdb::ReplicationLogRecord rlr;
+  rocksdb::DBCloud::ApplyReplicationLogRecordInfo info;
+  rlr.contents = content;
+  rlr.type = rtype;
+
+  auto s = db_->ApplyReplicationLogRecord(rlr, replication_sequence, nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
+  LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
+               << " replication sequence: " << replication_sequence
+               << " log record type: " << rtype
+               << " status: " << s.ToString();
+  return s;
+}
+
+
+std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) {
+  Redis* redis_inst = (Redis*)inst_;
+  //TODO(wangshaoyi): get from storage
+  int db_id = 0;
+  if (redis_inst->opened_) {
+    LOG(WARNING) << "rocksdb not opened yet, skip write binlog";
+    return "0";
+  }
+  std::string replication_sequence_str = std::to_string(counter_.fetch_add(1));
+  auto s = wal_writer_->Put(record.contents, db_id,
+      redis_inst->GetIndex(), replication_sequence_str);
+  if (!s.ok()) {
+    LOG(ERROR) << "write binlog failed, db_id: " << db_id 
+               << " rocksdb_id: " << redis_inst->GetIndex()
+               << " replication sequence: " << replication_sequence_str;
+  }
+  return replication_sequence_str; 
+}
+#endif
 }  // namespace storage

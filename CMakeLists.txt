@@ -846,7 +846,7 @@ target_link_directories(${PROJECT_NAME}
   PUBLIC ${INSTALL_LIBDIR})
 
 if (USE_S3)
-find_package(AWSSDK REQUIRED COMPONENTS ${SERVICE_COMPONENTS})
+find_package(AWSSDK REQUIRED COMPONENTS)
 target_link_libraries(${PROJECT_NAME}
    ${AWSSDK_LINK_LIBRARIES})
 endif()

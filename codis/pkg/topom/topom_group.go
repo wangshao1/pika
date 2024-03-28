@@ -795,7 +795,6 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 }
 
 func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, content string) error {
-	s.mu.Lock()
 	ctx, err := s.newContext()
 	if err != nil {
 		return err
@@ -803,8 +802,8 @@ func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename str
 	if gid <= 0 || gid > models.MaxGroupId {
 		return errors.Errorf("invalid group id = %d, out of range", gid)
 	}
+
 	group, exists := ctx.group[gid]
-	s.mu.Unlock()
 
 	if !exists {
 		return errors.Errorf("group-[%d] not exists", gid)

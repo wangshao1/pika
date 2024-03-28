@@ -100,11 +100,13 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClient(parallel int, groupServers
 			fut.Add()
 
 			go func(gid, index int, server *models.GroupServer) {
+				var state *ReplicationState
 				defer func() {
+					fut.Done(fmt.Sprintf("%d_%d", gid, index), state)
 					<-limit
 				}()
 				info, err := s.infoReplicationDispatch(server.Addr)
-				state := &ReplicationState{
+				state = &ReplicationState{
 					Index:       index,
 					GroupID:     gid,
 					Addr:        server.Addr,
@@ -112,7 +114,6 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClient(parallel int, groupServers
 					Replication: info,
 					Err:         err,
 				}
-				fut.Done(fmt.Sprintf("%d_%d", gid, index), state)
 			}(gid, index, server)
 		}
 	}
@@ -174,12 +175,13 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 			fut.Add()
 
 			go func(gid, index int, server *models.GroupServer) {
+				var state *ReplicationState
 				defer func() {
+					fut.Done(fmt.Sprintf("%d_%d", gid, index), state)
 					<-limit
 				}()
-				//info, err := s.infoReplicationDispatch(server.Addr)
 				info, err := s.PkPingDispatch(server.Addr, group_inf_json)
-				state := &ReplicationState{
+				state = &ReplicationState{
 					Index:       index,
 					GroupID:     gid,
 					Addr:        server.Addr,
@@ -187,7 +189,6 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 					Replication: info,
 					Err:         err,
 				}
-				fut.Done(fmt.Sprintf("%d_%d", gid, index), state)
 			}(gid, index, server)
 		}
 	}

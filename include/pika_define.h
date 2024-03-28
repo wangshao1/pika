@@ -55,18 +55,17 @@ struct DBStruct {
         cloud_bucket_suffix(std::move(cloud_bucket_suffix)),
         cloud_bucket_region(std::move(cloud_bucket_region)) {}
 #endif
-  bool operator==(const DBStruct& db_struct) const {
-    return db_name == db_struct.db_name && db_instance_num == db_struct.db_instance_num;
-  }
 
-#ifdef USE_S3
   bool operator==(const DBStruct& db_struct) const {
+#ifdef USE_S3
     return db_name == db_struct.db_name && db_instance_num == db_struct.db_instance_num &&
            cloud_endpoint_override == db_struct.cloud_endpoint_override &&
            cloud_bucket_prefix == db_struct.cloud_bucket_prefix &&
            cloud_bucket_suffix == db_struct.cloud_bucket_suffix && cloud_bucket_region == db_struct.cloud_bucket_region;
-  }
 #endif
+    return db_name == db_struct.db_name && db_instance_num == db_struct.db_instance_num;
+  }
+
   std::string db_name;
   int32_t db_instance_num = 0;
 #ifdef USE_S3

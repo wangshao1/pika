@@ -5,7 +5,13 @@ package topom
 
 import (
 	"encoding/json"
+	"os"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 
 	"pika/codis/v2/pkg/models"
 	"pika/codis/v2/pkg/utils/errors"
@@ -31,6 +37,7 @@ func (s *Topom) CreateGroup(gid int) error {
 
 	g := &models.Group{
 		Id:      gid,
+		TermId:  0,
 		Servers: []*models.GroupServer{},
 	}
 	return s.storeCreateGroup(g)
@@ -319,6 +326,7 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		g = &models.Group{
 			Id:      g.Id,
+			TermId:  g.TermId,
 			Servers: g.Servers,
 		}
 		return s.storeUpdateGroup(g)
@@ -517,6 +525,7 @@ func (s *Topom) doSwitchGroupMaster(g *models.Group, newMasterAddr string, newMa
 	g.Servers[newMasterIndex].Role = models.RoleMaster
 	g.Servers[newMasterIndex].Action.State = models.ActionSynced
 	g.Servers[0], g.Servers[newMasterIndex] = g.Servers[newMasterIndex], g.Servers[0]
+	g.TermId++
 	defer func() {
 		err = s.storeUpdateGroup(g)
 		// clean cache whether err is nil or not
@@ -783,4 +792,57 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 			return promoteServerToNewMaster(addr, s.config.ProductAuth)
 		}
 	}, nil
+}
+
+func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, content string) error {
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+	if gid <= 0 || gid > models.MaxGroupId {
+		return errors.Errorf("invalid group id = %d, out of range", gid)
+	}
+
+	group, exists := ctx.group[gid]
+
+	if !exists {
+		return errors.Errorf("group-[%d] not exists", gid)
+	}
+
+	if group.TermId != tid {
+		return errors.Errorf("group-[%d] term id:[%d] not equal to pika term id:[%d]",
+			gid, ctx.group[gid].TermId, tid)
+	}
+
+	sess, err := session.NewSession(&aws.Config{
+		Credentials: credentials.NewStaticCredentials(s.Config().CloudAccessKey,
+			s.Config().CloudSecretKey, ""),
+		Endpoint:                  aws.String(s.Config().CloudEndPointOverride),
+		Region:                    aws.String(s.Config().CloudSrcBucketRegion),
+		DisableSSL:                aws.Bool(true),
+		S3ForcePathStyle:          aws.Bool(true),
+		DisableEndpointHostPrefix: aws.Bool(true),
+	})
+
+	file, err := os.Create("./tmp")
+	if err != nil {
+		return errors.Errorf("Create manifest file err :[%s]", err)
+	}
+	defer file.Close()
+	_, err = file.WriteString(content)
+	if err != nil {
+		return errors.Errorf("Write manifest err :[%s]", err)
+	}
+
+	uploader := s3manager.NewUploader(sess)
+	_, err = uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(filename),
+		Body:   file,
+	})
+	if err != nil {
+		return errors.Errorf("Unable to upload [%s] to [%s], [%s]", filename, bucket, err)
+	}
+
+	return nil
 }

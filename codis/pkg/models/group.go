@@ -7,6 +7,7 @@ const MaxGroupId = 9999
 
 type Group struct {
 	Id      int            `json:"id"`
+	TermId  int            `json:"term_id"`
 	Servers []*GroupServer `json:"servers"`
 
 	Promoting struct {

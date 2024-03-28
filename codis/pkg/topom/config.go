@@ -61,6 +61,11 @@ sentinel_down_after = "30s"
 sentinel_failover_timeout = "5m"
 sentinel_notification_script = ""
 sentinel_client_reconfig_script = ""
+sentinel_pika_local_model = true
+cloud_access_key = "minioadmin"
+cloud_secret_key = "minioadmin"
+cloud_endpoint_override = "http://10.224.129.40:9000"
+cloud_src_bucket_region = "us-east-1"
 `
 
 type Config struct {
@@ -95,6 +100,11 @@ type Config struct {
 	SentinelFailoverTimeout             timesize.Duration `toml:"sentinel_failover_timeout" json:"sentinel_failover_timeout"`
 	SentinelNotificationScript          string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript        string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
+	SentinelPikaLocalModel              bool              `toml:"sentinel_pika_local_model" json:"sentinel_pika_local_model"`
+	CloudAccessKey                      string            `toml:"cloud_access_key" json:"cloud_access_key"`
+	CloudSecretKey                      string            `toml:"cloud_secret_key" json:"cloud_secret_key"`
+	CloudEndPointOverride               string            `toml:"cloud_endpoint_override" json:"cloud_endpoint_override"`
+	CloudSrcBucketRegion                string            `toml:"cloud_src_bucket_region" json:"cloud_src_bucket_region"`
 }
 
 func NewDefaultConfig() *Config {

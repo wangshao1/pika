@@ -197,7 +197,7 @@ func (s *Topom) Start(routines bool) error {
 		return nil
 	}
 
-	// Check the status of all masters and slaves every 5 seconds
+	// Check the status of all masters and slaves every 10 seconds
 	gxruntime.GoUnterminated(func() {
 		for !s.IsClosed() {
 			if s.IsOnline() {

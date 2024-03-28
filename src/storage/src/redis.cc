@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "rocksdb/env.h"
+#include "db/write_batch_internal.h"
 
 #include "src/redis.h"
 #include "rocksdb/options.h"
@@ -458,7 +459,7 @@ void Redis::SetCompactRangeOptions(const bool is_canceled) {
     default_compact_range_options_.canceled = new std::atomic<bool>(is_canceled);
   } else {
     default_compact_range_options_.canceled->store(is_canceled);
-  } 
+  }
 }
 
 Status Redis::GetProperty(const std::string& property, uint64_t* out) {
@@ -510,14 +511,14 @@ void Redis::ScanDatabase() {
 }
 
 #ifdef USE_S3
-Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::string& db_path) { 
+Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::string& db_path) {
   std::string s3_path = db_path[0] == '.' ? db_path.substr(1) : db_path;
   opts.src_bucket.SetObjectPath(s3_path);
   opts.dest_bucket.SetObjectPath(s3_path);
   Status s = rocksdb::CloudFileSystem::NewAwsFileSystem(
-    rocksdb::FileSystem::Default(), 
-    opts, 
-    nullptr, 
+    rocksdb::FileSystem::Default(),
+    opts,
+    nullptr,
     &cfs_
   );
   if (s.ok()) {
@@ -591,12 +592,11 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
   return Status::OK();
 }
 
-
-bool Redis::ShouldSkip(const std::string content) {
+bool Redis::ShouldSkip(const std::string& content) {
   rocksdb::WriteBatch batch;
-  s = rocksdb::WriteBatchInternal::SetContents(&batch, std::move(record.contents));
+  auto s = rocksdb::WriteBatchInternal::SetContents(&batch, content);
   auto sq_number = db_->GetLatestSequenceNumber();
-  return WriteBatchInternal::Sequence(&batch) != sq_number + 1; 
+  return rocksdb::WriteBatchInternal::Sequence(&batch) != sq_number + 1;
 }
 
 Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const std::string& content) {
@@ -627,11 +627,11 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   auto s = wal_writer_->Put(record.contents, db_id,
       redis_inst->GetIndex(), replication_sequence_str);
   if (!s.ok()) {
-    LOG(ERROR) << "write binlog failed, db_id: " << db_id 
+    LOG(ERROR) << "write binlog failed, db_id: " << db_id
                << " rocksdb_id: " << redis_inst->GetIndex()
                << " replication sequence: " << replication_sequence_str;
   }
-  return replication_sequence_str; 
+  return replication_sequence_str;
 }
 #endif
 }  // namespace storage

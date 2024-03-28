@@ -396,7 +396,7 @@ class Redis {
 
 #ifdef USE_S3
   Status ApplyWAL(const std::string& replication_sequence, int type, const std::string& content);
-  Status ShouldSkip(const std::string content);
+  bool ShouldSkip(const std::string& content);
   Status SwitchMaster(bool is_old_master, bool is_new_master);
   void ResetLogListener(std::shared_ptr<rocksdb::ReplicationLogListener> handle) {
     log_listener_ = handle;
@@ -473,7 +473,7 @@ private:
   Status UpdateSpecificKeyStatistics(const DataType& dtype, const std::string& key, uint64_t count);
   Status UpdateSpecificKeyDuration(const DataType& dtype, const std::string& key, uint64_t duration);
   Status AddCompactKeyTaskIfNeeded(const DataType& dtype, const std::string& key, uint64_t count, uint64_t duration);
- 
+
 #ifdef USE_S3
   // rocksdb-cloud
   Status OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::string& db_path);

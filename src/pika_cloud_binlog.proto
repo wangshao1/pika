@@ -13,5 +13,4 @@ message BinlogCloudItem {
   uint64 file_num   = 5;
   uint64 offset     = 6;
   bytes content     = 7;
-  bytes replication_sequence = 8;
 }

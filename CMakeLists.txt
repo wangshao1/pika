@@ -575,6 +575,7 @@ endif()
 set(PROTOBUF_INCLUDE_DIR ${INSTALL_INCLUDEDIR})
 set(PROTOBUF_LIBRARY ${INSTALL_LIBDIR}/${LIB_PROTOBUF})
 set(PROTOBUF_PROTOC ${STAGED_INSTALL_PREFIX}/bin/protoc)
+set(USE_S3 1)
 
 if (USE_S3)
 ExternalProject_Add(rocksdb
@@ -588,9 +589,10 @@ ExternalProject_Add(rocksdb
   ${LIBGPERF_NAME}
   ${LIBJEMALLOC_NAME}
   URL
-  https://github.com/longfar-ncy/rocksdb-cloud/archive/refs/heads/pika.zip
+  #temporary for debug, skip download from github
+  http://10.224.129.40:8000/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=761d1f7ccd6ea9aa86c1f2ce0e246a26
+  MD5=fbcf0e166bfddf367063caa1dc583db8
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND
@@ -898,7 +900,7 @@ target_link_libraries(${PROJECT_NAME}
 
 if (USE_S3)
   target_link_libraries(${PROJECT_NAME}
-    libaws-cpp-sdk-core.so 
+    libaws-cpp-sdk-core.so
     libaws-cpp-sdk-transfer.so
     libaws-cpp-sdk-kinesis.so
     libaws-cpp-sdk-s3.so

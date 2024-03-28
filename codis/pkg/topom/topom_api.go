@@ -503,19 +503,20 @@ func (s *apiServer) SyncRemoveAction(params martini.Params) (int, string) {
 	}
 }
 
+type UploadRequest struct {
+	GroupId  int    `json:"group_id"`
+	TermId   int    `json:"term_id"`
+	S3Bucket string `json:"s3_bucket"`
+	S3Path   string `json:"s3_path"`
+	Content  string `json:"content"`
+}
+
 func (s *apiServer) UploadManifestToS3(req *http.Request) (int, string) {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
 
-	type UploadRequest struct {
-		GroupId  int    `json:"group_id"`
-		TermId   int    `json:"term_id"`
-		S3Bucket string `json:"s3_bucket"`
-		S3Path   string `json:"s3_path"`
-		Content  string `json:"content"`
-	}
 	var uploadReq UploadRequest
 	err = json.Unmarshal(body, &uploadReq)
 	if err != nil {

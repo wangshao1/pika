@@ -395,7 +395,7 @@ class Redis {
   }
 
 #ifdef USE_S3
-  Status ApplyWAL(const std::string& replication_sequence, int type, const std::string& content);
+  Status ApplyWAL(int type, const std::string& content);
   bool ShouldSkip(const std::string& content);
   Status SwitchMaster(bool is_old_master, bool is_new_master);
   void ResetLogListener(std::shared_ptr<rocksdb::ReplicationLogListener> handle) {

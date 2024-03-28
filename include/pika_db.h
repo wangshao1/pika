@@ -157,7 +157,7 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   /*
    * Switch Master/Slave role use
    */
-  pstd::Status SwitchMaster(bool is_old_master, bool is_new_master);
+  rocksdb::Status SwitchMaster(bool is_old_master, bool is_new_master);
 
  private:
   bool opened_ = false;

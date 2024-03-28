@@ -161,7 +161,7 @@ Status CloudBinlog::Put(const std::string& item) {
   return Status::Error("data err: db_id and rocksdb_id empty");
 }
 // Note: mutex lock should be held
-Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, const std::string& replication_sequence) {
+Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) {
   if (!opened_.load()) {
     return Status::Busy("Cloud Binlog is not open yet");
   }
@@ -176,7 +176,7 @@ Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksd
   if (!s.ok()) {
     return s;
   }
-  std::string data = PikaCloudBinlogTransverter::BinlogEncode(db_id, rocksdb_id, time(nullptr), term, filenum, offset, item, replication_sequence);
+  std::string data = PikaCloudBinlogTransverter::BinlogEncode(db_id, rocksdb_id, time(nullptr), term, filenum, offset, item, type);
 
   s = Put(data.c_str(), static_cast<int>(data.size()));
   if (!s.ok()) {

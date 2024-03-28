@@ -199,7 +199,7 @@ class Storage {
 
   std::unique_ptr<Redis>& GetDBInstance(const std::string& key);
 
-  Status ApplyWAL(int rocksdb_id, const std::string& repli_seq, int type, const std::string& content);
+  Status ApplyWAL(int rocksdb_id, int type, const std::string& content);
 
   bool ShouldSkip(int rocksdb_id, const std::string& content);
 
@@ -1120,7 +1120,7 @@ class Storage {
   Status SetOptions(const OptionType& option_type, const std::string& db_type,
                     const std::unordered_map<std::string, std::string>& options);
   void SetCompactRangeOptions(const bool is_canceled);
-  Status EnableDymayticOptions(const OptionType& option_type, 
+  Status EnableDymayticOptions(const OptionType& option_type,
                     const std::string& db_type, const std::unordered_map<std::string, std::string>& options);
   Status EnableAutoCompaction(const OptionType& option_type,
                     const std::string& db_type, const std::unordered_map<std::string, std::string>& options);

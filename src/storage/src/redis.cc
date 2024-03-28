@@ -531,6 +531,7 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
 Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
   Close();
   Open(opt, db_path_);
+  return Status::OK();
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
@@ -599,16 +600,15 @@ bool Redis::ShouldSkip(const std::string& content) {
   return rocksdb::WriteBatchInternal::Sequence(&batch) != sq_number + 1;
 }
 
-Status Redis::ApplyWAL(const std::string& replication_sequence, int type, const std::string& content) {
+Status Redis::ApplyWAL(int type, const std::string& content) {
   rocksdb::ReplicationLogRecord::Type rtype = static_cast<rocksdb::ReplicationLogRecord::Type>(type);
   rocksdb::ReplicationLogRecord rlr;
   rocksdb::DBCloud::ApplyReplicationLogRecordInfo info;
   rlr.contents = content;
   rlr.type = rtype;
 
-  auto s = db_->ApplyReplicationLogRecord(rlr, replication_sequence, nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
+  auto s = db_->ApplyReplicationLogRecord(rlr, "", nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
   LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
-               << " replication sequence: " << replication_sequence
                << " log record type: " << rtype
                << " status: " << s.ToString();
   return s;
@@ -623,15 +623,13 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
     LOG(WARNING) << "rocksdb not opened yet, skip write binlog";
     return "0";
   }
-  std::string replication_sequence_str = std::to_string(counter_.fetch_add(1));
   auto s = wal_writer_->Put(record.contents, db_id,
-      redis_inst->GetIndex(), replication_sequence_str);
+      redis_inst->GetIndex(), uint32_t(record.type));
   if (!s.ok()) {
     LOG(ERROR) << "write binlog failed, db_id: " << db_id
-               << " rocksdb_id: " << redis_inst->GetIndex()
-               << " replication sequence: " << replication_sequence_str;
+               << " rocksdb_id: " << redis_inst->GetIndex();
   }
-  return replication_sequence_str;
+  return "";
 }
 #endif
 }  // namespace storage

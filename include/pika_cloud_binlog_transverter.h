@@ -18,7 +18,7 @@ class PikaCloudBinlogTransverter {
  public:
   PikaCloudBinlogTransverter() = default;
   static std::string BinlogEncode(uint32_t db_id, uint32_t rocksdb_id, uint32_t exec_time, uint32_t term_id,
-                                  uint32_t filenum, uint64_t offset, const std::string& content, const std::string& replication_sequence);
+                                  uint32_t filenum, uint64_t offset, const std::string& content, uint32_t type);
 
   static bool BinlogDecode(const std::string& binlog, cloud::BinlogCloudItem* binlog_item);
 

@@ -645,8 +645,8 @@ bool DB::FlushDB() {
   return FlushDBWithoutLock();
 }
 
-pstd::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
 #ifdef USE_S3
-  return storage_.SwitchMaster(is_old_master, is_new_master);
+rocksdb::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
+  return storage_->SwitchMaster(is_old_master, is_new_master);
 #endif
 }

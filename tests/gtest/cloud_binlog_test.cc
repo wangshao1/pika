@@ -67,7 +67,7 @@ TEST_F(CloudBinlogTest, GetPutTest) {
 
 TEST_F(CloudBinlogTransverterTest, CodeTest) {
   std::string binlog_item_s =
-      PikaCloudBinlogTransverter::BinlogEncode(1, 1, 1, 1, 4294967294, 18446744073709551615, "test");
+      PikaCloudBinlogTransverter::BinlogEncode(1, 1, 1, 1, 4294967294, 18446744073709551615, "test", 0);
   cloud::BinlogCloudItem* binlog_item = new cloud::BinlogCloudItem();
   PikaCloudBinlogTransverter::BinlogDecode(binlog_item_s, binlog_item);
   ASSERT_EQ(1, binlog_item->db_id());
@@ -82,7 +82,7 @@ TEST_F(CloudBinlogTransverterTest, CodeTest) {
 
 TEST_F(CloudBinlogTransverterTest, WithoutContentDecodeTest) {
   std::string binlog_item_s =
-      PikaCloudBinlogTransverter::BinlogEncode(1, 1, 1, 1, 4294967294, 18446744073709551615, "test");
+      PikaCloudBinlogTransverter::BinlogEncode(1, 1, 1, 1, 4294967294, 18446744073709551615, "test", 0);
   cloud::BinlogCloudItem* binlog_item = new cloud::BinlogCloudItem();
   PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog_item_s, binlog_item);
   ASSERT_EQ(1, binlog_item->db_id());

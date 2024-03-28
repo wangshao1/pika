@@ -2468,10 +2468,10 @@ Status Storage::SwitchMaster(bool is_old_master, bool is_new_master) {
   return s;
 }
 
-Status Storage::ApplyWAL(int rocksdb_id, const std::string& replication_sequence,
+Status Storage::ApplyWAL(int rocksdb_id,
                          int type, const std::string& content) {
   auto& inst = insts_[rocksdb_id];
-  return inst->ApplyWAL(replication_sequence, type, content);
+  return inst->ApplyWAL(type, content);
 }
 
 

@@ -143,20 +143,24 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
 
-      if (storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item->content())) {
+      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
+      if (storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
         continue;
       }
-      
+
       std::shared_ptr<SyncMasterDB> db =
           g_pika_rm->GetSyncMasterDBByName(DBInfo(worker->db_name_));
       if (!db) {
-        LOG(WARNING) << woker->db_name_ <<" not found";
+        LOG(WARNING) << worker->db_name_ <<" not found";
         slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.replication_sequence(), binlog_item.type(), binlog_item->content()); 
+      auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
+      if (!s.ok()) {
+        LOG(WARNING) << "rocksdb apply wal failed, error: " << s.ToString();
+        return;
+      }
       return;
     } else {
       if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {

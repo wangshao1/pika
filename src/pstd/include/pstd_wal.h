@@ -15,7 +15,7 @@ namespace pstd {
 class WalWriter : public noncopyable {
 public:
   virtual ~WalWriter() {}
-  virtual Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) = 0;
+  virtual Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id， uint32_t type) = 0;
 };
 } // namespace pstd
 

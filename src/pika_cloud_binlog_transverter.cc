@@ -17,7 +17,7 @@ const int SPACE_STROE_PARAMETER_LENGTH = 5;
 
 std::string PikaCloudBinlogTransverter::BinlogEncode(uint32_t db_id, uint32_t rocksdb_id, uint32_t exec_time,
                                                      uint32_t term_id, uint32_t filenum, uint64_t offset,
-                                                     const std::string& content) {
+                                                     const std::string& content, uint32_t type) {
   std::string serialize_binlog;
   cloud::BinlogCloudItem binlog_item;
   binlog_item.set_db_id(db_id);
@@ -27,6 +27,7 @@ std::string PikaCloudBinlogTransverter::BinlogEncode(uint32_t db_id, uint32_t ro
   binlog_item.set_file_num(filenum);
   binlog_item.set_offset(offset);
   binlog_item.set_content(content);
+  binlog_item.set_type(type);
   binlog_item.SerializeToString(&serialize_binlog);
   return serialize_binlog;
 }
@@ -67,7 +68,7 @@ std::string PikaCloudBinlogTransverter::ConstructPaddingBinlog(uint32_t paramete
   content.append(kNewLine);
   RedisAppendContent(content, std::string(parameter_len, '*'));
 
-  BinlogEncode(0, 0, 0, 0, 0, 0, content);
+  BinlogEncode(0, 0, 0, 0, 0, 0, content, 0);
   return binlog;
 }
 

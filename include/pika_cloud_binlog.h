@@ -50,7 +50,7 @@ class CloudBinlog : public Binlog {
 
   pstd::Status Put(const std::string& item) override;
 
-  pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id) override;
+  pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) override;
 
   pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
   /*

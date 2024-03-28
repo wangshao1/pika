@@ -156,7 +156,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item->content());
+      auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
       if (!s.ok()) {
         LOG(WARNING) << "rocksdb apply wal failed, error: " << s.ToString();
         return;

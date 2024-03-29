@@ -119,6 +119,11 @@ message InnerResponse {
       required string        db_name    = 1;
       required int32         slot_num = 2;
       required int32         db_instance_num = 3;
+       //s3 info
+      optional string cloud_endpoint_override = 4;
+      optional string cloud_bucket_prefix     = 5;
+      optional string cloud_bucket_suffix     = 6;
+      optional string cloud_bucket_region     = 7;
     }
     required bool      classic_mode = 1;
     repeated DBInfo    dbs_info  = 2;

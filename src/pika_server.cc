@@ -335,16 +335,16 @@ void PikaServer::InitDBStruct() {
   std::string log_path = g_pika_conf->log_path();
   std::vector<DBStruct> db_structs = g_pika_conf->db_structs();
   std::lock_guard rwl(dbs_rw_);
-  for (const auto& db : db_structs) {
+  for (auto& db : db_structs) {
     std::string name = db.db_name;
     std::shared_ptr<DB> db_ptr = std::make_shared<DB>(name, db_path, log_path);
     db_ptr->Init();
     dbs_.emplace(name, db_ptr);
 #ifdef USE_S3
     db.cloud_endpoint_override = g_pika_conf->cloud_endpoint_override();
-    db.cloud_bucket_prefix = g_pika_conf->cloud_bucket_prefix();
-    db.cloud_bucket_suffix = g_pika_conf->cloud_bucket_suffix();
-    db.cloud_bucket_region = g_pika_conf->cloud_bucket_region();
+    db.cloud_bucket_prefix = g_pika_conf->cloud_src_bucket_prefix();
+    db.cloud_bucket_suffix = g_pika_conf->cloud_src_bucket_prefix();
+    db.cloud_bucket_region = g_pika_conf->cloud_src_bucket_region();
 #endif
   }
 }

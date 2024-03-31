@@ -158,7 +158,18 @@ Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, u
 }
 
 Status CloudBinlog::Put(const std::string& item) {
-  return Status::Error("data err: db_id and rocksdb_id empty");
+  if (!opened_.load()) {
+    return Status::Busy("Cloud Binlog is not open yet");
+  }
+
+  Lock();
+  DEFER { Unlock(); };
+
+  Status s = Put(item.c_str(), static_cast<int>(item.size()));
+  if (!s.ok()) {
+    binlog_io_error_.store(true);
+  }
+  return s;
 }
 // Note: mutex lock should be held
 Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) {

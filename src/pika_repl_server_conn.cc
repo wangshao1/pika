@@ -125,7 +125,11 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
   //In cloud mode, only full synchronization is possible.
   if (g_pika_conf->pika_model() == PIKA_CLOUD) {
     if (pre_success) {
-      try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kSyncPointBePurged);
+      if (!db->CheckSlaveNodeExist(node.ip(), node.port())) {
+        try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kSyncPointBePurged);
+      } else if (TrySyncOffsetCheck(db, try_sync_request, try_sync_response)){
+        TrySyncUpdateSlaveNode(db, try_sync_request, conn, try_sync_response);
+      }
     }
   } else {
     if (pre_success && TrySyncOffsetCheck(db, try_sync_request, try_sync_response)) {

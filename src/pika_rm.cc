@@ -18,6 +18,7 @@
 #include "include/pika_server.h"
 
 #include "include/pika_admin.h"
+#include "include/pika_cloud_binlog_transverter.h"
 #include "include/pika_command.h"
 
 using pstd::Status;
@@ -164,12 +165,25 @@ Status SyncMasterDB::ReadBinlogFileToWq(const std::shared_ptr<SlaveNode>& slave_
       return s;
     }
     BinlogItem item;
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, msg, &item)) {
-      LOG(WARNING) << "Binlog item decode failed";
-      return Status::Corruption("Binlog item decode failed");
+    cloud::BinlogCloudItem cloud_item;
+    if (g_pika_conf->pika_model() == PIKA_CLOUD){
+      if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(msg, &cloud_item)) {
+        return Status::Corruption("Binlog item decode failed");
+      }
+    } else {
+      if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, msg, &item)) {
+        LOG(WARNING) << "Binlog item decode failed";
+        return Status::Corruption("Binlog item decode failed");
+      }
     }
+
     BinlogOffset sent_b_offset = BinlogOffset(filenum, offset);
-    LogicOffset sent_l_offset = LogicOffset(item.term_id(), item.logic_id());
+    LogicOffset sent_l_offset;
+    if (g_pika_conf->pika_model() == PIKA_CLOUD){
+      sent_l_offset = LogicOffset(cloud_item.term_id(), 0);
+    } else {
+      sent_l_offset = LogicOffset(item.term_id(), item.logic_id());
+    }
     LogOffset sent_offset(sent_b_offset, sent_l_offset);
 
     slave_ptr->sync_win.Push(SyncWinItem(sent_offset, msg.size()));

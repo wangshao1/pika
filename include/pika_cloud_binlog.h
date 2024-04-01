@@ -112,7 +112,7 @@ class CloudBinlog : public Binlog {
 
   std::atomic<bool> binlog_io_error_;
 
-  std::unordered_map<int, std::pair<uint32_t, uint64>> binlog_to_keep_;
+  std::unordered_map<int, std::pair<uint32_t, uint64_t>> binlog_to_keep_;
 };
 
 #endif

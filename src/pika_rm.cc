@@ -293,6 +293,15 @@ Status SyncMasterDB::GetSafetyPurgeBinlog(std::string* safety_purge) {
         break;
       }
     }
+#ifdef USE_S3
+    BinlogOffset old_offset; 
+    s = Logger()->GetOldestBinlogToKeep(&old_offset.filenum, &old_offset.offset);
+    if (!s.ok()) {
+      LOG(ERROR) << "get oldest binlog to keep failed";
+    }
+    LOG(WARNING) << "GetSafetyPurgeBinlog, origin filenum: " << purge_max << " oldest log to keep: " << old_offset.filenum;
+    purge_max = std::min(purge_max, old_offset.filenum - 2);
+#endif
   }
   *safety_purge = (success ? kBinlogPrefix + std::to_string(static_cast<int32_t>(purge_max)) : "none");
   return Status::OK();

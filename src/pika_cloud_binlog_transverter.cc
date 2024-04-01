@@ -79,6 +79,5 @@ bool PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(const std::strin
     LOG(ERROR) << "Failed to deserialize cloud binlog item";
     return false;
   }
-  binlog_item->set_content("");
   return true;
 }

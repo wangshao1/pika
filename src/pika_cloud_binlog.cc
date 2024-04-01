@@ -37,6 +37,10 @@ Status CloudVersion::StableSave() {
   memcpy(p, &pro_offset_, sizeof(uint64_t));
   p += 8;
   memcpy(p, &term_, sizeof(uint32_t));
+  p += 4;
+  memcpy(p, &keep_filenum_, sizeof(uint32_t));
+  p += 4;
+  memcpy(p, &keep_offset_, sizeof(uint64_t));
   return Status::OK();
 }
 
@@ -46,6 +50,8 @@ Status CloudVersion::Init() {
     memcpy(reinterpret_cast<char*>(&pro_num_), save_->GetData(), sizeof(uint32_t));
     memcpy(reinterpret_cast<char*>(&pro_offset_), save_->GetData() + 4, sizeof(uint64_t));
     memcpy(reinterpret_cast<char*>(&term_), save_->GetData() + 12, sizeof(uint32_t));
+    memcpy(reinterpret_cast<char*>(&keep_filenum_), save_->GetData() + 16, sizeof(uint32_t));
+    memcpy(reinterpret_cast<char*>(&pro_offset_), save_->GetData() + 20, sizeof(uint64_t));
     return Status::OK();
   } else {
     return Status::Corruption("version init error");
@@ -157,6 +163,21 @@ Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, u
   return Status::OK();
 }
 
+Status CloudBinlog::GetOldestBinlogToKeep(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term, uint64_t* logic_id) {
+  if (!opened_.load()) {
+    return Status::Busy("Cloud Binlog is not open yet");
+  }
+
+  std::shared_lock l(version_->rwlock_);
+  *filenum = version_->keep_filenum_;
+  *pro_offset = version_->keep_offset_;
+  if (term) {
+    *term = version_->term_;
+  }
+  LOG(WARNING) << "GetOldestBinlogToKeep keep_filenum: " << *filenum << " keep_offset: " << *pro_offset;
+  return Status::OK();
+}
+
 Status CloudBinlog::Put(const std::string& item) {
   if (!opened_.load()) {
     return Status::Busy("Cloud Binlog is not open yet");
@@ -193,6 +214,22 @@ Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksd
   if (!s.ok()) {
     binlog_io_error_.store(true);
   }
+  if (type != 0 || binlog_to_keep_.find(rocksdb_id) == binlog_to_keep_.end()) {
+    binlog_to_keep_[rocksdb_id] = std::make_pair(filenum, offset);
+  }
+
+  uint32_t keep_filenum = filenum;
+  uint64_t keep_offset = keep_offset;
+  for (const auto& offset : binlog_to_keep_) {
+    if (keep_filenum >= offset.second.first &&
+        keep_offset >= offset.second.second) {
+      keep_filenum = offset.second.first;
+      keep_offset = offset.second.second;
+    }
+  }
+  version_->keep_filenum_ = keep_filenum;
+  version_->keep_offset_ = keep_offset;
+  LOG(WARNING) << "keep_filenum: " << keep_filenum << " keep_offset: " << keep_offset;
   return s;
 }
 

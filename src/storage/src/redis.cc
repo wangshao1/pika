@@ -215,7 +215,12 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
     return s;
   }
   db_ops.env = cloud_env_.get();
-  return rocksdb::DBCloud::Open(db_ops, db_path, column_families, "", 0, &handles_, &db_);
+  s = rocksdb::DBCloud::Open(db_ops, db_path, column_families, "", 0, &handles_, &db_);
+  if (s.ok()) {
+    opened_ = true;
+  }
+  return s;
+
 #else
   auto s = rocksdb::DB::Open(db_ops, db_path, column_families, &handles_, &db_);
   opened_ = true;
@@ -619,7 +624,7 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   Redis* redis_inst = (Redis*)inst_;
   //TODO(wangshaoyi): get from storage
   int db_id = 0;
-  if (redis_inst->opened_) {
+  if (!redis_inst->opened_) {
     LOG(WARNING) << "rocksdb not opened yet, skip write binlog";
     return "0";
   }

@@ -30,6 +30,8 @@ class CloudVersion final : public pstd::noncopyable {
   uint32_t pro_num_ = 0;
   uint64_t pro_offset_ = 0;
   uint32_t term_ = 0;
+  uint32_t keep_filenum_ = 0;
+  uint64_t keep_offset_ = 0;
 
   std::shared_mutex rwlock_;
 
@@ -53,6 +55,8 @@ class CloudBinlog : public Binlog {
   pstd::Status Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) override;
 
   pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
+
+  pstd::Status GetOldestBinlogToKeep(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
   /*
    * Set Producer pro_num and pro_offset with lock
    */
@@ -107,6 +111,8 @@ class CloudBinlog : public Binlog {
   std::string filename_;
 
   std::atomic<bool> binlog_io_error_;
+
+  std::unordered_map<int, std::pair<uint32_t, uint64>> binlog_to_keep_;
 };
 
 #endif

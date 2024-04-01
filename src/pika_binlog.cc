@@ -165,6 +165,10 @@ Status Binlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32
   return Status::OK();
 }
 
+Status Binlog::GetOldestBinlogToKeep(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term, uint64_t* logic_id) {
+  return Status::NotSupported("not supported in cloud mode");
+}
+
 Status Binlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) {
   return Status::Error("data err");
 }

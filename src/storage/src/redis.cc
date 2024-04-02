@@ -540,6 +540,7 @@ Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
+  LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master;
   if (is_old_master && is_new_master) {
     // Do nothing
     return Status::OK();
@@ -577,6 +578,7 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     }
     uint64_t remote_manifest_sequence = 0;
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
+    LOG(WARNING) << "switchmaster, remote_manifest_sequence: " << remote_manifest_sequence << " local_manifest_sequence: " << local_manifest_sequence;
     // local version behind remote, directly reopen
     if (local_manifest_sequence < remote_manifest_sequence) {
       return ReOpenRocksDB(storage_options);

@@ -376,11 +376,13 @@ bool DB::InitBgsaveEngine() {
       std::lock_guard l(bgsave_protector_);
       bgsave_info_.offset = bgsave_offset;
     }
+    /*
     s = bgsave_engine_->SetBackupContent();
     if (!s.ok()) {
       LOG(WARNING) << db_name_ << " set backup content failed " << s.ToString();
       return false;
     }
+    */
   }
   return true;
 }

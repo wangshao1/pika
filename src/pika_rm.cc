@@ -793,8 +793,10 @@ Status PikaReplicaManager::CheckDBRole(const std::string& db, int* role) {
       (sync_master_dbs_[p_info]->GetNumberOfSlaveNode() == 0 &&
        sync_slave_dbs_[p_info]->State() == kNoConnect)) {
     *role |= PIKA_ROLE_MASTER;
+    LOG(WARNING) << "role change to PIKA_ROLE_MASTER";
   }
   if (sync_slave_dbs_[p_info]->State() != ReplState::kNoConnect) {
+    LOG(WARNING) << "role change to PIKA_ROLE_SLAVE";
     *role |= PIKA_ROLE_SLAVE;
   }
   // if role is not master or slave, the rest situations are all single

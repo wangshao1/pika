@@ -150,13 +150,16 @@ void SlaveofCmd::Do() {
     return;
   }
 
+  bool is_old_master = !(g_pika_server->role() == PIKA_ROLE_SLAVE);
+  LOG(WARNING) << "slaveofcmd, currently: is_master: " << is_old_master << " role: " << g_pika_server->role();
+
   g_pika_server->RemoveMaster();
 
   if (is_none_) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_SLAVE) {
+    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
-        db_item.second->SwitchMaster(false, true);
+        db_item.second->SwitchMaster(is_old_master, true);
       }
     }
     res_.SetRes(CmdRes::kOk);
@@ -169,12 +172,11 @@ void SlaveofCmd::Do() {
    * slaveof executor to slave */
 
   bool sm_ret = g_pika_server->SetMaster(master_ip_, static_cast<int32_t>(master_port_));
-
   if (sm_ret) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_MASTER) {
+    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
-        db_item.second->SwitchMaster(true, false);
+        db_item.second->SwitchMaster(is_old_master, false);
       }
     }
     res_.SetRes(CmdRes::kOk);

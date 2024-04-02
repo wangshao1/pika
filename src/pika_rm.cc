@@ -294,13 +294,13 @@ Status SyncMasterDB::GetSafetyPurgeBinlog(std::string* safety_purge) {
       }
     }
 #ifdef USE_S3
-    BinlogOffset old_offset; 
-    s = Logger()->GetOldestBinlogToKeep(&old_offset.filenum, &old_offset.offset);
+    uint32_t oldest_filenum;
+    s = Logger()->GetOldestBinlogToKeep(&oldest_filenum);
     if (!s.ok()) {
       LOG(ERROR) << "get oldest binlog to keep failed";
     }
-    LOG(WARNING) << "GetSafetyPurgeBinlog, origin filenum: " << purge_max << " oldest log to keep: " << old_offset.filenum;
-    purge_max = std::min(purge_max, old_offset.filenum - 2);
+    oldest_filenum = oldest_filenum > 0 ? oldest_filenum - 1 : 0;
+    purge_max = std::min(purge_max, oldest_filenum); 
 #endif
   }
   *safety_purge = (success ? kBinlogPrefix + std::to_string(static_cast<int32_t>(purge_max)) : "none");
@@ -793,8 +793,10 @@ Status PikaReplicaManager::CheckDBRole(const std::string& db, int* role) {
       (sync_master_dbs_[p_info]->GetNumberOfSlaveNode() == 0 &&
        sync_slave_dbs_[p_info]->State() == kNoConnect)) {
     *role |= PIKA_ROLE_MASTER;
+    LOG(WARNING) << "role change to PIKA_ROLE_MASTER";
   }
   if (sync_slave_dbs_[p_info]->State() != ReplState::kNoConnect) {
+    LOG(WARNING) << "role change to PIKA_ROLE_SLAVE";
     *role |= PIKA_ROLE_SLAVE;
   }
   // if role is not master or slave, the rest situations are all single

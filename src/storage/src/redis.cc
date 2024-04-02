@@ -15,6 +15,8 @@
 #include "src/base_filter.h"
 #include "src/zsets_filter.h"
 
+#include "pstd/include/pstd_defer.h"
+
 namespace storage {
 const rocksdb::Comparator* ListsDataKeyComparator() {
   static ListsDataKeyComparatorImpl ldkc;
@@ -79,9 +81,9 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
   storage_options.cloud_fs_options.skip_dbid_verification = true;
-  if (tmp_storage_options.cloud_fs_options.is_master) {
-    storage_options.options.replication_log_listener = log_listener_;
-  } else {
+  storage_options.options.replication_log_listener = log_listener_;
+  is_master_.store(tmp_storage_options.cloud_fs_options.is_master);
+  if (!tmp_storage_options.cloud_fs_options.is_master) {
     storage_options.options.disable_auto_flush = true;
     storage_options.options.disable_auto_compactions = true;
   }
@@ -534,12 +536,18 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
 }
 
 Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
+  LOG(WARNING) << "ReOpenRocksDB, closing old rocksdb";
   Close();
+  LOG(WARNING) << "ReOpenRocksDB, opening new rocksdb";
   Open(opt, db_path_);
   return Status::OK();
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
+  DEFER {
+    LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master << " done";
+  };
+  LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master;
   if (is_old_master && is_new_master) {
     // Do nothing
     return Status::OK();
@@ -548,7 +556,9 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
   storage::StorageOptions storage_options(storage_options_);
   std::unordered_map<std::string, std::string> db_options;
   if (is_old_master && !is_new_master) {
+    cfs_->SwitchMaster(false);
     storage_options.cloud_fs_options.is_master = false;
+    is_master_.store(false);
     db_options["disable_auto_compactions"] = "true";
     db_options["disable_auto_flush"] = "true";
     for (const auto& cf : handles_) {
@@ -561,6 +571,7 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
   // slaveof another pika master, just reopen
   if (!is_old_master && !is_new_master) {
     storage_options.cloud_fs_options.is_master = false;
+    is_master_.store(false);
     return ReOpenRocksDB(storage_options);
   }
 
@@ -577,22 +588,27 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     }
     uint64_t remote_manifest_sequence = 0;
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
+    LOG(WARNING) << "switchmaster, remote_manifest_sequence: " << remote_manifest_sequence << " local_manifest_sequence: " << local_manifest_sequence;
     // local version behind remote, directly reopen
     if (local_manifest_sequence < remote_manifest_sequence) {
       return ReOpenRocksDB(storage_options);
     }
     // local's version cannot beyond remote's, just holding extra data in memtables
     assert(local_manifest_sequence == remote_manifest_sequence);
+    storage_options_.cloud_fs_options.is_master = true;
+    is_master_.store(true);
 
     db_->NewManifestOnNextUpdate();
     cfs_->SwitchMaster(true);
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
+    LOG(WARNING) << "flush memtables ...";
 
     rocksdb::FlushOptions fops;
     fops.wait = true;
     db_->Flush(fops, handles_);
+    LOG(WARNING) << "flush memtables done"; 
     return Status::OK();
   }
   return Status::OK();
@@ -628,6 +644,14 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
     LOG(WARNING) << "rocksdb not opened yet, skip write binlog";
     return "0";
   }
+
+  if (!redis_inst->IsMaster()) {
+    LOG(WARNING) << "rocksdb not master, skip write binlog";
+    return "0";
+  }
+
+  LOG(WARNING) << "write binlogitem " << " db_id: " << db_id << " type: " << record.type;
+
   auto s = wal_writer_->Put(record.contents, db_id,
       redis_inst->GetIndex(), uint32_t(record.type));
   if (!s.ok()) {

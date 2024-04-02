@@ -547,7 +547,9 @@ Status PikaServer::DoSameThingEveryDB(const TaskType& type) {
 
 void PikaServer::BecomeMaster() {
   std::lock_guard l(state_protector_);
+  int tmp_role = role_;
   role_ |= PIKA_ROLE_MASTER;
+  LOG(WARNING) << "role change from " << tmp_role << " to " << role_; 
 }
 
 void PikaServer::DeleteSlave(int fd) {
@@ -680,9 +682,12 @@ void PikaServer::SyncError() {
 
 void PikaServer::RemoveMaster() {
   {
+    int tmp_role = role_;
     std::lock_guard l(state_protector_);
     repl_state_ = PIKA_REPL_NO_CONNECT;
     role_ &= ~PIKA_ROLE_SLAVE;
+
+    LOG(WARNING) << "removemaster role change from " << tmp_role << " to " << role_;
 
     if (!master_ip_.empty() && master_port_ != -1) {
       g_pika_rm->CloseReplClientConn(master_ip_, master_port_ + kPortShiftReplServer);
@@ -701,12 +706,14 @@ bool PikaServer::SetMaster(std::string& master_ip, int master_port) {
   if (master_ip == "127.0.0.1") {
     master_ip = host_;
   }
+  int tmp_role = role_;
   std::lock_guard l(state_protector_);
   if (((role_ ^ PIKA_ROLE_SLAVE) != 0) && repl_state_ == PIKA_REPL_NO_CONNECT) {
     master_ip_ = master_ip;
     master_port_ = master_port;
     role_ |= PIKA_ROLE_SLAVE;
     repl_state_ = PIKA_REPL_SHOULD_META_SYNC;
+    LOG(WARNING) << "setmaster role change from " << tmp_role << " to " << role_;
     return true;
   }
   return false;

@@ -56,7 +56,7 @@ class CloudBinlog : public Binlog {
 
   pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
 
-  pstd::Status GetOldestBinlogToKeep(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
+  pstd::Status GetOldestBinlogToKeep(uint32_t* filenum, uint32_t* term = nullptr, uint64_t* logic_id = nullptr) override;
   /*
    * Set Producer pro_num and pro_offset with lock
    */
@@ -112,7 +112,7 @@ class CloudBinlog : public Binlog {
 
   std::atomic<bool> binlog_io_error_;
 
-  std::unordered_map<int, std::pair<uint32_t, uint64_t>> binlog_to_keep_;
+  std::unordered_map<int, uint32_t> binlog_to_keep_;
 };
 
 #endif

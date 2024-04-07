@@ -151,7 +151,7 @@ void SlaveofCmd::Do() {
   }
 
   bool is_old_master = !(g_pika_server->role() == PIKA_ROLE_SLAVE);
-  LOG(WARNING) << "slaveofcmd, currently: is_master: " << is_old_master << " role: " << g_pika_server->role();
+  LOG(WARNING) << "slaveofcmd, currently role: " << g_pika_server->role();
 
   g_pika_server->RemoveMaster();
 
@@ -171,14 +171,15 @@ void SlaveofCmd::Do() {
    * the data synchronization was successful, but only changes the status of the
    * slaveof executor to slave */
 
+  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    std::shared_lock rwl(g_pika_server->dbs_rw_);
+    for (const auto& db_item : g_pika_server->dbs_) {
+      db_item.second->SwitchMaster(is_old_master, false);
+    }
+  }
+
   bool sm_ret = g_pika_server->SetMaster(master_ip_, static_cast<int32_t>(master_port_));
   if (sm_ret) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
-      std::shared_lock rwl(g_pika_server->dbs_rw_);
-      for (const auto& db_item : g_pika_server->dbs_) {
-        db_item.second->SwitchMaster(is_old_master, false);
-      }
-    }
     res_.SetRes(CmdRes::kOk);
     g_pika_server->ClearCacheDbAsync(db_);
     g_pika_conf->SetSlaveof(master_ip_ + ":" + std::to_string(master_port_));

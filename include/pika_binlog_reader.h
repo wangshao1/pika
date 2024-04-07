@@ -27,6 +27,12 @@ class PikaBinlogReader {
   bool ReadToTheEnd();
   void GetReaderStatus(uint32_t* cur_filenum, uint64_t* cur_offset);
 
+  static void GetFirstOffset(const std::shared_ptr<Binlog>& logger, uint32_t filenum, uint64_t* offset) {
+    PikaBinlogReader reader;
+    reader.Seek(logger, filenum, 0);
+    reader.GetReaderStatus(&filenum, offset);
+  }
+
  private:
   bool GetNext(uint64_t* size);
   unsigned int ReadPhysicalRecord(pstd::Slice* result, uint32_t* filenum, uint64_t* offset);

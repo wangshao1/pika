@@ -58,7 +58,7 @@ class Binlog : public pstd::WalWriter {
 
   virtual pstd::Status GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
 
-  virtual pstd::Status GetOldestBinlogToKeep(uint32_t* filenum, uint64_t* pro_offset, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
+  virtual pstd::Status GetOldestBinlogToKeep(uint32_t* filenum, uint32_t* term = nullptr, uint64_t* logic_id = nullptr);
   /*
    * Set Producer pro_num and pro_offset with lock
    */

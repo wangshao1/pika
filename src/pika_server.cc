@@ -1431,7 +1431,7 @@ void PikaServer::InitStorageOptions() {
   cloud_fs_opts.dest_bucket.SetRegion(g_pika_conf->cloud_dest_bucket_region());
   //for test
   //cloud_fs_opts.upload_meta_func = std::bind(&PikaServer::UploadMetaToSentinel, this,
-    //  std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
+  //    std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 #endif
 }
 
@@ -1860,8 +1860,8 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
 
   // construct request body
   Json::JsonValue request_doc;
-  request_doc.WithString("term_id", Aws::String(lease_term_id_));
-  request_doc.WithString("group_id", Aws::String(group_id_));
+  request_doc.WithInteger("term_id", lease_term_id_);
+  request_doc.WithInteger("group_id", group_id_);
   request_doc.WithString("s3_bucket", Aws::String(s3_bucket));
   request_doc.WithString("s3_path", Aws::String(remote_path));
   request_doc.WithString("content", Aws::String(content));

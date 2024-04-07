@@ -83,6 +83,8 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     }
   }
 
+  LOG(WARNING) << "slave receive binlogsync, begin offset: "<< pb_begin.ToString() << " end offset: " << pb_end.ToString();
+
   if (pb_begin == LogOffset()) {
     only_keepalive = true;
   }
@@ -132,6 +134,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
 
     // empty binlog treated as keepalive packet
     if (binlog_res.binlog().empty()) {
+      LOG(WARNING) << "slave receive empty binlog item";
       continue;
     }
 
@@ -152,7 +155,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       }
       db->Logger()->Put(binlog_item.content(), binlog_item.db_id(), binlog_item.rocksdb_id(), binlog_item.type());
       auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      if (storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
+      if (binlog_item.type() == 0 && storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
         continue;
       }
       auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
@@ -192,6 +195,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     ack_end = productor_status;
     ack_end.l_offset.term = pb_end.l_offset.term;
   }
+  LOG(WARNING) << "slave Reply to master, ack_start: "<< ack_start.ToString() << " ack_end: " << ack_end.ToString() << "pb_end: " << pb_end.ToString();
 
   g_pika_rm->SendBinlogSyncAckRequest(db_name, ack_start, ack_end);
 }

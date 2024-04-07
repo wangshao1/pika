@@ -46,6 +46,7 @@ class Redis {
 
 #ifdef USE_S3
   rocksdb::DBCloud* GetDB() { return db_; }
+  bool IsMaster() const { return is_master_.load(); } 
 #else
   rocksdb::DB* GetDB() { return db_; }
 #endif
@@ -447,6 +448,7 @@ private:
   rocksdb::DBCloud* db_ = nullptr;
   std::shared_ptr<rocksdb::ReplicationLogListener> log_listener_;
   StorageOptions storage_options_;
+  std::atomic<bool> is_master_ = {true};
 #else
   rocksdb::DB* db_ = nullptr;
 #endif

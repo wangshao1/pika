@@ -66,7 +66,6 @@ void Redis::Close() {
     delete default_compact_range_options_.canceled;
   }
 #ifdef USE_S3
-  log_listener_.reset();
   opened_ = false;
 #endif
 }
@@ -88,6 +87,7 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
     storage_options.options.disable_auto_compactions = true;
   }
   storage_options.options.atomic_flush = true;
+  storage_options.options.avoid_flush_during_shutdown = true;
 #endif
 
   statistics_store_->SetCapacity(storage_options.statistics_max_size);
@@ -559,12 +559,6 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     cfs_->SwitchMaster(false);
     storage_options.cloud_fs_options.is_master = false;
     is_master_.store(false);
-    db_options["disable_auto_compactions"] = "true";
-    db_options["disable_auto_flush"] = "true";
-    for (const auto& cf : handles_) {
-      db_->SetOptions(cf, db_options);
-    }
-    cfs_->SwitchMaster(false);
     return ReOpenRocksDB(storage_options);
   }
 

@@ -502,6 +502,16 @@ class PikaServer : public pstd::noncopyable {
    */
   int64_t GetLastSave() const {return lastsave_;}
   void UpdateLastSave(int64_t lastsave) {lastsave_ = lastsave;}
+
+  /*term_id used*/
+#ifdef USE_S3
+  void set_lease_term_id(const std::string& lease_term_id) {lease_term_id_ = lease_term_id;}
+  void set_group_id(const std::string& group_id) {group_id_ = group_id;}
+
+  std::string  lease_term_id() const {return lease_term_id_;}
+  std::string group_id() const {return  group_id_;}
+#endif
+
  private:
   /*
    * TimingTask use

@@ -3243,33 +3243,36 @@ void PKPingCmd::DoInitial() {
 
   group_id_ = jw.GetInt64("group_id");
   term_id_ = jw.GetInt64("term_id");
-
-
-  auto jsonArrayView = jw.GetArray("mastersAddr");
-  size_t arraySize = jsonArrayView.GetLength();
-  for (size_t i = 0; i < arraySize; ++i) {
-    if (jsonArrayView[i].IsString()) {
-      masters_addr_.push_back(jsonArrayView[i].AsString());
+  if (jw.ValueExists("masters_addr")) {
+      auto jsonArrayView = jw.GetArray("masters_addr");
+      size_t arraySize = jsonArrayView.GetLength();
+      for (size_t i = 0; i < arraySize; ++i) {
+        if (jsonArrayView[i].IsString()) {
+          masters_addr_.push_back(jsonArrayView[i].AsString());
+        }
+      }
     }
-  }
 
-  jsonArrayView = jw.GetArray("slavesAddr");
-  arraySize = jsonArrayView.GetLength();
-  for (size_t i = 0; i < arraySize; ++i) {
-    if (jsonArrayView[i].IsString()) {
-      slaves_addr_.push_back(jsonArrayView[i].AsString());
-    }
-  }
-
-  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
-    for (auto const& slave : g_pika_server->slaves_) {
-      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
-        //waiting todo :合并代码后 更新groupid 和 term_id
-        break;
+  if (jw.ValueExists("slaves_addr")) {
+    auto jsonArrayView = jw.GetArray("slaves_addr");
+    size_t arraySize = jsonArrayView.GetLength();
+    for (size_t i = 0; i < arraySize; ++i) {
+      if (jsonArrayView[i].IsString()) {
+        slaves_addr_.push_back(jsonArrayView[i].AsString());
       }
     }
   }
 
+#ifdef USE_S3
+  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
+    for (auto const& slave : g_pika_server->slaves_) {
+      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
+        g_pika_server->set_group_id(std::to_string(group_id_));
+        g_pika_server->set_lease_term_id(std::to_string(term_id_));
+      }
+    }
+  }
+#endif
 }
 
 void PKPingCmd::Do() {

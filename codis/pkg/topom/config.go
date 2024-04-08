@@ -61,7 +61,7 @@ sentinel_down_after = "30s"
 sentinel_failover_timeout = "5m"
 sentinel_notification_script = ""
 sentinel_client_reconfig_script = ""
-sentinel_pika_local_model = false
+sentinel_pika_local_mode = false
 cloud_access_key = "minioadmin"
 cloud_secret_key = "minioadmin"
 cloud_endpoint_override = "http://10.224.129.40:9000"
@@ -100,7 +100,7 @@ type Config struct {
 	SentinelFailoverTimeout             timesize.Duration `toml:"sentinel_failover_timeout" json:"sentinel_failover_timeout"`
 	SentinelNotificationScript          string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript        string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
-	SentinelPikaLocalModel              bool              `toml:"sentinel_pika_local_model" json:"sentinel_pika_local_model"`
+	SentinelPikaLocalMode               bool              `toml:"sentinel_pika_local_mode" json:"sentinel_pika_local_mode"`
 	CloudAccessKey                      string            `toml:"cloud_access_key" json:"cloud_access_key"`
 	CloudSecretKey                      string            `toml:"cloud_secret_key" json:"cloud_secret_key"`
 	CloudEndPointOverride               string            `toml:"cloud_endpoint_override" json:"cloud_endpoint_override"`

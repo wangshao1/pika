@@ -153,7 +153,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
-      db->Logger()->Put(binlog_item.content(), binlog_item.db_id(), binlog_item.rocksdb_id(), binlog_item.type());
+      db->Logger()->Put(binlog_res.binlog());
       auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
       if (binlog_item.type() == 0 && storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
         continue;

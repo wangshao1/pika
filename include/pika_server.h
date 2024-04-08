@@ -505,11 +505,8 @@ class PikaServer : public pstd::noncopyable {
 
   /*term_id used*/
 #ifdef USE_S3
-  void set_lease_term_id(const std::string& lease_term_id) {lease_term_id_ = lease_term_id;}
-  void set_group_id(const std::string& group_id) {group_id_ = group_id;}
-
-  std::string  lease_term_id() const {return lease_term_id_;}
-  std::string group_id() const {return  group_id_;}
+  void set_lease_term_id(const int lease_term_id) {lease_term_id_ = lease_term_id;}
+  void set_group_id(const int group_id) {group_id_ = group_id;}
 #endif
 
  private:

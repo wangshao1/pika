@@ -3270,8 +3270,8 @@ void PKPingCmd::DoInitial() {
   if (g_pika_server->role() == PIKA_ROLE_MASTER) {
     for (auto const& slave : g_pika_server->slaves_) {
       if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
-        g_pika_server->set_group_id(std::to_string(group_id_));
-        g_pika_server->set_lease_term_id(std::to_string(term_id_));
+        g_pika_server->set_group_id(group_id_);
+        g_pika_server->set_lease_term_id(term_id_);
       }
     }
   }

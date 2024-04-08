@@ -532,8 +532,8 @@ class PikaServer : public pstd::noncopyable {
   std::string sentinel_addr_;
   //TODO(wangshaoyi): make it thread loacal
   std::shared_ptr<Aws::Http::HttpClient> sentinel_client_;
-  std::string lease_term_id_;
-  std::string group_id_;
+  int lease_term_id_;
+  int group_id_;
 #endif
 
   std::shared_mutex storage_options_rw_;

@@ -884,7 +884,7 @@ void Cmd::InternalProcessCommand(const HintKeys& hint_keys) {
     do_duration_ += pstd::NowMicros() - start_us;
   }
 
-  if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+  if (g_pika_conf->pika_mode() == PIKA_LOCAL) {
     DoBinlog();
   }
 

@@ -138,7 +138,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       continue;
     }
 
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
       cloud::BinlogCloudItem binlog_item;
       if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &binlog_item)) {
         LOG(WARNING) << "Cloud Binlog item decode failed";

@@ -156,7 +156,7 @@ void SlaveofCmd::Do() {
   g_pika_server->RemoveMaster();
 
   if (is_none_) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
         db_item.second->SwitchMaster(is_old_master, true);
@@ -171,7 +171,7 @@ void SlaveofCmd::Do() {
    * the data synchronization was successful, but only changes the status of the
    * slaveof executor to slave */
 
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     std::shared_lock rwl(g_pika_server->dbs_rw_);
     for (const auto& db_item : g_pika_server->dbs_) {
       db_item.second->SwitchMaster(is_old_master, false);
@@ -2918,7 +2918,7 @@ void PaddingCmd::DoInitial() {
 void PaddingCmd::Do() { res_.SetRes(CmdRes::kOk); }
 
 std::string PaddingCmd::ToRedisProtocol() {
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     return PikaBinlogTransverter::ConstructPaddingBinlog(BinlogType::TypeFirst, argv_[1].size());
   }
   return PikaBinlogTransverter::ConstructPaddingBinlog(

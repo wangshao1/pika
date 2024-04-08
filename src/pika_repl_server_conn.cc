@@ -123,7 +123,7 @@ void PikaReplServerConn::HandleTrySyncRequest(void* arg) {
     response.set_code(InnerMessage::kOk);
   }
   //In cloud mode, only full synchronization is possible.
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     if (pre_success) {
       if (!db->CheckSlaveNodeExist(node.ip(), node.port())) {
         try_sync_response->set_reply_code(InnerMessage::InnerResponse::TrySync::kSyncPointBePurged);

@@ -166,7 +166,7 @@ Status SyncMasterDB::ReadBinlogFileToWq(const std::shared_ptr<SlaveNode>& slave_
     }
     BinlogItem item;
     cloud::BinlogCloudItem cloud_item;
-    if (g_pika_conf->pika_model() == PIKA_CLOUD){
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD){
       if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(msg, &cloud_item)) {
         return Status::Corruption("Binlog item decode failed");
       }
@@ -179,7 +179,7 @@ Status SyncMasterDB::ReadBinlogFileToWq(const std::shared_ptr<SlaveNode>& slave_
 
     BinlogOffset sent_b_offset = BinlogOffset(filenum, offset);
     LogicOffset sent_l_offset;
-    if (g_pika_conf->pika_model() == PIKA_CLOUD){
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD){
       sent_l_offset = LogicOffset(cloud_item.term_id(), 0);
     } else {
       sent_l_offset = LogicOffset(item.term_id(), item.logic_id());

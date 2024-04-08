@@ -23,9 +23,9 @@ extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
 
 StableLog::StableLog(std::string db_name, std::string log_path)
     : purging_(false), db_name_(std::move(db_name)), log_path_(std::move(log_path)) {
-  if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+  if (g_pika_conf->pika_mode() == PIKA_LOCAL) {
     stable_logger_ = std::make_shared<Binlog>(log_path_, g_pika_conf->binlog_file_size());
-  } else if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  } else if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     stable_logger_ = std::make_shared<CloudBinlog>(log_path_, g_pika_conf->binlog_file_size());
   }
   std::map<uint32_t, std::string> binlogs;
@@ -188,7 +188,7 @@ void StableLog::UpdateFirstOffset(uint32_t filenum) {
       LOG(WARNING) << "Binlog reader get failed";
       return;
     }
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
       if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog, &cloud_item)) {
         LOG(WARNING) << "Cloud Binlog item decode failed";
         return;
@@ -211,7 +211,7 @@ void StableLog::UpdateFirstOffset(uint32_t filenum) {
 
   std::lock_guard l(offset_rwlock_);
   first_offset_.b_offset = offset;
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     first_offset_.l_offset.term = cloud_item.term_id();
   } else {
     first_offset_.l_offset.term = item.term_id();

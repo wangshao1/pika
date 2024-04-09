@@ -34,13 +34,10 @@ foreach(blackwindow_test_source ${BLACKWINDOW_TEST_SOURCE})
     PUBLIC ${LIBUNWIND_LIBRARY}
   )
   if (USE_S3)
-    target_link_libraries(${blackwindow_test_name}
-      PUBLIC libaws-cpp-sdk-core.so 
-      PUBLIC libaws-cpp-sdk-transfer.so
-      PUBLIC libaws-cpp-sdk-kinesis.so
-      PUBLIC libaws-cpp-sdk-s3.so
-    )
+    find_package(AWSSDK REQUIRED COMPONENTS s3 transfer kinesis)
+    target_link_libraries(${blackwindow_test_name} PUBLIC ${AWSSDK_LINK_LIBRARIES})
   endif()
+
   add_test(NAME ${blackwindow_test_name}
     COMMAND ${blackwindow_test_name}
     WORKING_DIRECTORY .)

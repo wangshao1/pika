@@ -657,8 +657,6 @@ bool DB::FlushDB() {
   return FlushDBWithoutLock();
 }
 
-#ifdef USE_S3
 rocksdb::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
   return storage_->SwitchMaster(is_old_master, is_new_master);
-#endif
 }

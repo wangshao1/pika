@@ -45,7 +45,7 @@ const int kMaxRsyncParallelNum = 4;
 struct DBStruct {
   DBStruct(std::string tn, int32_t inst_num)
       : db_name(std::move(tn)), db_instance_num(inst_num) {}
-#ifdef USE_S3
+
   DBStruct(std::string tn, int32_t inst_num, std::string cloud_endpoint_override, std::string cloud_bucket_prefix,
            std::string cloud_bucket_suffix, std::string cloud_bucket_region)
       : db_name(std::move(tn)),
@@ -54,27 +54,20 @@ struct DBStruct {
         cloud_bucket_prefix(std::move(cloud_bucket_prefix)),
         cloud_bucket_suffix(std::move(cloud_bucket_suffix)),
         cloud_bucket_region(std::move(cloud_bucket_region)) {}
-#endif
 
   bool operator==(const DBStruct& db_struct) const {
-#ifdef USE_S3
     return db_name == db_struct.db_name && db_instance_num == db_struct.db_instance_num &&
            cloud_endpoint_override == db_struct.cloud_endpoint_override &&
            cloud_bucket_prefix == db_struct.cloud_bucket_prefix &&
            cloud_bucket_suffix == db_struct.cloud_bucket_suffix && cloud_bucket_region == db_struct.cloud_bucket_region;
-#endif
-    return db_name == db_struct.db_name && db_instance_num == db_struct.db_instance_num;
   }
 
   std::string db_name;
   int32_t db_instance_num = 0;
-#ifdef USE_S3
-  // s3 meta
   std::string cloud_endpoint_override;
   std::string cloud_bucket_prefix;
   std::string cloud_bucket_suffix;
   std::string cloud_bucket_region;
-#endif
 };
 
 struct SlaveItem {

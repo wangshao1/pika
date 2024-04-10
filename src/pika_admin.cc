@@ -3266,16 +3266,17 @@ void PKPingCmd::DoInitial() {
     }
   }
 
-#ifdef USE_S3
-  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
-    for (auto const& slave : g_pika_server->slaves_) {
-      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
-        g_pika_server->set_group_id(group_id_);
-        g_pika_server->set_lease_term_id(term_id_);
-      }
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    if (g_pika_server->role() == PIKA_ROLE_MASTER) {
+        for (auto const& slave : g_pika_server->slaves_) {
+            if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
+                g_pika_server->set_group_id(group_id_);
+                g_pika_server->set_lease_term_id(term_id_);
+            }
+        }
     }
   }
-#endif
+
 }
 
 void PKPingCmd::Do() {

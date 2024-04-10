@@ -18,6 +18,7 @@
 #include "include/pika_server.h"
 
 #include "include/pika_admin.h"
+#include "include/pika_cloud_binlog_transverter.h"
 #include "include/pika_command.h"
 
 using pstd::Status;
@@ -164,12 +165,25 @@ Status SyncMasterDB::ReadBinlogFileToWq(const std::shared_ptr<SlaveNode>& slave_
       return s;
     }
     BinlogItem item;
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, msg, &item)) {
-      LOG(WARNING) << "Binlog item decode failed";
-      return Status::Corruption("Binlog item decode failed");
+    cloud::BinlogCloudItem cloud_item;
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD){
+      if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(msg, &cloud_item)) {
+        return Status::Corruption("Binlog item decode failed");
+      }
+    } else {
+      if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, msg, &item)) {
+        LOG(WARNING) << "Binlog item decode failed";
+        return Status::Corruption("Binlog item decode failed");
+      }
     }
+
     BinlogOffset sent_b_offset = BinlogOffset(filenum, offset);
-    LogicOffset sent_l_offset = LogicOffset(item.term_id(), item.logic_id());
+    LogicOffset sent_l_offset;
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD){
+      sent_l_offset = LogicOffset(cloud_item.term_id(), 0);
+    } else {
+      sent_l_offset = LogicOffset(item.term_id(), item.logic_id());
+    }
     LogOffset sent_offset(sent_b_offset, sent_l_offset);
 
     slave_ptr->sync_win.Push(SyncWinItem(sent_offset, msg.size()));
@@ -279,6 +293,15 @@ Status SyncMasterDB::GetSafetyPurgeBinlog(std::string* safety_purge) {
         break;
       }
     }
+#ifdef USE_S3
+    uint32_t oldest_filenum;
+    s = Logger()->GetOldestBinlogToKeep(&oldest_filenum);
+    if (!s.ok()) {
+      LOG(ERROR) << "get oldest binlog to keep failed";
+    }
+    oldest_filenum = oldest_filenum > 0 ? oldest_filenum - 1 : 0;
+    purge_max = std::min(purge_max, oldest_filenum); 
+#endif
   }
   *safety_purge = (success ? kBinlogPrefix + std::to_string(static_cast<int32_t>(purge_max)) : "none");
   return Status::OK();
@@ -770,8 +793,10 @@ Status PikaReplicaManager::CheckDBRole(const std::string& db, int* role) {
       (sync_master_dbs_[p_info]->GetNumberOfSlaveNode() == 0 &&
        sync_slave_dbs_[p_info]->State() == kNoConnect)) {
     *role |= PIKA_ROLE_MASTER;
+    LOG(WARNING) << "role change to PIKA_ROLE_MASTER";
   }
   if (sync_slave_dbs_[p_info]->State() != ReplState::kNoConnect) {
+    LOG(WARNING) << "role change to PIKA_ROLE_SLAVE";
     *role |= PIKA_ROLE_SLAVE;
   }
   // if role is not master or slave, the rest situations are all single

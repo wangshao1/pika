@@ -21,12 +21,16 @@ func (s *Topom) CheckStateAndSwitchSlavesAndMasters(filter func(index int, g *mo
 	if len(groupServers) == 0 {
 		return nil
 	}
-	if s.Config().SentinelPikaLocalModel {
+	if s.Config().SentinelPikaLocalMode {
 		states = checkGroupServersReplicationState(s.Config(), groupServers)
 	} else {
-		var groups_info map[int]int
+		groups_info := make(map[int]int)
 		for gid, _ := range groupServers {
-			groups_info[gid] = ctx.group[gid].TermId
+			group, err := ctx.getGroup(gid)
+			if err != nil {
+				continue
+			}
+			groups_info[gid] = group.TermId
 		}
 		states = checkGroupServersPKPingState(s.Config(), groupServers, groups_info)
 	}

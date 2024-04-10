@@ -502,6 +502,13 @@ class PikaServer : public pstd::noncopyable {
    */
   int64_t GetLastSave() const {return lastsave_;}
   void UpdateLastSave(int64_t lastsave) {lastsave_ = lastsave;}
+
+  /*term_id used*/
+#ifdef USE_S3
+  void set_lease_term_id(const int lease_term_id) {lease_term_id_ = lease_term_id;}
+  void set_group_id(const int group_id) {group_id_ = group_id;}
+#endif
+
  private:
   /*
    * TimingTask use
@@ -522,8 +529,8 @@ class PikaServer : public pstd::noncopyable {
   std::string sentinel_addr_;
   //TODO(wangshaoyi): make it thread loacal
   std::shared_ptr<Aws::Http::HttpClient> sentinel_client_;
-  std::string lease_term_id_;
-  std::string group_id_;
+  int lease_term_id_;
+  int group_id_;
 #endif
 
   std::shared_mutex storage_options_rw_;

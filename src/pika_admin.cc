@@ -150,13 +150,16 @@ void SlaveofCmd::Do() {
     return;
   }
 
+  bool is_old_master = !(g_pika_server->role() == PIKA_ROLE_SLAVE);
+  LOG(WARNING) << "slaveofcmd, currently role: " << g_pika_server->role();
+
   g_pika_server->RemoveMaster();
 
   if (is_none_) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_SLAVE) {
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
       std::shared_lock rwl(g_pika_server->dbs_rw_);
       for (const auto& db_item : g_pika_server->dbs_) {
-        db_item.second->SwitchMaster(false, true);
+        db_item.second->SwitchMaster(is_old_master, true);
       }
     }
     res_.SetRes(CmdRes::kOk);
@@ -168,15 +171,15 @@ void SlaveofCmd::Do() {
    * the data synchronization was successful, but only changes the status of the
    * slaveof executor to slave */
 
-  bool sm_ret = g_pika_server->SetMaster(master_ip_, static_cast<int32_t>(master_port_));
-
-  if (sm_ret) {
-    if (g_pika_conf->pika_model() == PIKA_CLOUD && g_pika_server->role() == PIKA_ROLE_MASTER) {
-      std::shared_lock rwl(g_pika_server->dbs_rw_);
-      for (const auto& db_item : g_pika_server->dbs_) {
-        db_item.second->SwitchMaster(true, false);
-      }
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    std::shared_lock rwl(g_pika_server->dbs_rw_);
+    for (const auto& db_item : g_pika_server->dbs_) {
+      db_item.second->SwitchMaster(is_old_master, false);
     }
+  }
+
+  bool sm_ret = g_pika_server->SetMaster(master_ip_, static_cast<int32_t>(master_port_));
+  if (sm_ret) {
     res_.SetRes(CmdRes::kOk);
     g_pika_server->ClearCacheDbAsync(db_);
     g_pika_conf->SetSlaveof(master_ip_ + ":" + std::to_string(master_port_));
@@ -2915,7 +2918,7 @@ void PaddingCmd::DoInitial() {
 void PaddingCmd::Do() { res_.SetRes(CmdRes::kOk); }
 
 std::string PaddingCmd::ToRedisProtocol() {
-  if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     return PikaBinlogTransverter::ConstructPaddingBinlog(BinlogType::TypeFirst, argv_[1].size());
   }
   return PikaBinlogTransverter::ConstructPaddingBinlog(
@@ -3243,33 +3246,36 @@ void PKPingCmd::DoInitial() {
 
   group_id_ = jw.GetInt64("group_id");
   term_id_ = jw.GetInt64("term_id");
-
-
-  auto jsonArrayView = jw.GetArray("mastersAddr");
-  size_t arraySize = jsonArrayView.GetLength();
-  for (size_t i = 0; i < arraySize; ++i) {
-    if (jsonArrayView[i].IsString()) {
-      masters_addr_.push_back(jsonArrayView[i].AsString());
+  if (jw.ValueExists("masters_addr")) {
+      auto jsonArrayView = jw.GetArray("masters_addr");
+      size_t arraySize = jsonArrayView.GetLength();
+      for (size_t i = 0; i < arraySize; ++i) {
+        if (jsonArrayView[i].IsString()) {
+          masters_addr_.push_back(jsonArrayView[i].AsString());
+        }
+      }
     }
-  }
 
-  jsonArrayView = jw.GetArray("slavesAddr");
-  arraySize = jsonArrayView.GetLength();
-  for (size_t i = 0; i < arraySize; ++i) {
-    if (jsonArrayView[i].IsString()) {
-      slaves_addr_.push_back(jsonArrayView[i].AsString());
-    }
-  }
-
-  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
-    for (auto const& slave : g_pika_server->slaves_) {
-      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
-        //waiting todo :合并代码后 更新groupid 和 term_id
-        break;
+  if (jw.ValueExists("slaves_addr")) {
+    auto jsonArrayView = jw.GetArray("slaves_addr");
+    size_t arraySize = jsonArrayView.GetLength();
+    for (size_t i = 0; i < arraySize; ++i) {
+      if (jsonArrayView[i].IsString()) {
+        slaves_addr_.push_back(jsonArrayView[i].AsString());
       }
     }
   }
 
+#ifdef USE_S3
+  if (g_pika_server->role() == PIKA_ROLE_MASTER) {
+    for (auto const& slave : g_pika_server->slaves_) {
+      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
+        g_pika_server->set_group_id(group_id_);
+        g_pika_server->set_lease_term_id(term_id_);
+      }
+    }
+  }
+#endif
 }
 
 void PKPingCmd::Do() {

@@ -83,6 +83,8 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     }
   }
 
+  LOG(WARNING) << "slave receive binlogsync, begin offset: "<< pb_begin.ToString() << " end offset: " << pb_end.ToString();
+
   if (pb_begin == LogOffset()) {
     only_keepalive = true;
   }
@@ -132,20 +134,16 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
 
     // empty binlog treated as keepalive packet
     if (binlog_res.binlog().empty()) {
+      LOG(WARNING) << "slave receive empty binlog item";
       continue;
     }
 
-    if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
       cloud::BinlogCloudItem binlog_item;
       if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog_res.binlog(), &binlog_item)) {
         LOG(WARNING) << "Cloud Binlog item decode failed";
         slave_db->SetReplState(ReplState::kTryConnect);
         return;
-      }
-
-      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      if (storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
-        continue;
       }
 
       std::shared_ptr<SyncMasterDB> db =
@@ -156,12 +154,15 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
+      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
+      if (binlog_item.type() == 0 && storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
+        continue;
+      }
       auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
       if (!s.ok()) {
         LOG(WARNING) << "rocksdb apply wal failed, error: " << s.ToString();
         return;
       }
-      return;
     } else {
       if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
         LOG(WARNING) << "Binlog item decode failed";
@@ -194,6 +195,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     ack_end = productor_status;
     ack_end.l_offset.term = pb_end.l_offset.term;
   }
+  LOG(WARNING) << "slave Reply to master, ack_start: "<< ack_start.ToString() << " ack_end: " << ack_end.ToString() << "pb_end: " << pb_end.ToString();
 
   g_pika_rm->SendBinlogSyncAckRequest(db_name, ack_start, ack_end);
 }

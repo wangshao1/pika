@@ -303,6 +303,7 @@ bool DB::RunBgsaveEngine() {
   LOG(INFO) << db_name_ << " bgsave_info: path=" << info.path << ",  filenum=" << info.offset.b_offset.filenum
             << ", offset=" << info.offset.b_offset.offset;
 
+#ifndef USE_S3
   // Backup to tmp dir
   rocksdb::Status s = bgsave_engine_->CreateNewBackup(info.path);
 
@@ -310,6 +311,7 @@ bool DB::RunBgsaveEngine() {
     LOG(WARNING) << db_name_ << " create new backup failed :" << s.ToString();
     return false;
   }
+#endif
   LOG(INFO) << db_name_ << " create new backup finished.";
 
   return true;
@@ -369,16 +371,24 @@ bool DB::InitBgsaveEngine() {
     std::lock_guard lock(db_rwlock_);
     LogOffset bgsave_offset;
     // term, index are 0
+#ifdef USE_S3
+    db->Logger()->GetOldestBinlogToKeep(&(bgsave_offset.b_offset.filenum));
+    PikaBinlogReader::GetFirstOffset(db->Logger(), bgsave_offset.b_offset.filenum, &bgsave_offset.b_offset.offset);
+    LOG(WARNING) << "bgsave info binlog filenum: " << bgsave_offset.b_offset.filenum << " offset: " << bgsave_offset.b_offset.offset;
+#else
     db->Logger()->GetProducerStatus(&(bgsave_offset.b_offset.filenum), &(bgsave_offset.b_offset.offset));
+#endif
     {
       std::lock_guard l(bgsave_protector_);
       bgsave_info_.offset = bgsave_offset;
     }
+#ifndef USE_S3
     s = bgsave_engine_->SetBackupContent();
     if (!s.ok()) {
       LOG(WARNING) << db_name_ << " set backup content failed " << s.ToString();
       return false;
     }
+#endif
   }
   return true;
 }
@@ -510,11 +520,13 @@ bool DB::TryUpdateMasterOffset() {
             << ", offset: " << offset << ", term: " << term << ", index: " << index;
 
   pstd::DeleteFile(info_path);
+#ifndef USE_S3
   if (!ChangeDb(dbsync_path_)) {
     LOG(WARNING) << "DB: " << db_name_ << ", Failed to change db";
     slave_db->SetReplState(ReplState::kError);
     return false;
   }
+#endif
 
   // Update master offset
   std::shared_ptr<SyncMasterDB> master_db =

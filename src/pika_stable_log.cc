@@ -8,12 +8,13 @@
 
 #include <glog/logging.h>
 
+#include "include/pika_cloud_binlog.h"
+#include "include/pika_cloud_binlog_transverter.h"
+#include "include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "include/pika_stable_log.h"
 #include "pstd/include/env.h"
-#include "include/pika_conf.h"
-#include "include/pika_cloud_binlog.h"
 
 using pstd::Status;
 
@@ -22,9 +23,9 @@ extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
 
 StableLog::StableLog(std::string db_name, std::string log_path)
     : purging_(false), db_name_(std::move(db_name)), log_path_(std::move(log_path)) {
-  if (g_pika_conf->pika_model() == PIKA_LOCAL) {
+  if (g_pika_conf->pika_mode() == PIKA_LOCAL) {
     stable_logger_ = std::make_shared<Binlog>(log_path_, g_pika_conf->binlog_file_size());
-  } else if (g_pika_conf->pika_model() == PIKA_CLOUD) {
+  } else if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
     stable_logger_ = std::make_shared<CloudBinlog>(log_path_, g_pika_conf->binlog_file_size());
   }
   std::map<uint32_t, std::string> binlogs;
@@ -176,6 +177,7 @@ void StableLog::UpdateFirstOffset(uint32_t filenum) {
 
   BinlogItem item;
   BinlogOffset offset;
+  cloud::BinlogCloudItem cloud_item;
   while (true) {
     std::string binlog;
     Status s = binlog_reader.Get(&binlog, &(offset.filenum), &(offset.offset));
@@ -186,20 +188,35 @@ void StableLog::UpdateFirstOffset(uint32_t filenum) {
       LOG(WARNING) << "Binlog reader get failed";
       return;
     }
-    if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog, &item)) {
-      LOG(WARNING) << "Binlog item decode failed";
-      return;
-    }
-    // exec_time == 0, could be padding binlog
-    if (item.exec_time() != 0) {
-      break;
+    if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+      if (!PikaCloudBinlogTransverter::BinlogItemWithoutContentDecode(binlog, &cloud_item)) {
+        LOG(WARNING) << "Cloud Binlog item decode failed";
+        return;
+      }
+      // exec_time == 0, could be padding cloudbinlog
+      if (cloud_item.exec_time() != 0) {
+        break;
+      }
+    } else {
+      if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog, &item)) {
+        LOG(WARNING) << "Binlog item decode failed";
+        return;
+      }
+      // exec_time == 0, could be padding binlog
+      if (item.exec_time() != 0) {
+        break;
+      }
     }
   }
 
   std::lock_guard l(offset_rwlock_);
   first_offset_.b_offset = offset;
-  first_offset_.l_offset.term = item.term_id();
-  first_offset_.l_offset.index = item.logic_id();
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    first_offset_.l_offset.term = cloud_item.term_id();
+  } else {
+    first_offset_.l_offset.term = item.term_id();
+    first_offset_.l_offset.index = item.logic_id();
+  }
 }
 
 Status StableLog::PurgeFileAfter(uint32_t filenum) {

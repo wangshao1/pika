@@ -37,6 +37,8 @@ Status CloudVersion::StableSave() {
   memcpy(p, &pro_offset_, sizeof(uint64_t));
   p += 8;
   memcpy(p, &term_, sizeof(uint32_t));
+  p += 4;
+  memcpy(p, &keep_filenum_, sizeof(uint32_t));
   return Status::OK();
 }
 
@@ -46,6 +48,7 @@ Status CloudVersion::Init() {
     memcpy(reinterpret_cast<char*>(&pro_num_), save_->GetData(), sizeof(uint32_t));
     memcpy(reinterpret_cast<char*>(&pro_offset_), save_->GetData() + 4, sizeof(uint64_t));
     memcpy(reinterpret_cast<char*>(&term_), save_->GetData() + 12, sizeof(uint32_t));
+    memcpy(reinterpret_cast<char*>(&keep_filenum_), save_->GetData() + 16, sizeof(uint32_t));
     return Status::OK();
   } else {
     return Status::Corruption("version init error");
@@ -157,8 +160,33 @@ Status CloudBinlog::GetProducerStatus(uint32_t* filenum, uint64_t* pro_offset, u
   return Status::OK();
 }
 
+Status CloudBinlog::GetOldestBinlogToKeep(uint32_t* filenum, uint32_t* term, uint64_t* logic_id) {
+  if (!opened_.load()) {
+    return Status::Busy("Cloud Binlog is not open yet");
+  }
+
+  std::shared_lock l(version_->rwlock_);
+  *filenum = version_->keep_filenum_;
+  if (term) {
+    *term = version_->term_;
+  }
+  LOG(WARNING) << "oldest binlog filenum to keep is: " << *filenum;
+  return Status::OK();
+}
+
 Status CloudBinlog::Put(const std::string& item) {
-  return Status::Error("data err: db_id and rocksdb_id empty");
+  if (!opened_.load()) {
+    return Status::Busy("Cloud Binlog is not open yet");
+  }
+
+  Lock();
+  DEFER { Unlock(); };
+
+  Status s = Put(item.c_str(), static_cast<int>(item.size()));
+  if (!s.ok()) {
+    binlog_io_error_.store(true);
+  }
+  return s;
 }
 // Note: mutex lock should be held
 Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksdb_id, uint32_t type) {
@@ -182,6 +210,18 @@ Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksd
   if (!s.ok()) {
     binlog_io_error_.store(true);
   }
+  // record first binlog item and manifest update binlog item
+  if (type != 0 || binlog_to_keep_.find(rocksdb_id) == binlog_to_keep_.end()) {
+    binlog_to_keep_[rocksdb_id] = filenum;
+  }
+
+  uint32_t keep_filenum = binlog_to_keep_.begin()->second;
+  for (const auto& offset : binlog_to_keep_) {
+    keep_filenum = std::min(keep_filenum, offset.second); 
+  }
+
+  version_->keep_filenum_ = keep_filenum;
+  LOG(WARNING) << "rocksdb_id: " << rocksdb_id << "type: " << type << " oldest filenum to keep: " << keep_filenum;
   return s;
 }
 

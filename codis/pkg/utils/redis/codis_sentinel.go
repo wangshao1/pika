@@ -135,7 +135,7 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClient(parallel int, groupServers
 type GroupInfo struct {
 	GroupId     int      `json:"group_id"`
 	TermId      int      `json:"term_id"`
-	MastersAddr []string `json:"master_addr"`
+	MastersAddr []string `json:"masters_addr"`
 	SlavesAddr  []string `json:"slaves_addr"`
 }
 
@@ -152,8 +152,9 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 	var fut sync2.Future
 
 	//build pkping parameter
+	groups_parameter := make(map[int]GroupInfo)
 	for gid, servers := range groupServers {
-		var group_info GroupInfo
+		group_info := groups_parameter[gid]
 		group_info.GroupId = gid
 		group_info.TermId = groups_info[gid]
 		for _, server := range servers {
@@ -165,10 +166,13 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 				group_info.SlavesAddr = append(group_info.SlavesAddr, server.Addr)
 			}
 		}
+		groups_parameter[gid] = group_info
+	}
 
-		group_inf_json, err := json.Marshal(group_info)
+	for gid, servers := range groupServers {
+		group_info_json, err := json.Marshal(groups_parameter[gid])
 		if err != nil {
-			log.WarnErrorf(err, "json: %s Serialization Failure failed", group_inf_json)
+			log.WarnErrorf(err, "json: %s Serialization Failure failed", group_info_json)
 		}
 		for index, server := range servers {
 			limit <- struct{}{}
@@ -180,7 +184,7 @@ func (s *CodisSentinel) RefreshMastersAndSlavesClientWithPKPing(parallel int, gr
 					fut.Done(fmt.Sprintf("%d_%d", gid, index), state)
 					<-limit
 				}()
-				info, err := s.PkPingDispatch(server.Addr, group_inf_json)
+				info, err := s.PkPingDispatch(server.Addr, group_info_json)
 				state = &ReplicationState{
 					Index:       index,
 					GroupID:     gid,

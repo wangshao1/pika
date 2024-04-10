@@ -44,7 +44,7 @@ class CodisDashboard(Process):
             path = os.getcwd()
             f.write('sentinel_notification_script = "{}"\n'.format(os.path.join(path, "sentinel_notify.sh")))
             f.write('sentinel_client_reconfig_script = "{}"\n'.format(os.path.join(path, "sentinel_reconfig.sh"))
-            f.write('sentinel_pika_local_model = "true"\n')
+            f.write('sentinel_pika_local_mode = "true"\n')
             f.write('cloud_access_key = "minioadmin"\n')
             f.write('cloud_secret_key = "minioadmin"\n')
             f.write('cloud_endpoint_override = "http://10.224.129.40:9000"\n')

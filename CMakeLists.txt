@@ -848,9 +848,9 @@ target_link_directories(${PROJECT_NAME}
   PUBLIC ${INSTALL_LIBDIR})
 
 if (USE_S3)
-find_package(AWSSDK REQUIRED COMPONENTS)
-target_link_libraries(${PROJECT_NAME}
-   ${AWSSDK_LINK_LIBRARIES})
+  find_package(AWSSDK REQUIRED COMPONENTS s3 transfer kinesis)
+  include_directories(${AWS_INCLUDE_DIR})
+  target_link_libraries(${PROJECT_NAME} ${AWSSDK_LINK_LIBRARIES})
 endif()
 
 add_dependencies(${PROJECT_NAME}
@@ -897,15 +897,6 @@ target_link_libraries(${PROJECT_NAME}
   librediscache.a
   ${LIBUNWIND_LIBRARY}
   ${JEMALLOC_LIBRARY})
-
-if (USE_S3)
-  target_link_libraries(${PROJECT_NAME}
-    libaws-cpp-sdk-core.so
-    libaws-cpp-sdk-transfer.so
-    libaws-cpp-sdk-kinesis.so
-    libaws-cpp-sdk-s3.so
-  )
-endif()
 
 option(USE_SSL "Enable SSL support" OFF)
 add_custom_target(

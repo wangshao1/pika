@@ -211,6 +211,12 @@ DisplayCacheInfo DB::GetCacheInfo() {
 }
 
 bool DB::FlushDBWithoutLock() {
+#ifdef USE_S3
+  LOG(INFO) << db_name_ << " flushing db...";
+  auto st = storage_->FlushDB();
+  LOG(INFO) << db_name_ << " flushing db done, status: " << st.ToString();
+  return st.ok();
+#endif
   if (bgsave_info_.bgsaving) {
     return false;
   }

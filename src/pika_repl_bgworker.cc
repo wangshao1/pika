@@ -14,6 +14,7 @@
 #include "pstd/include/pstd_defer.h"
 #include "src/pstd/include/scope_record_lock.h"
 #include "pika_cloud_binlog.pb.h"
+#include "storage/storage_define.h"
 
 extern PikaServer* g_pika_server;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
@@ -155,7 +156,17 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       }
       db->Logger()->Put(binlog_res.binlog());
       auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      if (binlog_item.type() == 0 && storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
+      if (binlog_item.type() == storage::RocksDBRecordType::kMemtableWrite &&
+          storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
+        continue;
+      }
+      if (binlog_item.type() == storage::RocksDBRecordType::kFlushDB) {
+        auto s = storage->FlushDBAtSlave(binlog_item.rocksdb_id());
+        if (!s.ok()) {
+          slave_db->SetReplState(ReplState::kTryConnect);
+          LOG(WARNING) << "flushdb at slave node failed, error: " << s.ToString();
+          return;
+        }
         continue;
       }
       auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());

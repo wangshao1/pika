@@ -7,6 +7,8 @@
 
 #include "rocksdb/env.h"
 #include "db/write_batch_internal.h"
+#include "file/filename.h"
+#include "cloud/filename.h"
 
 #include "src/redis.h"
 #include "rocksdb/options.h"
@@ -32,7 +34,8 @@ Redis::Redis(Storage* const s, int32_t index, std::shared_ptr<pstd::WalWriter> w
     : storage_(s), index_(index),
       lock_mgr_(std::make_shared<LockMgr>(1000, 0, std::make_shared<MutexFactoryImpl>())),
       small_compaction_threshold_(5000),
-      small_compaction_duration_threshold_(10000) {
+      small_compaction_duration_threshold_(10000),
+      wal_writer_(wal_writer) {
   statistics_store_ = std::make_unique<LRUCache<std::string, KeyStatistics>>();
   scan_cursors_store_ = std::make_unique<LRUCache<std::string, std::string>>();
   spop_counts_store_ = std::make_unique<LRUCache<std::string, size_t>>();
@@ -70,12 +73,53 @@ void Redis::Close() {
 #endif
 }
 
+Status Redis::FlushDBAtSlave() {
+  Close();
+  pstd::DeleteDir(db_path_);
+  auto s = Open(storage_options_, db_path_);
+  return s;
+}
+
+Status Redis::FlushDB() {
+  rocksdb::CancelAllBackgroundWork(db_, true);
+  std::string s3_bucket = storage_options_.cloud_fs_options.dest_bucket.GetBucketName();
+  std::string local_dbid;
+  auto s = ReadFileToString(cfs_->GetBaseFileSystem().get(), rocksdb::IdentityFileName(db_path_), &local_dbid);
+  LOG(INFO) << "local_dbid: " << local_dbid << " status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteDbid(s3_bucket, local_dbid);
+  LOG(INFO) << " deletedbid status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteCloudObject(s3_bucket, MakeCloudManifestFile(db_path_, ""));
+  LOG(INFO) << "deletecloudmanifestfromdest tatus: " << s.ToString(); 
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteCloudObject(s3_bucket, rocksdb::IdentityFileName(db_path_));
+  LOG(INFO) << "deleteidentityfile status: " << s.ToString(); 
+  if (!s.ok()) {
+    return s;
+  }
+  cfs_->SwitchMaster(false);
+  Close();
+  pstd::DeleteDir(db_path_);
+  wal_writer_->Put("flushdb", 0/*db_id*/, index_, kFlushDB);
+  Open(storage_options_, db_path_);
+  return s;
+}
+
 Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string& db_path) {
 
   StorageOptions storage_options(tmp_storage_options);
 #ifdef USE_S3
   db_path_ = db_path;
   storage_options_ = tmp_storage_options;
+  storage_options_.cloud_fs_options.dest_bucket.SetObjectPath(db_path_);
+  storage_options_.cloud_fs_options.src_bucket.SetObjectPath(db_path_);
   storage_options.cloud_fs_options.roll_cloud_manifest_on_open = true;
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
@@ -647,7 +691,7 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   LOG(WARNING) << "write binlogitem " << " db_id: " << db_id << " type: " << record.type;
 
   auto s = wal_writer_->Put(record.contents, db_id,
-      redis_inst->GetIndex(), uint32_t(record.type));
+      redis_inst->GetIndex(), RocksDBRecordType(record.type));
   if (!s.ok()) {
     LOG(ERROR) << "write binlog failed, db_id: " << db_id
                << " rocksdb_id: " << redis_inst->GetIndex();

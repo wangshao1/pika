@@ -191,6 +191,8 @@ class Storage {
 
   Status Open(const StorageOptions& storage_options, const std::string& db_path, std::shared_ptr<pstd::WalWriter> wal_writer = nullptr);
 
+  Status FlushDB();
+
   Status LoadCursorStartKey(const DataType& dtype, int64_t cursor, char* type, std::string* start_key);
 
   Status StoreCursorStartKey(const DataType& dtype, int64_t cursor, char type, const std::string& next_key);
@@ -202,6 +204,7 @@ class Storage {
   Status ApplyWAL(int rocksdb_id, int type, const std::string& content);
 
   bool ShouldSkip(int rocksdb_id, const std::string& content);
+  Status FlushDBAtSlave(int rocksdb_id);
 
   // Strings Commands
 

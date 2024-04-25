@@ -599,7 +599,9 @@ void FlushallCmd::FlushAllWithoutLock() {
       return;
     }
     DoWithoutLock(db);
+#ifndef USE_S3
     DoBinlog(g_pika_rm->GetSyncMasterDBs()[p_info]);
+#endif
   }
   if (res_.ok()) {
     res_.SetRes(CmdRes::kOk);
@@ -686,7 +688,9 @@ void FlushdbCmd::FlushAllDBsWithoutLock() {
     return;
   }
   DoWithoutLock();
+#ifndef USE_S3
   DoBinlog();
+#endif
 }
 
 void FlushdbCmd::DoWithoutLock() {

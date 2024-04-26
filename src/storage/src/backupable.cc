@@ -6,9 +6,12 @@
 #include <dirent.h>
 #include <utility>
 
+#include "include/pika_server.h"
 #include "storage/backupable.h"
 #include "storage/storage.h"
 
+extern PikaServer* g_pika_server;
+const std::string kRegion = "us-west-2";
 namespace storage {
 
 BackupEngine::~BackupEngine() {
@@ -140,6 +143,48 @@ Status BackupEngine::CreateNewBackup(const std::string& dir) {
 
   return s;
 }
+
+Status BackupEngine::CreateNewCloudBackup() {
+  Status s = Status::OK();
+  rocksdb::CloudFileSystemOptions cloud_fs_options = g_pika_server->storage_options().cloud_fs_options;
+  std::string src_bucket = cloud_fs_options.src_bucket.GetBucketName();
+  std::string src_object_path = cloud_fs_options.src_bucket.GetObjectPath();
+
+  cloud_fs_options.src_bucket.SetBucketName("database.backup.src", "pika.");
+  cloud_fs_options.dest_bucket.SetBucketName("database.backup.dst", "pika.");
+
+  rocksdb::CloudFileSystem* cfs;
+  //todo: multi db
+  s = rocksdb::CloudFileSystem::NewAwsFileSystem(
+      rocksdb::FileSystem::Default(), src_bucket, src_object_path, kRegion, "database.backup.src",
+      "clone_db", kRegion, cloud_fs_options, nullptr, &cfs);
+
+  if (!s.ok()) {
+    LOG(WARNING) << "Unable to create an AWS environment with bucket, " << s.ToString();
+    return s;
+  }
+  std::shared_ptr<rocksdb::FileSystem> fs(cfs);
+  auto cloud_env = NewCompositeEnv(fs);
+
+  // Create options and use the AWS env that we created earlier
+  Options options;
+  options.env = cloud_env.get();
+
+  // No persistent cache
+  std::string persistent_cache = "";
+
+  // open clone
+  rocksdb::DBCloud* db;
+  s = rocksdb::DBCloud::Open(options, "clone_db", persistent_cache, 0, &db);
+  if (!s.ok()) {
+    LOG(WARNING) << "Unable to open clone at path clone_db in bucket database.backup.dst, "<< s.ToString();
+    return s;
+  }
+
+  db->Savepoint();
+  return s;
+}
+
 
 void BackupEngine::StopBackup() {
   // DEPRECATED

@@ -49,6 +49,8 @@ class BackupEngine {
 
   Status CreateNewBackup(const std::string& dir);
 
+  Status CreateNewCloudBackup();
+
   void StopBackup();
 
   Status CreateNewBackupSpecify(const std::string& dir, int index);

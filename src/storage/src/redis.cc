@@ -107,8 +107,8 @@ Status Redis::FlushDB() {
   cfs_->SwitchMaster(false);
   Close();
   pstd::DeleteDir(db_path_);
-  wal_writer_->Put("flushdb", 0/*db_id*/, index_, kFlushDB);
   Open(storage_options_, db_path_);
+  wal_writer_->Put("flushdb", 0/*db_id*/, index_, kFlushDB);
   return s;
 }
 

@@ -2780,6 +2780,10 @@ void DelbackupCmd::DoInitial() {
 }
 
 void DelbackupCmd::Do() {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    res_.SetRes(CmdRes::kOk);
+    return;
+  }
   std::string db_sync_prefix = g_pika_conf->bgsave_prefix();
   std::string db_sync_path = g_pika_conf->bgsave_path();
   std::vector<std::string> dump_dir;

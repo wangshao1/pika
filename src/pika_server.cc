@@ -438,6 +438,9 @@ Status PikaServer::DoSameThingSpecificDB(const std::set<std::string>& dbs, const
       case TaskType::kBgSave:
         db_item.second->BgSaveDB();
         break;
+      case TaskType::kCloudBgSave:
+        db_item.second->CloudBgSaveDB();
+        break;
       case TaskType::kCompactRangeStrings:
         db_item.second->CompactRange(storage::DataType::kStrings, arg.argv[0], arg.argv[1]);
         break;

@@ -72,18 +72,10 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
                const std::string& dest_object_path,
                const CloudFileSystemOptions& cloud_fs_options,
                std::unique_ptr<DBCloud>* cloud_db, std::unique_ptr<Env>* cloud_env) {
-  // The local directory where the clone resides
-  //std::string cname = kClonePath + "/" + clone_name;
-  // Create new AWS env
-
   CloudFileSystemOptions cloud_fs_options2;
 
   cloud_fs_options2.endpoint_override = "http://10.224.129.40:9000";
   cloud_fs_options2.credentials.InitializeSimple("minioadmin", "minioadmin");
-  //ASSERT_TRUE(cloud_fs_options.credentials.HasValid().ok());
-
-  //cloud_fs_options.credentials.InitializeSimple(
-  //  getenv("AWS_ACCESS_KEY_ID"), getenv("AWS_SECRET_ACCESS_KEY"));
   if (!cloud_fs_options2.credentials.HasValid().ok()) {
     fprintf(
         stderr,
@@ -108,10 +100,6 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
   cloud_fs_options2.dest_bucket.SetBucketName(kBucketSuffix2_dest, bucketPrefix);
 
   CloudFileSystem* cfs;
-  /*Status st = CloudFileSystem::NewAwsFileSystem(
-      FileSystem::Default(), src_bucket, src_object_path, kRegion, dest_bucket,
-      dest_object_path, kRegion, cloud_fs_options2, nullptr, &cfs);*/
-
   Status st = CloudFileSystem::NewAwsFileSystem(
       FileSystem::Default(), src_bucket, src_object_path, kRegion, kBucketSuffix2_src,
       dest_object_path, kRegion, cloud_fs_options2, nullptr, &cfs);
@@ -132,10 +120,6 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
 
   // No persistent cache
   std::string persistent_cache = "";
-
-  // create a bucket name for debugging purposes
- // const std::string bucketName = cfs->GetSrcBucketName();
-
   // open clone
   DBCloud* db;
   st = DBCloud::Open(options, kClonePath, persistent_cache, 0, &db);
@@ -149,12 +133,6 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
   cloud_db->reset(db);
   std::cout << "by..." << std::endl;
   cloud_db->get()->Savepoint();
-  //cloud_db->get()->
- // DBCloudImpl db_impl(cloud_db->get(), NewCompositeEnv(fs));
- // DBCloudImpl::DBCloudImpl(DB* db, std::unique_ptr<Env> local_env)
-   //   : DBCloud(db), cfs_(nullptr), local_env_(std::move(local_env)) {}
-  //DBCloudImpl
-
   return Status::OK();
 }
 
@@ -164,10 +142,6 @@ TEST_F(CloudTest, clone_s3) {
 
   cloud_fs_options.endpoint_override = "http://10.224.129.40:9000";
   cloud_fs_options.credentials.InitializeSimple("minioadmin", "minioadmin");
-  //ASSERT_TRUE(cloud_fs_options.credentials.HasValid().ok());
-
-  //cloud_fs_options.credentials.InitializeSimple(
-    //  getenv("AWS_ACCESS_KEY_ID"), getenv("AWS_SECRET_ACCESS_KEY"));
   if (!cloud_fs_options.credentials.HasValid().ok()) {
     fprintf(
         stderr,
@@ -249,7 +223,7 @@ TEST_F(CloudTest, clone_s3) {
             kDBPath.c_str(), bucketName.c_str(), s.ToString().c_str());
     return;
   }
- //sleep(30);
+
   // insert a key-value in the clone.
   s = clone_db->Put(WriteOptions(), "name", "dhruba");
   assert(s.ok());
@@ -261,9 +235,6 @@ TEST_F(CloudTest, clone_s3) {
 
  clone_db->Flush(FlushOptions());
  clone_db.release();
- //sleep(20);
-
-
 
  delete db;
 
@@ -279,10 +250,6 @@ TEST_F(CloudTest, get_clone_s3) {
 
   cloud_fs_options.endpoint_override = "http://10.224.129.40:9000";
   cloud_fs_options.credentials.InitializeSimple("minioadmin", "minioadmin");
-  //ASSERT_TRUE(cloud_fs_options.credentials.HasValid().ok());
-
-  //cloud_fs_options.credentials.InitializeSimple(
-  //  getenv("AWS_ACCESS_KEY_ID"), getenv("AWS_SECRET_ACCESS_KEY"));
   if (!cloud_fs_options.credentials.HasValid().ok()) {
     fprintf(
         stderr,
@@ -339,7 +306,6 @@ TEST_F(CloudTest, get_clone_s3) {
   }
 
   // Put key-value into main db
-/*
   std::string value;
   s = db->Get(ReadOptions(), "name", &value);
   std::cout << "value1: " << value << std::endl;
@@ -347,16 +313,7 @@ TEST_F(CloudTest, get_clone_s3) {
   s = db->Get(ReadOptions(), "key1", &value);
   std::cout << "value2: " << value << std::endl;
   assert(s.ok());
-  assert(value == "value");*//*
-
-      for (int i = 0; i < 10000000; i++) {
-    if (i % 10000 == 0) {std::cout << i << std::endl; db->Flush(FlushOptions());}
-    std::string key = "uu1:"+i;
-    std::string value = std::string(2048, 'y');
-    db->Put(WriteOptions(), key, value);
-  }
-
-
+  assert(value == "value");
   return;
 }
 
@@ -366,10 +323,6 @@ TEST_F(CloudTest, delete_s3) {
 
   cloud_fs_options.endpoint_override = "http://10.224.129.40:9000";
   cloud_fs_options.credentials.InitializeSimple("minioadmin", "minioadmin");
-  //ASSERT_TRUE(cloud_fs_options.credentials.HasValid().ok());
-
-  //cloud_fs_options.credentials.InitializeSimple(
-  //  getenv("AWS_ACCESS_KEY_ID"), getenv("AWS_SECRET_ACCESS_KEY"));
   if (!cloud_fs_options.credentials.HasValid().ok()) {
     fprintf(
         stderr,

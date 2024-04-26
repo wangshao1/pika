@@ -74,7 +74,7 @@ void DB::BgSaveDB() {
   g_pika_server->BGSaveTaskSchedule(&DoBgSave, static_cast<void*>(bg_task_arg));
 }
 
-void DB::BgSaveCloudDB() {
+void DB::CloudBgSaveDB() {
   std::shared_lock l(dbs_rw_);
   std::lock_guard ml(bgsave_protector_);
   if (bgsave_info_.bgsaving) {
@@ -83,7 +83,8 @@ void DB::BgSaveCloudDB() {
   bgsave_info_.bgsaving = true;
   auto bg_task_arg = new BgTaskArg();
   bg_task_arg->db = shared_from_this();
-  g_pika_server->BGSaveTaskSchedule(&DoBgCloudSave, static_cast<void*>(bg_task_arg));
+  bg_task_arg->cloud_fs_options = g_pika_server->storage_options().cloud_fs_options;
+  g_pika_server->BGSaveTaskSchedule(&DoCloudBgSave, static_cast<void*>(bg_task_arg));
 }
 
 void DB::SetBinlogIoError() { return binlog_io_error_.store(true); }
@@ -303,11 +304,14 @@ void DB::DoBgSave(void* arg) {
   bg_task_arg->db->FinishBgsave();
 }
 
-void DB::DoBgCloudSave(void* arg) {
+void DB::DoCloudBgSave(void* arg) {
   std::unique_ptr<BgTaskArg> bg_task_arg(static_cast<BgTaskArg*>(arg));
   // Do BgSave
-  bool success = bg_task_arg->db->RunBgsaveCloudEngine();
-  bg_task_arg->db->FinishBgsaveCloud();
+  bool success = bg_task_arg->db->RunCloudBgsaveEngine(bg_task_arg->cloud_fs_options);
+  if (success) {
+    //todo
+  }
+  bg_task_arg->db->FinishCloudBgsave();
 }
 
 bool DB::RunBgsaveEngine() {
@@ -336,8 +340,8 @@ bool DB::RunBgsaveEngine() {
   return true;
 }
 
-bool DB::RunBgsaveCloudEngine() {
-  rocksdb::Status s = bgsave_engine_->CreateNewCloudBackup();
+bool DB::RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
+  rocksdb::Status s = bgsave_engine_->CreateNewCloudBackup(cloud_fs_options);
   if (!s.ok()) {
     LOG(WARNING) << db_name_ << " create new backup failed :" << s.ToString();
     return false;
@@ -357,7 +361,7 @@ void DB::FinishBgsave() {
   g_pika_server->UpdateLastSave(time(nullptr));
 }
 
-void DB::FinishBgsaveCloud() {
+void DB::FinishCloudBgsave() {
   std::lock_guard l(bgsave_protector_);
   bgsave_info_.bgsaving = false;
 }

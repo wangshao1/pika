@@ -337,7 +337,11 @@ void BgsaveCmd::DoInitial() {
 }
 
 void BgsaveCmd::Do() {
-  g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kBgSave});
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kCloudBgSave});
+  } else {
+    g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kBgSave});
+  }
   LogCommand();
   res_.AppendContent("+Background saving started");
 }

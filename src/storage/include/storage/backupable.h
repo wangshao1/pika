@@ -49,7 +49,7 @@ class BackupEngine {
 
   Status CreateNewBackup(const std::string& dir);
 
-  Status CreateNewCloudBackup();
+  Status CreateNewCloudBackup(rocksdb::CloudFileSystemOptions& cloud_fs_options);
 
   void StopBackup();
 

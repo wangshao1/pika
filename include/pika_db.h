@@ -94,7 +94,7 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   std::shared_ptr<storage::Storage> storage() const;
   void GetBgSaveMetaData(std::vector<std::string>* fileNames, std::string* snapshot_uuid);
   void BgSaveDB();
-  void BgSaveCloudDB();
+  void CloudBgSaveDB();
   void SetBinlogIoError();
   void SetBinlogIoErrorrelieve();
   bool IsBinlogIoError();
@@ -192,15 +192,15 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
    * BgSave use
    */
   static void DoBgSave(void* arg);
-  static void DoBgCloudSave(void* arg);
+  static void DoCloudBgSave(void* arg);
   bool RunBgsaveEngine();
-  bool RunBgsaveCloudEngine();
+  bool RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options);
 
   bool InitBgsaveEnv();
   bool InitBgsaveEngine();
   void ClearBgsave();
   void FinishBgsave();
-  void FinishBgsaveCloud();
+  void FinishCloudBgsave();
   BgSaveInfo bgsave_info_;
   pstd::Mutex bgsave_protector_;
   std::shared_ptr<storage::BackupEngine> bgsave_engine_;
@@ -208,6 +208,7 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
 
 struct BgTaskArg {
   std::shared_ptr<DB> db;
+  rocksdb::CloudFileSystemOptions cloud_fs_options;
 };
 
 #endif

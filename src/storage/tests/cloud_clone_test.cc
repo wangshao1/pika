@@ -1,8 +1,15 @@
-#include <thread>
+#include <aws/core/Aws.h>
+#include <aws/core/auth/AWSCredentials.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/DeleteBucketRequest.h>
+#include <aws/s3/model/DeleteObjectRequest.h>
+#include <aws/s3/model/ListObjectsRequest.h>
+#include <aws/s3/model/Object.h>
+#include <gtest/gtest.h>
+#include <atomic>
 #include <iostream>
 #include <queue>
-#include <atomic>
-#include <gtest/gtest.h>
+#include <thread>
 #include "glog/logging.h"
 
 #include "pstd/include/env.h"
@@ -273,7 +280,6 @@ TEST_F(CloudTest, clone_s3) {
   fprintf(stdout, "Successfully used db at %s and clone at %s in bucket %s.\n",
           kDBPath.c_str(), kClonePath.c_str(), bucketName.c_str());
 }
-/*
 
 TEST_F(CloudTest, get_clone_s3) {
   // cloud environment config options here
@@ -410,7 +416,84 @@ TEST_F(CloudTest, delete_s3) {
   }
   //cfs->DeleteCloudFileFromDest();
 
-}*/
+}
+TEST_F(CloudTest, del_bucket_s3) {
+  Aws::SDKOptions options;
+  Aws::InitAPI(options);
+
+  Aws::Client::ClientConfiguration cfg;
+  cfg.endpointOverride = "10.224.129.40:9000";
+  cfg.scheme = Aws::Http::Scheme::HTTP;
+  cfg.verifySSL = false;
+
+  Aws::Auth::AWSCredentials cred("minioadmin", "minioadmin");  // ak,sk
+  Aws::S3::S3Client s3_client(cred, cfg,
+                              Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+                              false, Aws::S3::US_EAST_1_REGIONAL_ENDPOINT_OPTION::NOT_SET);
+
+  auto response = s3_client.ListBuckets();
+  if (response.IsSuccess()) {
+    auto buckets = response.GetResult().GetBuckets();
+    for (auto iter = buckets.begin(); iter != buckets.end(); ++iter) {
+      std::cout << iter->GetName() << "\t" << iter->GetCreationDate().ToLocalTimeString(Aws::Utils::DateFormat::ISO_8601) << std::endl;
+    }
+  } else {
+    std::cout << "Error while ListBuckets " << response.GetError().GetExceptionName()
+         << " " << response.GetError().GetMessage() << std::endl;
+  }
+
+
+
+  // Aws::S3::S3Client s3_client;
+  Aws::S3::Model::DeleteBucketRequest request;
+  request.SetBucket("rockset.cloud2.clone.example.dst.charlieqiao");
+  //s3_client.DeleteBucketAsync(request);
+
+  Aws::S3::Model::ListObjectsRequest requ;
+  requ.SetBucket("rockset.cloud2.clone.example.dst.charlieqiao");
+
+  bool truncated = false;
+  do
+  {
+    auto outcome = s3_client.ListObjects(requ);
+    if (outcome.IsSuccess())
+    {
+      std::cout << "list....obinect" << std::endl;
+      for (const auto& object : outcome.GetResult().GetContents())
+      {
+        Aws::S3::Model::DeleteObjectRequest request;
+        std::cout << "Folder: " << object.GetKey() << std::endl;
+        request.SetBucket("rockset.cloud2.clone.example.dst.charlieqiao");
+        request.SetKey(object.GetKey());
+        auto outcome = s3_client.DeleteObject(request);
+        if (outcome.IsSuccess()) {
+          std::cout << "File deleted successfully" << std::endl;
+        } else {
+          std::cout << "Failed to delete file:" << outcome.GetError().GetMessage() << std::endl;
+        }
+      }
+
+      // 检查是否有下一页
+      truncated = outcome.GetResult().GetIsTruncated();
+      if (truncated)
+      {
+        requ.SetMarker(outcome.GetResult().GetNextMarker());
+      }
+    }
+    else
+    {
+      std::cout << "ListObjects error: " << outcome.GetError().GetMessage() << std::endl;
+      break;
+    }
+  } while (truncated);
+
+  auto outcome = s3_client.DeleteBucket(request);
+  if (!outcome.IsSuccess()) {
+    std::cout << "DeleteBucket error: " << outcome.GetError().GetMessage() << std::endl;
+  }
+
+  Aws::ShutdownAPI(options);
+}
 
 int main(int argc, char** argv) {
   if (!pstd::FileExists("./log")) {

@@ -306,11 +306,7 @@ void DB::DoBgSave(void* arg) {
 
 void DB::DoCloudBgSave(void* arg) {
   std::unique_ptr<BgTaskArg> bg_task_arg(static_cast<BgTaskArg*>(arg));
-  // Do BgSave
-  bool success = bg_task_arg->db->RunCloudBgsaveEngine(bg_task_arg->cloud_fs_options);
-  if (success) {
-    //todo
-  }
+  bg_task_arg->db->RunCloudBgsaveEngine(bg_task_arg->cloud_fs_options);
   bg_task_arg->db->FinishCloudBgsave();
 }
 
@@ -340,14 +336,13 @@ bool DB::RunBgsaveEngine() {
   return true;
 }
 
-bool DB::RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
+void DB::RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
   rocksdb::Status s = bgsave_engine_->CreateNewCloudBackup(cloud_fs_options);
   if (!s.ok()) {
     LOG(WARNING) << db_name_ << " create new backup failed :" << s.ToString();
-    return false;
+    return;
   }
   LOG(INFO) << db_name_ << " create new backup finished.";
-  return true;
 }
 
 BgSaveInfo DB::bgsave_info() {

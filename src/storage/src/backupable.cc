@@ -145,14 +145,14 @@ Status BackupEngine::CreateNewBackup(const std::string& dir) {
 
 Status BackupEngine::CreateNewCloudBackup(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
   Status s = Status::OK();
+
   std::string src_bucket = cloud_fs_options.src_bucket.GetBucketName();
   std::string src_object_path = cloud_fs_options.src_bucket.GetObjectPath();
-
   cloud_fs_options.src_bucket.SetBucketName("database.backup.src", "pika.");
   cloud_fs_options.dest_bucket.SetBucketName("database.backup.dst", "pika.");
 
   rocksdb::CloudFileSystem* cfs;
-  //todo: multi db
+
   s = rocksdb::CloudFileSystem::NewAwsFileSystem(
       rocksdb::FileSystem::Default(), src_bucket, src_object_path, kRegion, "database.backup.src",
       "clone_db", kRegion, cloud_fs_options, nullptr, &cfs);

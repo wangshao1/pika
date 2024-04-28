@@ -194,7 +194,7 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
   static void DoBgSave(void* arg);
   static void DoCloudBgSave(void* arg);
   bool RunBgsaveEngine();
-  bool RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options);
+  void RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options);
 
   bool InitBgsaveEnv();
   bool InitBgsaveEngine();

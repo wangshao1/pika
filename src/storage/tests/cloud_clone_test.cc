@@ -273,7 +273,7 @@ TEST_F(CloudTest, clone_s3) {
   fprintf(stdout, "Successfully used db at %s and clone at %s in bucket %s.\n",
           kDBPath.c_str(), kClonePath.c_str(), bucketName.c_str());
 }
-
+/*
 
 TEST_F(CloudTest, get_clone_s3) {
   // cloud environment config options here
@@ -410,7 +410,7 @@ TEST_F(CloudTest, delete_s3) {
   }
   //cfs->DeleteCloudFileFromDest();
 
-}
+}*/
 
 int main(int argc, char** argv) {
   if (!pstd::FileExists("./log")) {

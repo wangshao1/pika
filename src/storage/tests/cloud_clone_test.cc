@@ -58,7 +58,7 @@ std::string kDBPath = "db";
 // This is the local directory where the clone is stored. The same
 // pathname is used to store data in the specified cloud bucket.
 //std::string kClonePath = "db";
-std::string kClonePath = "clone_db";
+std::string kClonePath = "clone";
 std::string kBucketSuffix = "cloud.clone.example.";
 std::string kBucketSuffix2_src = "cloud2.clone.example.";
 std::string kBucketSuffix2_dest = "cloud2.clone.example.dst.";
@@ -101,7 +101,8 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
   const std::string bucketPrefix = "rockset.";
   // create a bucket name for debugging purposes
   const std::string bucketName_src = bucketPrefix + kBucketSuffix2_src;
-  const std::string bucketName_dest = bucketPrefix + kBucketSuffix2_dest;
+  const std::string bucketName_dest = bucketPrefix + kBucketSuffix2_src;
+  //const std::string bucketName_dest = bucketPrefix + kBucketSuffix2_dest;
 
   // Needed if using bucket prefix other than the default "rockset."
   cloud_fs_options2.src_bucket.SetBucketName(kBucketSuffix2_src, bucketPrefix);
@@ -137,42 +138,9 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
     return st;
   }
   //std::unique_ptr<DBCloud> cloud_db2;
-  std::cout << "bx..." << std::endl;
   cloud_db->reset(db);
-  std::cout << "by..." << std::endl;
-
-  CloudFileSystem* cfs_bak;
-  st = CloudFileSystem::NewAwsFileSystem(
-      FileSystem::Default(), kBucketSuffix2_src, dest_object_path, kRegion, kBucketSuffix2_dest,
-      dest_object_path, kRegion, cloud_fs_options2, nullptr, &cfs_bak);
-
-  if (!st.ok()) {
-    fprintf(stderr,
-            "Unable to create an AWS environment with "
-            "bucket %s",
-            src_bucket.c_str());
-    return st;
-  }
-  std::shared_ptr<FileSystem> fs_bak(cfs_bak);
-  auto cloud_env_bak = NewCompositeEnv(fs_bak);
-  // Create options and use the AWS env that we created earlier
-  Options options2;
-  options2.env = cloud_env_bak.get();
-
-  // No persistent cache
-  std::string persistent_cache_bak = "";
-  // open clone
-  DBCloud* db_bak;
-  st = DBCloud::Open(options2, kClonePath, persistent_cache_bak, 0, &db_bak);
-  if (!st.ok()) {
-    fprintf(stderr, "Unable to open clone at path %s in bucket %s. %s\n",
-            kClonePath.c_str(), kBucketSuffix2_src.c_str(), st.ToString().c_str());
-    return st;
-  }
-
-  cloud_db->get()->Savepoint();
-  //db_bak->Savepoint();
   return Status::OK();
+
 }
 
 TEST_F(CloudTest, clone_s3) {
@@ -272,6 +240,7 @@ TEST_F(CloudTest, clone_s3) {
   assert(s.ok());
   assert(value == "value");
 
+  clone_db->Savepoint();
  //clone_db->Flush(FlushOptions());
  clone_db.release();
 

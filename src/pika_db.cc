@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "include/pika_db.h"
+#include "storage/storage_define.h"
 
 #include "include/pika_cmd_table_manager.h"
 #include "include/pika_rm.h"

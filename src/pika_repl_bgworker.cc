@@ -155,8 +155,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto db = g_pika_server->GetDB(worker->db_name_);
-      auto s = db->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
+      auto s = g_pika_server->GetDB(worker->db_name_)->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
       if (!s.ok()) {
         LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
         slave_db->SetReplState(ReplState::kTryConnect);

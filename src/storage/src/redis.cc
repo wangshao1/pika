@@ -671,53 +671,65 @@ public:
 
   Status DeleteCF(uint32_t column_family_id, const Slice& key) override {
     switch (column_family_id) {
-      case kStringsCF:
+      case kStringsCF: {
         ParsedBaseKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixK + pbk.Key().ToString());
+        redis_keys_->insert("K" + pbk.Key().ToString());
         break;
-      case kHashesMetaCF:
-        ParsedBeseMetaKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixH + pbk.Key().ToString());
+      }
+      case kHashesMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("H" + pbk.Key().ToString());
         break;
-      case kHashesDataCF:
+      }
+      case kHashesDataCF: {
         ParsedHashesDataKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixH + pbk.Key().ToString());
+        redis_keys_->insert("H" + pbk.Key().ToString());
         break;
-      case kSetsMetaCF:
-        ParsedBeseMetaKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixS + pbk.Key().ToString());
+      }
+      case kSetsMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("S" + pbk.Key().ToString());
         break;
-      case kSetsDataCF:
+      }
+      case kSetsDataCF: {
         ParsedSetsMemberKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixS + pbk.Key().ToString());
+        redis_keys_->insert("S" + pbk.Key().ToString());
         break;
-      case kListsMetaCF:
+      }
+      case kListsMetaCF: {
         ParsedBaseMetaKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixL + pbk.Key().ToString());
+        redis_keys_->insert("L" + pbk.Key().ToString());
         break;
-      case kListsDataCF:
+      }
+      case kListsDataCF: {
         ParsedListsDataKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixL + pbk.Key().ToString());
+        redis_keys_->insert("L" + pbk.key().ToString());
         break;
-      case kZsetsMetaCF:
+      }
+      case kZsetsMetaCF: {
         ParsedBaseMetaKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        redis_keys_->insert("Z" + pbk.Key().ToString());
         break;
-      case kZsetsDataCF:
+      }
+      case kZsetsDataCF: {
         ParsedZSetsMemberKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        redis_keys_->insert("Z" + pbk.Key().ToString());
         break;
-      case kZsetsScoreCF:
+      }
+      case kZsetsScoreCF: {
         ParsedZSetsScoreKey pbk(key);
-        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        redis_keys_->insert("Z" + pbk.key().ToString());
         break;
-      case kStreamsMetaCF:
+      }
+      case kStreamsMetaCF: {
         LOG(INFO) << "rediscache don't cache stream type";
         break;
-      case kStreamsDataCF:
+      }
+      case kStreamsDataCF: {
         LOG(INFO) << "rediscache don't cache stream type";
         break;
-    };
+      }
+    }
     return Status::OK();
   }
 private:

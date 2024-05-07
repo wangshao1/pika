@@ -155,23 +155,11 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      if (binlog_item.type() == storage::RocksDBRecordType::kMemtableWrite &&
-          storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
-        continue;
-      }
-      if (binlog_item.type() == storage::RocksDBRecordType::kFlushDB) {
-        auto s = storage->FlushDBAtSlave(binlog_item.rocksdb_id());
-        if (!s.ok()) {
-          slave_db->SetReplState(ReplState::kTryConnect);
-          LOG(WARNING) << "flushdb at slave node failed, error: " << s.ToString();
-          return;
-        }
-        continue;
-      }
-      auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
+      auto db = g_pika_server->GetDB(worker->db_name_);
+      auto s = db->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
       if (!s.ok()) {
-        LOG(WARNING) << "rocksdb apply wal failed, error: " << s.ToString();
+        LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
+        slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
     } else {

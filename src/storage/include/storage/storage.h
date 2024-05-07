@@ -201,7 +201,8 @@ class Storage {
 
   std::unique_ptr<Redis>& GetDBInstance(const std::string& key);
 
-  Status ApplyWAL(int rocksdb_id, int type, const std::string& content);
+  Status ApplyWAL(int rocksdb_id, int type, const std::string& content,
+      std::unordered_set<std::string>* redis_keys);
 
   bool ShouldSkip(int rocksdb_id, const std::string& content);
   Status FlushDBAtSlave(int rocksdb_id);

@@ -659,7 +659,73 @@ bool Redis::ShouldSkip(const std::string& content) {
   return rocksdb::WriteBatchInternal::Sequence(&batch) != sq_number + 1;
 }
 
-Status Redis::ApplyWAL(int type, const std::string& content) {
+class WriteBatchHandler : public rocksdb::WriteBatch::Handler {
+public:
+  WriteBatchHandler(std::unordered_set<std::string>* redis_keys)
+  : redis_keys_(redis_keys) {}
+
+  Status PutCF(uint32_t column_family_id, const Slice& key,
+               const Slice& value) override {
+    return DeleteCF(column_family_id, key);
+  }
+
+  Status DeleteCF(uint32_t column_family_id, const Slice& key) override {
+    switch (column_family_id) {
+      case kStringsCF:
+        ParsedBaseKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixK + pbk.Key().ToString());
+        break;
+      case kHashesMetaCF:
+        ParsedBeseMetaKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixH + pbk.Key().ToString());
+        break;
+      case kHashesDataCF:
+        ParsedHashesDataKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixH + pbk.Key().ToString());
+        break;
+      case kSetsMetaCF:
+        ParsedBeseMetaKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixS + pbk.Key().ToString());
+        break;
+      case kSetsDataCF:
+        ParsedSetsMemberKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixS + pbk.Key().ToString());
+        break;
+      case kListsMetaCF:
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixL + pbk.Key().ToString());
+        break;
+      case kListsDataCF:
+        ParsedListsDataKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixL + pbk.Key().ToString());
+        break;
+      case kZsetsMetaCF:
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        break;
+      case kZsetsDataCF:
+        ParsedZSetsMemberKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        break;
+      case kZsetsScoreCF:
+        ParsedZSetsScoreKey pbk(key);
+        redis_keys_->insert(PCacheKeyPrefixZ + pbk.Key().ToString());
+        break;
+      case kStreamsMetaCF:
+        LOG(INFO) << "rediscache don't cache stream type";
+        break;
+      case kStreamsDataCF:
+        LOG(INFO) << "rediscache don't cache stream type";
+        break;
+    };
+    return Status::OK();
+  }
+private:
+  std::unordered_set<std::string>* redis_keys_;
+};
+
+Status Redis::ApplyWAL(int type, const std::string& content,
+    std::unordered_set<std::string>* redis_keys) {
   rocksdb::ReplicationLogRecord::Type rtype = static_cast<rocksdb::ReplicationLogRecord::Type>(type);
   rocksdb::ReplicationLogRecord rlr;
   rocksdb::DBCloud::ApplyReplicationLogRecordInfo info;
@@ -670,9 +736,19 @@ Status Redis::ApplyWAL(int type, const std::string& content) {
   LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
                << " log record type: " << rtype
                << " status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  if (type != 0) {
+    return s;
+  }
+  
+  rocksdb::WriteBatch batch;
+  s = rocksdb::WriteBatchInternal::SetContents(&batch, content);
+  WriteBatchHandler handler(redis_keys);
+  s = batch.Iterate(&handler);
   return s;
 }
-
 
 std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) {
   Redis* redis_inst = (Redis*)inst_;

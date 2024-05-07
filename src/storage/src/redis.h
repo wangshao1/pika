@@ -397,7 +397,8 @@ class Redis {
   }
 
 #ifdef USE_S3
-  Status ApplyWAL(int type, const std::string& content);
+  Status ApplyWAL(int type, const std::string& content,
+      std::unordered_set<std::string>* redis_keys);
   bool ShouldSkip(const std::string& content);
   Status FlushDBAtSlave();
   Status SwitchMaster(bool is_old_master, bool is_new_master);

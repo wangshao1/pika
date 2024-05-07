@@ -2479,9 +2479,10 @@ Status Storage::SwitchMaster(bool is_old_master, bool is_new_master) {
 }
 
 Status Storage::ApplyWAL(int rocksdb_id,
-                         int type, const std::string& content) {
+                         int type, const std::string& content,
+                         std::unordered_set<std::string>* redis_keys) {
   auto& inst = insts_[rocksdb_id];
-  return inst->ApplyWAL(type, content);
+  return inst->ApplyWAL(type, content, redis_keys);
 }
 
 

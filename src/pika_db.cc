@@ -339,10 +339,10 @@ bool DB::RunBgsaveEngine() {
 void DB::RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
   rocksdb::Status s = bgsave_engine_->CreateNewCloudBackup(cloud_fs_options, g_pika_conf.get());
   if (!s.ok()) {
-    LOG(WARNING) << db_name_ << " create new backup failed :" << s.ToString();
+    LOG(WARNING) << db_name_ << " create new cloud backup failed :" << s.ToString();
     return;
   }
-  LOG(INFO) << db_name_ << " create new backup finished.";
+  LOG(INFO) << db_name_ << " create new cloud backup finished.";
 }
 
 BgSaveInfo DB::bgsave_info() {

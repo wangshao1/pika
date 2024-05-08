@@ -10,7 +10,7 @@
 #include "storage/backupable.h"
 #include "storage/storage.h"
 
-const std::string kRegion = "us-west-2";
+extern const std::string kRegion;
 
 namespace storage {
 

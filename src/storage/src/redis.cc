@@ -124,6 +124,7 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
   storage_options.cloud_fs_options.skip_dbid_verification = true;
+  storage_options.cloud_fs_options.sst_file_cache = rocksdb::NewLRUCache(10 * 1024 * 1024 * 1024);
   storage_options.options.replication_log_listener = log_listener_;
   is_master_.store(tmp_storage_options.cloud_fs_options.is_master);
   if (!tmp_storage_options.cloud_fs_options.is_master) {

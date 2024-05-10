@@ -72,8 +72,78 @@ std::string kBucketSuffix2_dest = "cloud2.clone.example.dst.";
 // the same bucket (obviously with different pathnames).
 //
 
-std::string kRegion = "us-west-2";
+std::string kRegion = "us-east-1";
 
+TEST_F(CloudTest, test_360_s3) {
+  // cloud environment config options here
+  CloudFileSystemOptions cloud_fs_options;
+
+  cloud_fs_options.endpoint_override = "beijing2.xstore.qihoo.net";
+  cloud_fs_options.credentials.InitializeSimple("YHDIJ1LCITN7YHLETHLW", "fR5b2hEOzeogmiR01FzvYpb9BNt8eSrt0crHy510");
+  if (!cloud_fs_options.credentials.HasValid().ok()) {
+    fprintf(
+        stderr,
+        "Please set env variables "
+        "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY with cloud credentials");
+    return;
+  }
+
+  std::string bucketName = "xx";
+  cloud_fs_options.src_bucket.SetBucketName("pulsar-s3-test-beijing2");
+  cloud_fs_options.dest_bucket.SetBucketName("pulsar-s3-test-beijing2");
+  // Create a new AWS cloud env Status
+  CloudFileSystem* cfs;
+  Status s = CloudFileSystem::NewAwsFileSystem(
+      FileSystem::Default(), "pulsar-s3-test-beijing2", kDBPath, kRegion, "pulsar-s3-test-beijing2",
+      kDBPath, kRegion, cloud_fs_options, nullptr, &cfs);
+  if (!s.ok()) {
+    fprintf(stderr, "Unable to create cloud env in bucket %s. %s\n",
+            bucketName.c_str(), s.ToString().c_str());
+    return;
+  }
+
+
+  // Store a reference to a cloud env. A new cloud env object should be
+  // associated with every new cloud-db.
+  auto cloud_env = NewCompositeEnv(std::shared_ptr<FileSystem>(cfs));
+
+  // Create options and use the AWS env that we created earlier
+  Options options;
+  options.env = cloud_env.get();
+  options.create_if_missing = true;
+
+  // No persistent cache
+  std::string persistent_cache = "";
+
+  // Create and Open DB
+  DBCloud* db;
+  s = DBCloud::Open(options, kDBPath, persistent_cache, 0, &db);
+
+  if (!s.ok()) {
+    fprintf(stderr, "--------------xxx Unable to open db at path %s in bucket %s. %s\n",
+            kDBPath.c_str(), bucketName.c_str(), s.ToString().c_str());
+    return;
+  }
+
+  // Put key-value into main db
+  s = db->Put(WriteOptions(), "key1", "value");
+  assert(s.ok());
+  std::string value;
+
+  // get value from main db
+  s = db->Get(ReadOptions(), "key1", &value);
+  assert(s.ok());
+  assert(value == "value");
+
+  // Flush all data from main db to sst files.
+  db->Flush(FlushOptions());
+
+  delete db;
+
+  fprintf(stdout, "Successfully used db at %s and clone at %s in bucket %s.\n",
+          kDBPath.c_str(), kClonePath.c_str(), bucketName.c_str());
+}
+/*
 Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
                const std::string& src_object_path,
                const std::string& dest_bucket,
@@ -96,7 +166,8 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
   // globally unique. S3 bucket-namess need to be globlly unique.
   // If you want to rerun this example, then unique user-name suffix here.
   char* user = getenv("USER");
-  kBucketSuffix2_src.append(user); kBucketSuffix2_dest.append(user);
+  kBucketSuffix2_src.append(user);
+  kBucketSuffix2_dest.append(user);
 
   const std::string bucketPrefix = "rockset.";
   // create a bucket name for debugging purposes
@@ -133,7 +204,7 @@ Status CloneDB(const std::string& clone_name, const std::string& src_bucket,
   DBCloud* db;
   st = DBCloud::Open(options, kClonePath, persistent_cache, 0, &db);
   if (!st.ok()) {
-    fprintf(stderr, "Unable to open clone at path %s in bucket %s. %s\n",
+    fprintf(stderr, "iiiiii-----------------Unable to open clone at path %s in bucket %s. %s\n",
             kClonePath.c_str(), kBucketSuffix2_src.c_str(), st.ToString().c_str());
     return st;
   }
@@ -160,7 +231,7 @@ TEST_F(CloudTest, clone_s3) {
   // Append the user name to the bucket name in an attempt to make it
   // globally unique. S3 bucket-namess need to be globlly unique.
   // If you want to rerun this example, then unique user-name suffix here.
-  char* user = getenv("USER");
+  /*char* user = getenv("USER");
   kBucketSuffix.append(user);
 
   const std::string bucketPrefix = "rockset.";
@@ -169,12 +240,14 @@ TEST_F(CloudTest, clone_s3) {
 
   // Needed if using bucket prefix other than the default "rockset."
   cloud_fs_options.src_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
-  cloud_fs_options.dest_bucket.SetBucketName(kBucketSuffix, bucketPrefix);
-
+  cloud_fs_options.dest_bucket.SetBucketName(kBucketSuffix, bucketPrefix);*//*
+  std::string bucketName = "xx";
+  cloud_fs_options.src_bucket.SetBucketName("database", "pika.");
+  cloud_fs_options.dest_bucket.SetBucketName("database", "pika.");
   // Create a new AWS cloud env Status
   CloudFileSystem* cfs;
   Status s = CloudFileSystem::NewAwsFileSystem(
-      FileSystem::Default(), kBucketSuffix, kDBPath, kRegion, kBucketSuffix,
+      FileSystem::Default(), "database", kDBPath, kRegion, "database",
       kDBPath, kRegion, cloud_fs_options, nullptr, &cfs);
   if (!s.ok()) {
     fprintf(stderr, "Unable to create cloud env in bucket %s. %s\n",
@@ -198,8 +271,9 @@ TEST_F(CloudTest, clone_s3) {
   // Create and Open DB
   DBCloud* db;
   s = DBCloud::Open(options, kDBPath, persistent_cache, 0, &db);
+
   if (!s.ok()) {
-    fprintf(stderr, "Unable to open db at path %s in bucket %s. %s\n",
+    fprintf(stderr, "--------------xxx Unable to open db at path %s in bucket %s. %s\n",
             kDBPath.c_str(), bucketName.c_str(), s.ToString().c_str());
     return;
   }
@@ -226,7 +300,7 @@ TEST_F(CloudTest, clone_s3) {
   s = CloneDB("clone1", kBucketSuffix, kDBPath, kBucketSuffix, kClonePath,
               cloud_fs_options, &clone_db, &clone_env);
   if (!s.ok()) {
-    fprintf(stderr, "Unable to clone db at path %s in bucket %s. %s\n",
+    fprintf(stderr, "-------yy----Unable to clone db at path %s in bucket %s. %s\n",
             kDBPath.c_str(), bucketName.c_str(), s.ToString().c_str());
     return;
   }
@@ -248,8 +322,8 @@ TEST_F(CloudTest, clone_s3) {
 
   fprintf(stdout, "Successfully used db at %s and clone at %s in bucket %s.\n",
           kDBPath.c_str(), kClonePath.c_str(), bucketName.c_str());
-}
-
+}*/
+/*
 TEST_F(CloudTest, get_clone_s3) {
   // cloud environment config options here
   CloudFileSystemOptions cloud_fs_options;
@@ -462,7 +536,7 @@ TEST_F(CloudTest, del_bucket_s3) {
   }
 
   Aws::ShutdownAPI(options);
-}
+}*/
 
 int main(int argc, char** argv) {
   if (!pstd::FileExists("./log")) {

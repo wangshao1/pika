@@ -170,7 +170,6 @@ Status CloudBinlog::GetOldestBinlogToKeep(uint32_t* filenum, uint32_t* term, uin
   if (term) {
     *term = version_->term_;
   }
-  LOG(WARNING) << "oldest binlog filenum to keep is: " << *filenum;
   return Status::OK();
 }
 
@@ -221,7 +220,6 @@ Status CloudBinlog::Put(const std::string& item, uint32_t db_id, uint32_t rocksd
   }
 
   version_->keep_filenum_ = keep_filenum;
-  LOG(WARNING) << "rocksdb_id: " << rocksdb_id << "type: " << type << " oldest filenum to keep: " << keep_filenum;
   return s;
 }
 

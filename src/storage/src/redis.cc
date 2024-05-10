@@ -581,18 +581,14 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
 }
 
 Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
-  LOG(WARNING) << "ReOpenRocksDB, closing old rocksdb";
   Close();
-  LOG(WARNING) << "ReOpenRocksDB, opening new rocksdb";
   Open(opt, db_path_);
   return Status::OK();
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
-  DEFER {
-    LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master << " done";
-  };
-  LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master;
+  LOG(WARNING) << "switchMaster from " << (is_old_master ? "master" : "slave") 
+               << " to " << (is_new_master ? "master" : "slave");
   if (is_old_master && is_new_master) {
     // Do nothing
     return Status::OK();
@@ -627,7 +623,6 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     }
     uint64_t remote_manifest_sequence = 0;
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
-    LOG(WARNING) << "switchmaster, remote_manifest_sequence: " << remote_manifest_sequence << " local_manifest_sequence: " << local_manifest_sequence;
     // local version behind remote, directly reopen
     if (local_manifest_sequence < remote_manifest_sequence) {
       return ReOpenRocksDB(storage_options);
@@ -642,12 +637,10 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
-    LOG(WARNING) << "flush memtables ...";
 
     rocksdb::FlushOptions fops;
     fops.wait = true;
     db_->Flush(fops, handles_);
-    LOG(WARNING) << "flush memtables done"; 
     return Status::OK();
   }
   return Status::OK();
@@ -746,9 +739,6 @@ Status Redis::ApplyWAL(int type, const std::string& content,
   rlr.type = rtype;
 
   auto s = db_->ApplyReplicationLogRecord(rlr, "", nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
-  LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
-               << " log record type: " << rtype
-               << " status: " << s.ToString();
   if (!s.ok()) {
     return s;
   }
@@ -773,11 +763,8 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   }
 
   if (!redis_inst->IsMaster()) {
-    LOG(WARNING) << "rocksdb not master, skip write binlog";
     return "0";
   }
-
-  LOG(WARNING) << "write binlogitem " << " db_id: " << db_id << " type: " << record.type;
 
   auto s = wal_writer_->Put(record.contents, db_id,
       redis_inst->GetIndex(), RocksDBRecordType(record.type));

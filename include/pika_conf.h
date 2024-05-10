@@ -829,7 +829,7 @@ class PikaConf : public pstd::BaseConf {
   std::string blob_compression_type_ = "none";
 
 #ifdef USE_S3
-  int64_t sst_cache_size_ = 10 << 30;
+  int64_t sst_cache_size_ = 10LL << 30;
 #endif
 
   // rocksdb-cloud options

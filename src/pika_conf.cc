@@ -555,7 +555,7 @@ int PikaConf::Load() {
 #ifdef USE_S3
   GetConfInt64("sst-cache-size", &sst_cache_size_);
   if (sst_cache_size_ <= 0) {
-    sst_cache_size_ = 10 << 30;
+    sst_cache_size_ = 10LL << 30;
   }
 #endif
   GetConfInt64Human("blob-file-size", &blob_file_size_);

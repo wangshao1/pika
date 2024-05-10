@@ -77,7 +77,7 @@ struct StorageOptions {
   size_t small_compaction_duration_threshold = 10000;
 #ifdef USE_S3
   rocksdb::CloudFileSystemOptions cloud_fs_options;  // rocksdb-cloud option
-  int64_t sst_cache_size_;
+  int64_t sst_cache_size_ = 10LL << 30;
 #endif
   Status ResetOptions(const OptionType& option_type, const std::unordered_map<std::string, std::string>& options_map);
 };

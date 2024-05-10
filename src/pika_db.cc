@@ -670,11 +670,11 @@ rocksdb::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
 
 rocksdb::Status DB::ApplyWAL(int rocksdb_id,
                              int type, const std::string& content) {
-  if (type == storage::RocksDBRecordType::kMemtableWrite &&
+  if (type == static_cast<int>(storage::RocksDBRecordType::kMemtableWrite) &&
      storage_->ShouldSkip(rocksdb_id, content)) {
       return rocksdb::Status::OK();
   }
-  if (type == storage::RocksDBRecordType::kFlushDB) {
+  if (type == static_cast<int>(storage::RocksDBRecordType::kFlushDB)) {
     auto s = storage_->FlushDBAtSlave(rocksdb_id);
     return s;
   }

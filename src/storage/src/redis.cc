@@ -76,8 +76,7 @@ void Redis::Close() {
 Status Redis::FlushDBAtSlave() {
   Close();
   pstd::DeleteDir(db_path_);
-  auto s = Open(storage_options_, db_path_);
-  return s;
+  return Open(storage_options_, db_path_);
 }
 
 Status Redis::FlushDB() {
@@ -108,7 +107,7 @@ Status Redis::FlushDB() {
   Close();
   pstd::DeleteDir(db_path_);
   Open(storage_options_, db_path_);
-  wal_writer_->Put("flushdb", 0/*db_id*/, index_, kFlushDB);
+  wal_writer_->Put("flushdb", 0/*db_id*/, index_, static_cast<uint32_t>(RocksDBRecordType::kFlushDB));
   return s;
 }
 
@@ -734,7 +733,7 @@ public:
     return Status::OK();
   }
 private:
-  std::unordered_set<std::string>* redis_keys_;
+  std::unordered_set<std::string>* redis_keys_ = nullptr;
 };
 
 Status Redis::ApplyWAL(int type, const std::string& content,
@@ -780,7 +779,7 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   LOG(WARNING) << "write binlogitem " << " db_id: " << db_id << " type: " << record.type;
 
   auto s = wal_writer_->Put(record.contents, db_id,
-      redis_inst->GetIndex(), RocksDBRecordType(record.type));
+      redis_inst->GetIndex(), record.type);
   if (!s.ok()) {
     LOG(ERROR) << "write binlog failed, db_id: " << db_id
                << " rocksdb_id: " << redis_inst->GetIndex();

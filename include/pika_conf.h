@@ -355,6 +355,9 @@ class PikaConf : public pstd::BaseConf {
   void UnsetCacheDisableFlag() { tmp_cache_disable_flag_ = false; }
   bool enable_blob_files() { return enable_blob_files_; }
   int64_t min_blob_size() { return min_blob_size_; }
+#ifdef USE_S3
+  int64_t SSTCacheSize() const { return sst_cache_size_; }
+#endif
   int64_t blob_file_size() { return blob_file_size_; }
   std::string blob_compression_type() { return blob_compression_type_; }
   bool enable_blob_garbage_collection() { return enable_blob_garbage_collection_; }
@@ -824,6 +827,10 @@ class PikaConf : public pstd::BaseConf {
   int64_t blob_num_shard_bits_ = 0;
   int64_t blob_file_size_ = 256 * 1024 * 1024;  // 256M
   std::string blob_compression_type_ = "none";
+
+#ifdef USE_S3
+  int64_t sst_cache_size_ = 10 << 30;
+#endif
 
   // rocksdb-cloud options
   std::string cloud_endpoint_override_;

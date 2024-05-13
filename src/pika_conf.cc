@@ -552,6 +552,12 @@ int PikaConf::Load() {
   if (min_blob_size_ <= 0) {
     min_blob_size_ = 4096;
   }
+#ifdef USE_S3
+  GetConfInt64("sst-cache-size", &sst_cache_size_);
+  if (sst_cache_size_ <= 0) {
+    sst_cache_size_ = 10LL << 30;
+  }
+#endif
   GetConfInt64Human("blob-file-size", &blob_file_size_);
   if (blob_file_size_ <= 0) {
     blob_file_size_ = 256 * 1024 * 1024;
@@ -580,7 +586,6 @@ int PikaConf::Load() {
     max_rsync_parallel_num_ = 4;
   }
 
-#ifdef USE_S3
   // rocksdb-cloud options
   GetConfStr("cloud-endpoint-override", &cloud_endpoint_override_);
   GetConfStr("cloud-access-key", &cloud_access_key_);
@@ -591,7 +596,6 @@ int PikaConf::Load() {
   GetConfStr("cloud-dest-bucket-prefix", &cloud_dest_bucket_prefix_);
   GetConfStr("cloud-dest-bucket-suffix", &cloud_dest_bucket_suffix_);
   GetConfStr("cloud-dest-bucket-region", &cloud_dest_bucket_region_);
-#endif
 
   return ret;
 }

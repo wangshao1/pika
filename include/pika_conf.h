@@ -355,6 +355,9 @@ class PikaConf : public pstd::BaseConf {
   void UnsetCacheDisableFlag() { tmp_cache_disable_flag_ = false; }
   bool enable_blob_files() { return enable_blob_files_; }
   int64_t min_blob_size() { return min_blob_size_; }
+#ifdef USE_S3
+  int64_t SSTCacheSize() const { return sst_cache_size_; }
+#endif
   int64_t blob_file_size() { return blob_file_size_; }
   std::string blob_compression_type() { return blob_compression_type_; }
   bool enable_blob_garbage_collection() { return enable_blob_garbage_collection_; }
@@ -398,7 +401,6 @@ class PikaConf : public pstd::BaseConf {
   uint32_t acl_pubsub_default() { return acl_pubsub_default_.load(); }
   uint32_t acl_log_max_len() { return acl_Log_max_len_.load(); }
 
-#ifdef USE_S3
   // rocksdb-cloud options
   std::string cloud_endpoint_override() { return cloud_endpoint_override_; }
   std::string cloud_access_key() { return cloud_access_key_; }
@@ -409,7 +411,6 @@ class PikaConf : public pstd::BaseConf {
   std::string cloud_dest_bucket_prefix() { return cloud_dest_bucket_prefix_; }
   std::string cloud_dest_bucket_suffix() { return cloud_dest_bucket_suffix_; }
   std::string cloud_dest_bucket_region() { return cloud_dest_bucket_region_; }
-#endif
 
   // Setter
   void SetPort(const int value) {
@@ -828,6 +829,9 @@ class PikaConf : public pstd::BaseConf {
   std::string blob_compression_type_ = "none";
 
 #ifdef USE_S3
+  int64_t sst_cache_size_ = 10LL << 30;
+#endif
+
   // rocksdb-cloud options
   std::string cloud_endpoint_override_;
   std::string cloud_access_key_;
@@ -840,7 +844,6 @@ class PikaConf : public pstd::BaseConf {
   std::string cloud_dest_bucket_prefix_ = "pika.";
   std::string cloud_dest_bucket_suffix_ = "database";
   std::string cloud_dest_bucket_region_;
-#endif
 
   std::shared_mutex rwlock_;
 

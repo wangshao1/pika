@@ -333,6 +333,12 @@ constexpr int PIKA_LOCAL = 0;
 constexpr int PIKA_CLOUD = 1;
 
 /*
+ * cloud tmp conf
+ * todo: TBD based on deployment status
+ */
+const std::string kRegion = "us-west-2";
+
+/*
  * cache size
  */
 #define PIKA_CACHE_SIZE_MIN       536870912    // 512M

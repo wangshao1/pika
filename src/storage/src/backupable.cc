@@ -6,8 +6,11 @@
 #include <dirent.h>
 #include <utility>
 
+#include "include/pika_conf.h"
 #include "storage/backupable.h"
 #include "storage/storage.h"
+
+extern const std::string kRegion;
 
 namespace storage {
 
@@ -140,6 +143,71 @@ Status BackupEngine::CreateNewBackup(const std::string& dir) {
 
   return s;
 }
+
+std::string GenBackUpDirectory(std::string& db_path) {
+  // dbpath :1."db/"、2."db"、3."bak/db"
+  size_t lastSepPos = db_path.rfind('/');
+  if (lastSepPos != std::string::npos) {
+    if (db_path.back() == '/') {
+      db_path.replace(lastSepPos, std::string::npos, "_bak/");
+      return db_path;
+    } else {
+      return db_path + "_bak/";
+    }
+  } else {
+    return db_path.append("_bak/");
+  }
+}
+
+std::string DBPath(const std::string& path, const std::string& db_name) {
+  char buf[100];
+  snprintf(buf, sizeof(buf), "%s/", db_name.data());
+  return path + buf;
+}
+
+Status BackupEngine::CreateNewCloudBackup(rocksdb::CloudFileSystemOptions& cloud_fs_options,
+                                          PikaConf* pika_conf) {
+  Status s = Status::OK();
+
+  std::string src_bucket = cloud_fs_options.src_bucket.GetBucketName();
+  cloud_fs_options.src_bucket.SetBucketName(src_bucket + ".backup");
+  cloud_fs_options.dest_bucket.SetBucketName(src_bucket + ".backup");
+  std::string db_path_tmp = pika_conf->db_path();
+  std::string clone_path = GenBackUpDirectory(db_path_tmp);
+
+  //todo: At present, this operation is not supported online.
+  // It will be modified according to deployment in the future
+  for (auto& db_pika : pika_conf->db_structs()) {
+    std::string db_path = DBPath(pika_conf->db_path(), db_pika.db_name);
+    std::string clone_db_path = DBPath(clone_path, db_pika.db_name);
+    for (int i = 0; i < db_pika.db_instance_num; i++) {
+      rocksdb::CloudFileSystem* cfs;
+      s = rocksdb::CloudFileSystem::NewAwsFileSystem(
+          rocksdb::FileSystem::Default(), src_bucket,
+          db_path + std::to_string(i), kRegion,
+          src_bucket + ".backup",clone_db_path + std::to_string(i),
+          kRegion, cloud_fs_options, nullptr, &cfs);
+
+      if (!s.ok()) {
+        return s;
+      }
+      std::shared_ptr<rocksdb::FileSystem> fs(cfs);
+      auto cloud_env = NewCompositeEnv(fs);
+      Options options;
+      options.env = cloud_env.get();
+      // open clone
+      rocksdb::DBCloud* db;
+      s = rocksdb::DBCloud::Open(options, clone_db_path + std::to_string(i),
+                                 "", 0, &db);
+      if (!s.ok()) {
+        return s;
+      }
+      db->Savepoint();
+    }
+  }
+  return s;
+}
+
 
 void BackupEngine::StopBackup() {
   // DEPRECATED

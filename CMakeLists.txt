@@ -592,7 +592,7 @@ ExternalProject_Add(rocksdb
   #temporary for debug, skip download from github
   http://10.224.129.40:8000/archive/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=3302dfcfc2fda422197d0517a1335edb
+  MD5=f97ae648ad0924310e50cefbb1376e82
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND
@@ -795,7 +795,7 @@ if (USE_PIKA_TOOLS)
 endif()
 aux_source_directory(src DIR_SRCS)
 
-# # generate version
+# generate version
 string(TIMESTAMP TS "%Y-%m-%d %H:%M:%S" UTC)
 set(PIKA_BUILD_DATE "${TS}" CACHE STRING "the time we first built pika")
 
@@ -853,6 +853,11 @@ if (USE_S3)
   target_link_libraries(${PROJECT_NAME} ${AWSSDK_LINK_LIBRARIES})
 endif()
 
+# SSL
+find_package(OpenSSL REQUIRED)
+include_directories(${OPENSSL_INCLUDE_DIR})
+target_link_libraries(${PROJECT_NAME} OpenSSL::SSL OpenSSL::Crypto)
+
 add_dependencies(${PROJECT_NAME}
   gflags
   gtest
@@ -896,7 +901,9 @@ target_link_libraries(${PROJECT_NAME}
   libz.a
   librediscache.a
   ${LIBUNWIND_LIBRARY}
-  ${JEMALLOC_LIBRARY})
+  ${JEMALLOC_LIBRARY}
+  ssl
+  crypto)
 
 option(USE_SSL "Enable SSL support" OFF)
 add_custom_target(

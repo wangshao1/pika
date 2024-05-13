@@ -65,6 +65,7 @@ enum TaskType {
   kStartKeyScan,
   kStopKeyScan,
   kBgSave,
+  kCloudBgSave,
   kCompactRangeStrings,
   kCompactRangeHashes,
   kCompactRangeSets,

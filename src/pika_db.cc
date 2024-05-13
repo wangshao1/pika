@@ -75,6 +75,19 @@ void DB::BgSaveDB() {
   g_pika_server->BGSaveTaskSchedule(&DoBgSave, static_cast<void*>(bg_task_arg));
 }
 
+void DB::CloudBgSaveDB() {
+  std::shared_lock l(dbs_rw_);
+  std::lock_guard ml(bgsave_protector_);
+  if (bgsave_info_.bgsaving) {
+    return;
+  }
+  bgsave_info_.bgsaving = true;
+  auto bg_task_arg = new BgTaskArg();
+  bg_task_arg->db = shared_from_this();
+  bg_task_arg->cloud_fs_options = g_pika_server->storage_options().cloud_fs_options;
+  g_pika_server->BGSaveTaskSchedule(&DoCloudBgSave, static_cast<void*>(bg_task_arg));
+}
+
 void DB::SetBinlogIoError() { return binlog_io_error_.store(true); }
 void DB::SetBinlogIoErrorrelieve() { return binlog_io_error_.store(false); }
 bool DB::IsBinlogIoError() { return binlog_io_error_.load(); }
@@ -298,6 +311,12 @@ void DB::DoBgSave(void* arg) {
   bg_task_arg->db->FinishBgsave();
 }
 
+void DB::DoCloudBgSave(void* arg) {
+  std::unique_ptr<BgTaskArg> bg_task_arg(static_cast<BgTaskArg*>(arg));
+  bg_task_arg->db->RunCloudBgsaveEngine(bg_task_arg->cloud_fs_options);
+  bg_task_arg->db->FinishCloudBgsave();
+}
+
 bool DB::RunBgsaveEngine() {
   // Prepare for Bgsaving
   if (!InitBgsaveEnv() || !InitBgsaveEngine()) {
@@ -324,6 +343,15 @@ bool DB::RunBgsaveEngine() {
   return true;
 }
 
+void DB::RunCloudBgsaveEngine(rocksdb::CloudFileSystemOptions& cloud_fs_options) {
+  rocksdb::Status s = bgsave_engine_->CreateNewCloudBackup(cloud_fs_options, g_pika_conf.get());
+  if (!s.ok()) {
+    LOG(WARNING) << db_name_ << " create new cloud backup failed :" << s.ToString();
+    return;
+  }
+  LOG(INFO) << db_name_ << " create new cloud backup finished.";
+}
+
 BgSaveInfo DB::bgsave_info() {
   std::lock_guard l(bgsave_protector_);
   return bgsave_info_;
@@ -333,6 +361,11 @@ void DB::FinishBgsave() {
   std::lock_guard l(bgsave_protector_);
   bgsave_info_.bgsaving = false;
   g_pika_server->UpdateLastSave(time(nullptr));
+}
+
+void DB::FinishCloudBgsave() {
+  std::lock_guard l(bgsave_protector_);
+  bgsave_info_.bgsaving = false;
 }
 
 // Prepare engine, need bgsave_protector protect

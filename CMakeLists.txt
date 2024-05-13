@@ -593,7 +593,7 @@ ExternalProject_Add(rocksdb
   #http://10.224.129.40:8000/archive/rocksdb_cloud.tar.gz
   /home/wangshaoyi/work/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=345d9b6a73c302caf4a2f51313ce70e9
+  MD5=864ec1f5b1edf91373f5922d77485562
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND

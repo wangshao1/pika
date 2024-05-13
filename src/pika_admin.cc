@@ -12,17 +12,22 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include <glog/logging.h>
+#include <aws/core/Aws.h>
+#include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/utils/json/JsonSerializer.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/DeleteBucketRequest.h>
+#include <aws/s3/model/DeleteObjectRequest.h>
+#include <aws/s3/model/ListObjectsRequest.h>
+#include <glog/logging.h>
 
 #include "include/build_version.h"
 #include "include/pika_cmd_table_manager.h"
+#include "include/pika_conf.h"
 #include "include/pika_rm.h"
 #include "include/pika_server.h"
 #include "include/pika_version.h"
-#include "include/pika_conf.h"
 #include "pstd/include/rsync.h"
-
 
 using pstd::Status;
 using namespace Aws::Utils;
@@ -337,7 +342,11 @@ void BgsaveCmd::DoInitial() {
 }
 
 void BgsaveCmd::Do() {
-  g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kBgSave});
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kCloudBgSave});
+  } else {
+    g_pika_server->DoSameThingSpecificDB(bgsave_dbs_, {TaskType::kBgSave});
+  }
   LogCommand();
   res_.AppendContent("+Background saving started");
 }
@@ -2780,6 +2789,72 @@ void DelbackupCmd::DoInitial() {
 }
 
 void DelbackupCmd::Do() {
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
+    Aws::SDKOptions options;
+    Aws::InitAPI(options);
+
+    Aws::Client::ClientConfiguration cfg;
+    cfg.endpointOverride = g_pika_conf->cloud_endpoint_override();
+    cfg.scheme = Aws::Http::Scheme::HTTP;
+    cfg.verifySSL = false;
+
+    Aws::Auth::AWSCredentials cred(g_pika_conf->cloud_access_key(),
+                                   g_pika_conf->cloud_secret_key());
+    Aws::S3::S3Client s3_client(cred, cfg,
+                                Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+                                false, Aws::S3::US_EAST_1_REGIONAL_ENDPOINT_OPTION::NOT_SET);
+
+    std::string bucket_name = g_pika_server->storage_options().cloud_fs_options.src_bucket.GetBucketName();
+    Aws::S3::Model::DeleteBucketRequest request_del_bucket;
+    Aws::S3::Model::ListObjectsRequest request_list_object;
+
+    request_del_bucket.SetBucket(bucket_name);
+    request_list_object.SetBucket(bucket_name);
+
+    bool truncated = false;
+    //list object and delete file
+    do {
+      auto list_objects = s3_client.ListObjects(request_list_object);
+      if (list_objects.IsSuccess()) {
+        for (const auto& object : list_objects.GetResult().GetContents())
+        {
+          Aws::S3::Model::DeleteObjectRequest request_del_object;
+          request_del_object.SetBucket(bucket_name);
+          request_del_object.SetKey(object.GetKey());
+          auto object_del_result = s3_client.DeleteObject(request_del_object);
+          if (!object_del_result.IsSuccess()) {
+            res_.SetRes(CmdRes::kErrOther, "DeleteFile error: " + object_del_result.GetError().GetMessage());
+            Aws::ShutdownAPI(options);
+            return;
+          }
+        }
+
+        // check if the next page is empty
+        truncated = list_objects.GetResult().GetIsTruncated();
+        if (truncated) {
+          request_list_object.SetMarker(list_objects.GetResult().GetNextMarker());
+        }
+      } else {
+        res_.SetRes(CmdRes::kErrOther, "ListObjects error: " + list_objects.GetError().GetMessage());
+        Aws::ShutdownAPI(options);
+        return;
+      }
+    } while (truncated);
+
+    //del bucket
+    //todo: At present, this operation is not supported online.
+    // It will be modified according to deployment in the future
+    auto bucket_del_result = s3_client.DeleteBucket(request_del_bucket);
+    if (!bucket_del_result.IsSuccess()) {
+      res_.SetRes(CmdRes::kErrOther, "DeleteBucket error: " + bucket_del_result.GetError().GetMessage());
+    } else {
+      res_.SetRes(CmdRes::kOk);
+    }
+
+    Aws::ShutdownAPI(options);
+    return;
+  }
+
   std::string db_sync_prefix = g_pika_conf->bgsave_prefix();
   std::string db_sync_path = g_pika_conf->bgsave_path();
   std::vector<std::string> dump_dir;
@@ -3266,17 +3341,15 @@ void PKPingCmd::DoInitial() {
     }
   }
 
-  if (g_pika_conf->pika_mode() == PIKA_CLOUD) {
-    if (g_pika_server->role() == PIKA_ROLE_MASTER) {
-        for (auto const& slave : g_pika_server->slaves_) {
-            if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
-                g_pika_server->set_group_id(group_id_);
-                g_pika_server->set_lease_term_id(term_id_);
-            }
-        }
+  if (g_pika_conf->pika_mode() == PIKA_CLOUD
+      && g_pika_server->role() == PIKA_ROLE_MASTER) {
+    for (auto const& slave : g_pika_server->slaves_) {
+      if (std::find(masters_addr_.begin(), masters_addr_.end(), slave.ip_port) != masters_addr_.end()) {
+        g_pika_server->set_group_id(group_id_);
+        g_pika_server->set_lease_term_id(term_id_);
+      }
     }
   }
-
 }
 
 void PKPingCmd::Do() {

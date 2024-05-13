@@ -592,7 +592,7 @@ ExternalProject_Add(rocksdb
   #temporary for debug, skip download from github
   http://10.224.129.40:8000/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=fbcf0e166bfddf367063caa1dc583db8
+  MD5=0c108533cddb48c49b154507ad012558
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND
@@ -795,7 +795,7 @@ if (USE_PIKA_TOOLS)
 endif()
 aux_source_directory(src DIR_SRCS)
 
-# # generate version
+# generate version
 string(TIMESTAMP TS "%Y-%m-%d %H:%M:%S" UTC)
 set(PIKA_BUILD_DATE "${TS}" CACHE STRING "the time we first built pika")
 
@@ -852,6 +852,11 @@ if (USE_S3)
   include_directories(${AWS_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} ${AWSSDK_LINK_LIBRARIES})
 endif()
+
+# SSL
+find_package(OpenSSL REQUIRED)
+include_directories(${OPENSSL_INCLUDE_DIR})
+target_link_libraries(${PROJECT_NAME} OpenSSL::SSL OpenSSL::Crypto)
 
 add_dependencies(${PROJECT_NAME}
   gflags

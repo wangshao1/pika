@@ -486,6 +486,9 @@ Status PikaServer::DoSameThingSpecificDB(const std::set<std::string>& dbs, const
       case TaskType::kBgSave:
         db_item.second->BgSaveDB();
         break;
+      case TaskType::kCloudBgSave:
+        db_item.second->CloudBgSaveDB();
+        break;
       case TaskType::kCompactRangeStrings:
         db_item.second->CompactRange(storage::DataType::kStrings, arg.argv[0], arg.argv[1]);
         break;
@@ -1875,7 +1878,6 @@ void PikaServer::CacheConfigInit(cache::CacheConfig& cache_cfg) {
 bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
                                       const std::string& s3_bucket,
                                       const std::string& remote_path) {
-  sentinel_addr_ = "http://127.0.0.1:9876/api/topom/upload-s3";
   Aws::String url(sentinel_addr_);
   if (sentinel_client_ == nullptr) {
     sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());

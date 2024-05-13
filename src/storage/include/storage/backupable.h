@@ -11,6 +11,7 @@
 #include "rocksdb/db.h"
 
 #include "db_checkpoint.h"
+#include "include/pika_conf.h"
 #include "storage.h"
 #include "util.h"
 
@@ -48,6 +49,9 @@ class BackupEngine {
   Status SetBackupContent();
 
   Status CreateNewBackup(const std::string& dir);
+
+  Status CreateNewCloudBackup(rocksdb::CloudFileSystemOptions& cloud_fs_options,
+                              PikaConf* pika_conf) ;
 
   void StopBackup();
 

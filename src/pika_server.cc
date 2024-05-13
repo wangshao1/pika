@@ -1830,7 +1830,6 @@ void PikaServer::CacheConfigInit(cache::CacheConfig& cache_cfg) {
 bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
                                       const std::string& s3_bucket,
                                       const std::string& remote_path) {
-  sentinel_addr_ = "http://127.0.0.1:18080/api/topom/upload-s3";
   Aws::String url(sentinel_addr_);
   if (sentinel_client_ == nullptr) {
     sentinel_client_ = CreateHttpClient(Aws::Client::ClientConfiguration());

@@ -2842,6 +2842,8 @@ void DelbackupCmd::Do() {
     } while (truncated);
 
     //del bucket
+    //todo: At present, this operation is not supported online.
+    // It will be modified according to deployment in the future
     auto bucket_del_result = s3_client.DeleteBucket(request_del_bucket);
     if (!bucket_del_result.IsSuccess()) {
       res_.SetRes(CmdRes::kErrOther, "DeleteBucket error: " + bucket_del_result.GetError().GetMessage());

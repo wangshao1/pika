@@ -175,6 +175,8 @@ Status BackupEngine::CreateNewCloudBackup(rocksdb::CloudFileSystemOptions& cloud
   std::string db_path_tmp = pika_conf->db_path();
   std::string clone_path = GenBackUpDirectory(db_path_tmp);
 
+  //todo: At present, this operation is not supported online.
+  // It will be modified according to deployment in the future
   for (auto& db_pika : pika_conf->db_structs()) {
     std::string db_path = DBPath(pika_conf->db_path(), db_pika.db_name);
     std::string clone_db_path = DBPath(clone_path, db_pika.db_name);

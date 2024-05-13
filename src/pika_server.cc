@@ -24,6 +24,9 @@
 #include <aws/core/http/HttpClient.h>
 #include <aws/core/http/standard/StandardHttpRequest.h>
 #include <aws/core/client/ClientConfiguration.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 #include "net/include/net_cli.h"
 #include "net/include/net_interfaces.h"
@@ -52,6 +55,51 @@ extern std::unique_ptr<PikaCmdTableManager> g_pika_cmd_table_manager;
 extern std::unique_ptr<net::NetworkStatistic> g_network_statistic;
 // QUEUE_SIZE_THRESHOLD_PERCENTAGE is used to represent a percentage value and should be within the range of 0 to 100.
 const size_t QUEUE_SIZE_THRESHOLD_PERCENTAGE = 75;
+
+namespace {
+char * base64Encode(const char *buffer, int length, bool newLine)
+{
+	BIO *bmem = NULL;
+	BIO *b64 = NULL;
+	BUF_MEM *bptr;
+
+	b64 = BIO_new(BIO_f_base64());
+	if (!newLine) {
+		BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+	}
+	bmem = BIO_new(BIO_s_mem());
+	b64 = BIO_push(b64, bmem);
+	BIO_write(b64, buffer, length);
+	BIO_flush(b64);
+	BIO_get_mem_ptr(b64, &bptr);
+	BIO_set_close(b64, BIO_NOCLOSE);
+
+	char *buff = (char *)malloc(bptr->length + 1);
+	memcpy(buff, bptr->data, bptr->length);
+	buff[bptr->length] = 0;
+	BIO_free_all(b64);
+
+	return buff;
+}
+
+char * base64Decode(char *input, int length, bool newLine)
+{
+	BIO *b64 = NULL;
+	BIO *bmem = NULL;
+	char *buffer = (char *)malloc(length);
+	memset(buffer, 0, length);
+	b64 = BIO_new(BIO_f_base64());
+	if (!newLine) {
+		BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+	}
+	bmem = BIO_new_mem_buf(input, length);
+	bmem = BIO_push(b64, bmem);
+	BIO_read(bmem, buffer, length);
+	BIO_free_all(bmem);
+
+	return buffer;
+}
+}
 
 void DoPurgeDir(void* arg) {
   std::unique_ptr<std::string> path(static_cast<std::string*>(arg));
@@ -1432,8 +1480,8 @@ void PikaServer::InitStorageOptions() {
   cloud_fs_opts.src_bucket.SetRegion(g_pika_conf->cloud_src_bucket_region());
   cloud_fs_opts.dest_bucket.SetBucketName(g_pika_conf->cloud_dest_bucket_suffix(), g_pika_conf->cloud_dest_bucket_prefix());
   cloud_fs_opts.dest_bucket.SetRegion(g_pika_conf->cloud_dest_bucket_region());
-  //cloud_fs_opts.upload_meta_func = std::bind(&PikaServer::UploadMetaToSentinel, this,
-                     //                        std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
+  cloud_fs_opts.upload_meta_func = std::bind(&PikaServer::UploadMetaToSentinel, this,
+                                             std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 #endif
 }
 
@@ -1858,7 +1906,10 @@ bool PikaServer::UploadMetaToSentinel(const std::string& local_path,
     LOG(WARNING) << "read file failed, local_path: " << local_path
                  << " fread size: " << result << "fsize: " << f_size;
   }
-  std::string content(buffer, result);
+  char* base64_enc = base64Encode(buffer, result, false);
+  std::string content(base64_enc, strlen(base64_enc));
+  LOG(WARNING) << "raw data size: " << result << " encode size: " << strlen(base64_enc) << " enc str: " << base64_enc;
+  free(base64_enc);
 
   // construct request body
   Json::JsonValue request_doc;

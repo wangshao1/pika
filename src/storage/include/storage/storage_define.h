@@ -129,5 +129,17 @@ inline const char* SeekUserkeyDelim(const char* ptr, int length) {
     return ptr;
 }
 
+#ifdef USE_S3
+  // this enum is an extention of ReplicationLogRecord's Type
+  // reserves kMemtableWrite, kMemtableSwitch, kManifestWrite,
+  // add kFlushDB which indicates a pika's flushdb call.
+  enum class RocksDBRecordType : uint32_t {
+    kMemtableWrite,
+    kMemtableSwitch,
+    kManifestWrite,
+    kFlushDB = 10, // newly add enum, specity pika's flushdb operation
+  };
+#endif
+
 } // end namespace storage
 #endif

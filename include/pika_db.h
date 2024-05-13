@@ -160,6 +160,9 @@ class DB : public std::enable_shared_from_this<DB>, public pstd::noncopyable {
    */
   rocksdb::Status SwitchMaster(bool is_old_master, bool is_new_master);
 
+  rocksdb::Status ApplyWAL(int rocksdb_id,
+                           int type, const std::string& content);
+
  private:
   bool opened_ = false;
   std::string dbsync_path_;

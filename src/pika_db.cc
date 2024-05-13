@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "include/pika_db.h"
+#include "storage/storage_define.h"
 
 #include "include/pika_cmd_table_manager.h"
 #include "include/pika_rm.h"
@@ -224,6 +225,12 @@ DisplayCacheInfo DB::GetCacheInfo() {
 }
 
 bool DB::FlushDBWithoutLock() {
+#ifdef USE_S3
+  LOG(INFO) << db_name_ << " flushing db...";
+  auto st = storage_->FlushDB();
+  LOG(INFO) << db_name_ << " flushing db done, status: " << st.ToString();
+  return st.ok();
+#endif
   if (bgsave_info_.bgsaving) {
     return false;
   }
@@ -692,4 +699,25 @@ bool DB::FlushDB() {
 
 rocksdb::Status DB::SwitchMaster(bool is_old_master, bool is_new_master) {
   return storage_->SwitchMaster(is_old_master, is_new_master);
+}
+
+rocksdb::Status DB::ApplyWAL(int rocksdb_id,
+                             int type, const std::string& content) {
+  if (type == static_cast<int>(storage::RocksDBRecordType::kMemtableWrite) &&
+     storage_->ShouldSkip(rocksdb_id, content)) {
+      return rocksdb::Status::OK();
+  }
+  if (type == static_cast<int>(storage::RocksDBRecordType::kFlushDB)) {
+    auto s = storage_->FlushDBAtSlave(rocksdb_id);
+    return s;
+  }
+  std::unordered_set<std::string> redis_keys;
+  auto s = storage_->ApplyWAL(rocksdb_id, type, content, &redis_keys);
+  if (!s.ok()) {
+    return s;
+  }
+  for (const auto& key : redis_keys) {
+    cache_->Del({key});
+  }
+  return s;
 }

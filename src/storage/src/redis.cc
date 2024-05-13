@@ -7,6 +7,8 @@
 
 #include "rocksdb/env.h"
 #include "db/write_batch_internal.h"
+#include "file/filename.h"
+#include "cloud/filename.h"
 
 #include "src/redis.h"
 #include "rocksdb/options.h"
@@ -32,7 +34,8 @@ Redis::Redis(Storage* const s, int32_t index, std::shared_ptr<pstd::WalWriter> w
     : storage_(s), index_(index),
       lock_mgr_(std::make_shared<LockMgr>(1000, 0, std::make_shared<MutexFactoryImpl>())),
       small_compaction_threshold_(5000),
-      small_compaction_duration_threshold_(10000) {
+      small_compaction_duration_threshold_(10000),
+      wal_writer_(wal_writer) {
   statistics_store_ = std::make_unique<LRUCache<std::string, KeyStatistics>>();
   scan_cursors_store_ = std::make_unique<LRUCache<std::string, std::string>>();
   spop_counts_store_ = std::make_unique<LRUCache<std::string, size_t>>();
@@ -70,16 +73,57 @@ void Redis::Close() {
 #endif
 }
 
+Status Redis::FlushDBAtSlave() {
+  Close();
+  pstd::DeleteDir(db_path_);
+  return Open(storage_options_, db_path_);
+}
+
+Status Redis::FlushDB() {
+  rocksdb::CancelAllBackgroundWork(db_, true);
+  std::string s3_bucket = storage_options_.cloud_fs_options.dest_bucket.GetBucketName();
+  std::string local_dbid;
+  auto s = ReadFileToString(cfs_->GetBaseFileSystem().get(), rocksdb::IdentityFileName(db_path_), &local_dbid);
+  LOG(INFO) << "local_dbid: " << local_dbid << " status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteDbid(s3_bucket, local_dbid);
+  LOG(INFO) << " deletedbid status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteCloudObject(s3_bucket, MakeCloudManifestFile(db_path_, ""));
+  LOG(INFO) << "deletecloudmanifestfromdest tatus: " << s.ToString(); 
+  if (!s.ok()) {
+    return s;
+  }
+  s = cfs_->DeleteCloudObject(s3_bucket, rocksdb::IdentityFileName(db_path_));
+  LOG(INFO) << "deleteidentityfile status: " << s.ToString(); 
+  if (!s.ok()) {
+    return s;
+  }
+  cfs_->SwitchMaster(false);
+  Close();
+  pstd::DeleteDir(db_path_);
+  Open(storage_options_, db_path_);
+  wal_writer_->Put("flushdb", 0/*db_id*/, index_, static_cast<uint32_t>(RocksDBRecordType::kFlushDB));
+  return s;
+}
+
 Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string& db_path) {
 
   StorageOptions storage_options(tmp_storage_options);
 #ifdef USE_S3
   db_path_ = db_path;
   storage_options_ = tmp_storage_options;
+  storage_options_.cloud_fs_options.dest_bucket.SetObjectPath(db_path_);
+  storage_options_.cloud_fs_options.src_bucket.SetObjectPath(db_path_);
   storage_options.cloud_fs_options.roll_cloud_manifest_on_open = true;
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
   storage_options.cloud_fs_options.skip_dbid_verification = true;
+  storage_options.cloud_fs_options.sst_file_cache = rocksdb::NewLRUCache(storage_options_.sst_cache_size_);
   storage_options.options.replication_log_listener = log_listener_;
   is_master_.store(tmp_storage_options.cloud_fs_options.is_master);
   if (!tmp_storage_options.cloud_fs_options.is_master) {
@@ -536,18 +580,14 @@ Status Redis::OpenCloudEnv(rocksdb::CloudFileSystemOptions opts, const std::stri
 }
 
 Status Redis::ReOpenRocksDB(const storage::StorageOptions& opt) {
-  LOG(WARNING) << "ReOpenRocksDB, closing old rocksdb";
   Close();
-  LOG(WARNING) << "ReOpenRocksDB, opening new rocksdb";
   Open(opt, db_path_);
   return Status::OK();
 }
 
 Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
-  DEFER {
-    LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master << " done";
-  };
-  LOG(WARNING) << "is_old_master: " << is_old_master << " is_new_master: " << is_new_master;
+  LOG(WARNING) << "switchMaster from " << (is_old_master ? "master" : "slave") 
+               << " to " << (is_new_master ? "master" : "slave");
   if (is_old_master && is_new_master) {
     // Do nothing
     return Status::OK();
@@ -582,7 +622,6 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     }
     uint64_t remote_manifest_sequence = 0;
     cfs_->GetMaxManifestSequenceFromCurrentManifest(db_->GetName(), &remote_manifest_sequence);
-    LOG(WARNING) << "switchmaster, remote_manifest_sequence: " << remote_manifest_sequence << " local_manifest_sequence: " << local_manifest_sequence;
     // local version behind remote, directly reopen
     if (local_manifest_sequence < remote_manifest_sequence) {
       return ReOpenRocksDB(storage_options);
@@ -597,12 +636,10 @@ Status Redis::SwitchMaster(bool is_old_master, bool is_new_master) {
     for (const auto& cf : handles_) {
       db_->SetOptions(cf, db_options);
     }
-    LOG(WARNING) << "flush memtables ...";
 
     rocksdb::FlushOptions fops;
     fops.wait = true;
     db_->Flush(fops, handles_);
-    LOG(WARNING) << "flush memtables done"; 
     return Status::OK();
   }
   return Status::OK();
@@ -615,7 +652,85 @@ bool Redis::ShouldSkip(const std::string& content) {
   return rocksdb::WriteBatchInternal::Sequence(&batch) != sq_number + 1;
 }
 
-Status Redis::ApplyWAL(int type, const std::string& content) {
+class WriteBatchHandler : public rocksdb::WriteBatch::Handler {
+public:
+  WriteBatchHandler(std::unordered_set<std::string>* redis_keys)
+  : redis_keys_(redis_keys) {}
+
+  Status PutCF(uint32_t column_family_id, const Slice& key,
+               const Slice& value) override {
+    return DeleteCF(column_family_id, key);
+  }
+
+  Status DeleteCF(uint32_t column_family_id, const Slice& key) override {
+    switch (column_family_id) {
+      case kStringsCF: {
+        ParsedBaseKey pbk(key);
+        redis_keys_->insert("K" + pbk.Key().ToString());
+        break;
+      }
+      case kHashesMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("H" + pbk.Key().ToString());
+        break;
+      }
+      case kHashesDataCF: {
+        ParsedHashesDataKey pbk(key);
+        redis_keys_->insert("H" + pbk.Key().ToString());
+        break;
+      }
+      case kSetsMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("S" + pbk.Key().ToString());
+        break;
+      }
+      case kSetsDataCF: {
+        ParsedSetsMemberKey pbk(key);
+        redis_keys_->insert("S" + pbk.Key().ToString());
+        break;
+      }
+      case kListsMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("L" + pbk.Key().ToString());
+        break;
+      }
+      case kListsDataCF: {
+        ParsedListsDataKey pbk(key);
+        redis_keys_->insert("L" + pbk.key().ToString());
+        break;
+      }
+      case kZsetsMetaCF: {
+        ParsedBaseMetaKey pbk(key);
+        redis_keys_->insert("Z" + pbk.Key().ToString());
+        break;
+      }
+      case kZsetsDataCF: {
+        ParsedZSetsMemberKey pbk(key);
+        redis_keys_->insert("Z" + pbk.Key().ToString());
+        break;
+      }
+      case kZsetsScoreCF: {
+        ParsedZSetsScoreKey pbk(key);
+        redis_keys_->insert("Z" + pbk.key().ToString());
+        break;
+      }
+      case kStreamsMetaCF: {
+        LOG(INFO) << "rediscache don't cache stream type";
+        break;
+      }
+      case kStreamsDataCF: {
+        LOG(INFO) << "rediscache don't cache stream type";
+        break;
+      }
+    }
+    return Status::OK();
+  }
+private:
+  std::unordered_set<std::string>* redis_keys_ = nullptr;
+};
+
+Status Redis::ApplyWAL(int type, const std::string& content,
+    std::unordered_set<std::string>* redis_keys) {
   rocksdb::ReplicationLogRecord::Type rtype = static_cast<rocksdb::ReplicationLogRecord::Type>(type);
   rocksdb::ReplicationLogRecord rlr;
   rocksdb::DBCloud::ApplyReplicationLogRecordInfo info;
@@ -623,12 +738,19 @@ Status Redis::ApplyWAL(int type, const std::string& content) {
   rlr.type = rtype;
 
   auto s = db_->ApplyReplicationLogRecord(rlr, "", nullptr, true, &info, rocksdb::DB::AR_EVICT_OBSOLETE_FILES);
-  LOG(WARNING) << "applying rocksdb WAL, rocksdb_id: " << index_
-               << " log record type: " << rtype
-               << " status: " << s.ToString();
+  if (!s.ok()) {
+    return s;
+  }
+  if (type != 0) {
+    return s;
+  }
+  
+  rocksdb::WriteBatch batch;
+  s = rocksdb::WriteBatchInternal::SetContents(&batch, content);
+  WriteBatchHandler handler(redis_keys);
+  s = batch.Iterate(&handler);
   return s;
 }
-
 
 std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord record) {
   Redis* redis_inst = (Redis*)inst_;
@@ -640,14 +762,11 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   }
 
   if (!redis_inst->IsMaster()) {
-    LOG(WARNING) << "rocksdb not master, skip write binlog";
     return "0";
   }
 
-  LOG(WARNING) << "write binlogitem " << " db_id: " << db_id << " type: " << record.type;
-
   auto s = wal_writer_->Put(record.contents, db_id,
-      redis_inst->GetIndex(), uint32_t(record.type));
+      redis_inst->GetIndex(), record.type);
   if (!s.ok()) {
     LOG(ERROR) << "write binlog failed, db_id: " << db_id
                << " rocksdb_id: " << redis_inst->GetIndex();

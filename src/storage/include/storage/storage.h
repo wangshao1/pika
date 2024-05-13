@@ -77,6 +77,7 @@ struct StorageOptions {
   size_t small_compaction_duration_threshold = 10000;
 #ifdef USE_S3
   rocksdb::CloudFileSystemOptions cloud_fs_options;  // rocksdb-cloud option
+  int64_t sst_cache_size_ = 10LL << 30;
 #endif
   Status ResetOptions(const OptionType& option_type, const std::unordered_map<std::string, std::string>& options_map);
 };
@@ -191,6 +192,8 @@ class Storage {
 
   Status Open(const StorageOptions& storage_options, const std::string& db_path, std::shared_ptr<pstd::WalWriter> wal_writer = nullptr);
 
+  Status FlushDB();
+
   Status LoadCursorStartKey(const DataType& dtype, int64_t cursor, char* type, std::string* start_key);
 
   Status StoreCursorStartKey(const DataType& dtype, int64_t cursor, char type, const std::string& next_key);
@@ -199,9 +202,11 @@ class Storage {
 
   std::unique_ptr<Redis>& GetDBInstance(const std::string& key);
 
-  Status ApplyWAL(int rocksdb_id, int type, const std::string& content);
+  Status ApplyWAL(int rocksdb_id, int type, const std::string& content,
+      std::unordered_set<std::string>* redis_keys);
 
   bool ShouldSkip(int rocksdb_id, const std::string& content);
+  Status FlushDBAtSlave(int rocksdb_id);
 
   // Strings Commands
 

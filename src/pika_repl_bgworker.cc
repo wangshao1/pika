@@ -14,6 +14,7 @@
 #include "pstd/include/pstd_defer.h"
 #include "src/pstd/include/scope_record_lock.h"
 #include "pika_cloud_binlog.pb.h"
+#include "storage/storage_define.h"
 
 extern PikaServer* g_pika_server;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
@@ -83,8 +84,6 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     }
   }
 
-  LOG(WARNING) << "slave receive binlogsync, begin offset: "<< pb_begin.ToString() << " end offset: " << pb_end.ToString();
-
   if (pb_begin == LogOffset()) {
     only_keepalive = true;
   }
@@ -134,7 +133,6 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
 
     // empty binlog treated as keepalive packet
     if (binlog_res.binlog().empty()) {
-      LOG(WARNING) << "slave receive empty binlog item";
       continue;
     }
 
@@ -154,13 +152,10 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto storage = g_pika_server->GetDB(worker->db_name_)->storage();
-      if (binlog_item.type() == 0 && storage->ShouldSkip(binlog_item.rocksdb_id(), binlog_item.content())) {
-        continue;
-      }
-      auto s = storage->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
+      auto s = g_pika_server->GetDB(worker->db_name_)->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
       if (!s.ok()) {
-        LOG(WARNING) << "rocksdb apply wal failed, error: " << s.ToString();
+        LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
+        slave_db->SetReplState(ReplState::kTryConnect);
         return;
       }
     } else {
@@ -195,7 +190,6 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     ack_end = productor_status;
     ack_end.l_offset.term = pb_end.l_offset.term;
   }
-  LOG(WARNING) << "slave Reply to master, ack_start: "<< ack_start.ToString() << " ack_end: " << ack_end.ToString() << "pb_end: " << pb_end.ToString();
 
   g_pika_rm->SendBinlogSyncAckRequest(db_name, ack_start, ack_end);
 }

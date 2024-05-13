@@ -115,6 +115,7 @@ class Redis {
   // Common Commands
   Status Open(const StorageOptions& storage_options, const std::string& db_path);
   void Close();
+  Status FlushDB();
 
   virtual Status CompactRange(const DataType& option_type, const rocksdb::Slice* begin, const rocksdb::Slice* end,
                               const ColumnFamilyType& type = kMetaAndData);
@@ -396,8 +397,10 @@ class Redis {
   }
 
 #ifdef USE_S3
-  Status ApplyWAL(int type, const std::string& content);
+  Status ApplyWAL(int type, const std::string& content,
+      std::unordered_set<std::string>* redis_keys);
   bool ShouldSkip(const std::string& content);
+  Status FlushDBAtSlave();
   Status SwitchMaster(bool is_old_master, bool is_new_master);
   void ResetLogListener(std::shared_ptr<rocksdb::ReplicationLogListener> handle) {
     log_listener_ = handle;
@@ -447,6 +450,7 @@ private:
   std::string db_path_;
   rocksdb::DBCloud* db_ = nullptr;
   std::shared_ptr<rocksdb::ReplicationLogListener> log_listener_;
+  std::shared_ptr<pstd::WalWriter> wal_writer_;
   StorageOptions storage_options_;
   std::atomic<bool> is_master_ = {true};
 #else

@@ -156,6 +156,7 @@ PikaServer::PikaServer()
   // init role
   std::string slaveof = g_pika_conf->slaveof();
 #ifdef USE_S3
+  storage_options_.sst_cache_size_ = g_pika_conf->SSTCacheSize();
   storage_options_.cloud_fs_options.is_master = true;
 #endif
   if (!slaveof.empty()) {

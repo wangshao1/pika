@@ -902,8 +902,7 @@ target_link_libraries(${PROJECT_NAME}
   librediscache.a
   ${LIBUNWIND_LIBRARY}
   ${JEMALLOC_LIBRARY}
-  ssl
-  crypto)
+)
 
 option(USE_SSL "Enable SSL support" OFF)
 add_custom_target(

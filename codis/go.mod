@@ -8,6 +8,7 @@ replace google.golang.org/grpc => google.golang.org/grpc v1.29.0
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/aws/aws-sdk-go v1.30.12
 	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/emirpasic/gods v1.18.1
 	github.com/garyburd/redigo v1.6.4
@@ -18,6 +19,7 @@ require (
 	github.com/martini-contrib/render v0.0.0-20150707142108-ec18f8345a11
 	github.com/samuel/go-zookeeper v0.0.0-20201211165307-7117e9ea2414
 	github.com/spinlock/jemalloc-go v0.0.0-20201010032256-e81523fb8524
+	github.com/stretchr/testify v1.8.0
 	go.etcd.io/etcd/client/v2 v2.305.7
 	golang.org/x/net v0.17.0
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0
@@ -26,10 +28,14 @@ require (
 require (
 	github.com/codegangsta/inject v0.0.0-20150114235600-33e0aa1cb7c0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.7 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.7 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

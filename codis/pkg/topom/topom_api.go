@@ -4,6 +4,7 @@
 package topom
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,12 +13,11 @@ import (
 	"strings"
 	"time"
 
-	_ "net/http/pprof"
-
 	"github.com/go-martini/martini"
 	"github.com/martini-contrib/binding"
 	"github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
+	_ "net/http/pprof"
 
 	"pika/codis/v2/pkg/models"
 	"pika/codis/v2/pkg/utils/errors"
@@ -522,8 +522,13 @@ func (s *apiServer) UploadManifestToS3(req *http.Request) (int, string) {
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
+
+	content, err := base64.StdEncoding.DecodeString(uploadReq.Content)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
 	if err := s.topom.UploadManifestToS3(uploadReq.GroupId, uploadReq.TermId, uploadReq.S3Bucket,
-		uploadReq.S3Path, uploadReq.Content); err != nil {
+		uploadReq.S3Path, content); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")

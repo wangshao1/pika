@@ -4,6 +4,8 @@
 package topom
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"time"
@@ -794,7 +796,7 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 	}, nil
 }
 
-func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, content string) error {
+func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename string, content []byte) error {
 	ctx, err := s.newContext()
 	if err != nil {
 		return err
@@ -824,14 +826,19 @@ func (s *Topom) UploadManifestToS3(gid int, tid int, bucket string, filename str
 		DisableEndpointHostPrefix: aws.Bool(true),
 	})
 
-	file, err := os.Create("./tmp")
+	file, err := os.Create("./upload-manifest")
 	if err != nil {
 		return errors.Errorf("Create manifest file err :[%s]", err)
 	}
 	defer file.Close()
-	_, err = file.WriteString(content)
+	buf := new(bytes.Buffer)
+	err = binary.Write(buf, binary.LittleEndian, content)
 	if err != nil {
-		return errors.Errorf("Write manifest err :[%s]", err)
+		return errors.Errorf("Write binary manifest err :[%s]", err)
+	}
+	_, err = file.Write(buf.Bytes())
+	if err != nil {
+		return errors.Errorf("Write manifest file err :[%s]", err)
 	}
 
 	uploader := s3manager.NewUploader(sess)

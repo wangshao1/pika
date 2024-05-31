@@ -15,6 +15,7 @@
 #include "pstd/include/pstd_wal.h"
 #else
 #include "rocksdb/db.h"
+#include "rocksdb/listener.h"
 #endif
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
@@ -33,6 +34,8 @@
 
 #define SPOP_COMPACT_THRESHOLD_COUNT 500
 #define SPOP_COMPACT_THRESHOLD_DURATION (1000 * 1000)  // 1000ms
+
+#define STRINGFYENUM(x) #x
 
 namespace storage {
 using Status = rocksdb::Status;
@@ -506,6 +509,16 @@ private:
   std::atomic<int> counter_ = {0};
   void* inst_ = nullptr;
   std::shared_ptr<pstd::WalWriter> wal_writer_ = nullptr;
+};
+
+class RocksDBEventListener : public rocksdb::EventListener {
+  RocksDBEventListener() {}
+  ~RocksDBEventListener() {}
+  virtual void OnStallConditionsChanged(const WriteStallInfo& info) override {
+    LOG(INFO) << "column_family name: " << info.cf_name
+              << " change from stall condition: " << STRINGFYENUM(info.prev)
+              << " to stall condition: " << STRINGFYENUM(info.cur);
+  }
 };
 
 }  //  namespace storage

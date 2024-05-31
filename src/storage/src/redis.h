@@ -519,6 +519,23 @@ class RocksDBEventListener : public rocksdb::EventListener {
               << " change from stall condition: " << STRINGFYENUM(info.prev)
               << " to stall condition: " << STRINGFYENUM(info.cur);
   }
+  void OnCompactionCompleted(rocksdb::DB* /*db*/, const rocksdb::CompactionJobInfo& info) override {
+    LOG(INFO) << " column_family name: " << info.cf_name
+              << " thread_id: " << info.thread_id
+              << " job_id: " << info.job_id
+              << " input level: " << info.base_input_level
+              << " output level: " << info.output_level
+              << " elapsed time: " << info.stats.elapsed_micros / 1000 << " ms"
+              << " total_input_bytes: " << (info.stats.total_input_bytes >> 20) << " MB";
+  }
+  void OnFlushCompleted(rocksdb::DB* /*db*/,
+                        const rocksdb::FlushJobInfo& info) override {
+    LOG(INFO) << " column_family name: " << info.cf_name
+              << " thread_id: " << info.thread_id
+              << " job_id: " << info.job_id
+              << " triggered_writes_slowdown: " << (info.triggered_writes_slowdown ? "true" : "false")
+              << " triggered_writes_stop: " << (info.triggered_writes_stop ? "true" : "false");
+  }
 };
 
 }  //  namespace storage

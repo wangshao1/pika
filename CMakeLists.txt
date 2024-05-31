@@ -590,9 +590,10 @@ ExternalProject_Add(rocksdb
   ${LIBJEMALLOC_NAME}
   URL
   #temporary for debug, skip download from github
-  http://10.224.129.40:8000/sst_cache_on_write/rocksdb_cloud.tar.gz
+  #http://10.224.129.40:8000/sst_cache_on_write/rocksdb_cloud.tar.gz
+  /home/wangshaoyi/work/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=bc68c57bd6df21403550f704774163a5
+  MD5=97d0f43bb293d4f6afb271ba3d2df467
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND
@@ -848,7 +849,7 @@ target_link_directories(${PROJECT_NAME}
   PUBLIC ${INSTALL_LIBDIR})
 
 if (USE_S3)
-  find_package(AWSSDK REQUIRED COMPONENTS s3 transfer kinesis)
+  find_package(AWSSDK REQUIRED COMPONENTS s3-crt transfer kinesis)
   include_directories(${AWS_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} ${AWSSDK_LINK_LIBRARIES})
 endif()

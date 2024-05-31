@@ -514,7 +514,7 @@ private:
 class RocksDBEventListener : public rocksdb::EventListener {
   RocksDBEventListener() {}
   ~RocksDBEventListener() {}
-  virtual void OnStallConditionsChanged(const WriteStallInfo& info) override {
+  virtual void OnStallConditionsChanged(const rocksdb::WriteStallInfo& info) override {
     LOG(INFO) << "column_family name: " << info.cf_name
               << " change from stall condition: " << STRINGFYENUM(info.prev)
               << " to stall condition: " << STRINGFYENUM(info.cur);

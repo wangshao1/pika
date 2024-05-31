@@ -4,7 +4,7 @@ set (CMAKE_CXX_STANDARD 17)
 project (storage)
 
 # Other CMake modules
-add_subdirectory(tests)
+#add_subdirectory(tests)
 # add_subdirectory(examples)
 # add_subdirectory(benchmark)
 

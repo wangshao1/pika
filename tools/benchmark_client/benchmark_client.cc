@@ -7,6 +7,7 @@
 #include <ctime>
 #include <functional>
 #include <iostream>
+#include "unistd.h"
 #include <set>
 #include <random>
 #include <vector>
@@ -16,9 +17,20 @@
 #include "monitoring/histogram.h"
 #include "hiredis/hiredis.h"
 
+#include "prometheus/client_metric.h"
+#include "prometheus/histogram.h"
+#include "prometheus/family.h"
+#include "prometheus/exposer.h"
+#include "prometheus/registry.h"
+
 #include "pstd/include/pstd_status.h"
 #include "pstd/include/pstd_string.h"
 #include "pstd/include/env.h"
+
+std::function<void(double)> Observer;
+std::function<void(double)> Increment;
+
+using namespace prometheus;
 
 DEFINE_string(command, "generate", "command to execute, eg: generate/get/set/zadd");
 DEFINE_bool(pipeline, false, "whether to enable pipeline");
@@ -33,6 +45,7 @@ DEFINE_int32(thread_num, 10, "concurrent thread num");
 DEFINE_string(dbs, "0", "dbs name, eg: 0,1,2");
 DEFINE_int32(element_count, 1, "elements number in hash/list/set/zset");
 DEFINE_bool(compare_value, false, "whether compare result or not");
+DEFINE_string(exporter_addr, "0.0.0.0:9999", "metrics exporter listen addr");
 
 using std::default_random_engine;
 using pstd::Status;
@@ -118,10 +131,10 @@ bool CompareValue(const std::string& expect, const std::string& actual) {
 }
 
 void PrepareKeys(int suffix, std::vector<std::string>* keys) {
-  keys->resize(FLAGS_count);
+  keys->resize(FLAGS_count * FLAGS_element_count);
   std::string filename = "benchmark_keyfile_" + std::to_string(suffix);
   FILE* fp = fopen(filename.c_str(), "r");
-  for (int idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count * FLAGS_element_count; ++idx) {
     char* key = new char[FLAGS_key_size + 2];
     fgets(key, FLAGS_key_size + 2, fp);
     key[FLAGS_key_size] = '\0';
@@ -280,6 +293,61 @@ redisContext* Prepare(ThreadArg* arg) {
     }
   }
   return c;
+}
+
+void FreeAndReconnect(redisContext*& c, ThreadArg* arg) {
+  LOG(INFO) << "request timeout, reconnect";
+  redisFree(c);
+  c = nullptr;
+  while (!c) {
+    c = Prepare(arg);
+  }
+}
+
+Status RunBatchGetCommand(redisContext*& c, ThreadArg* arg) {
+  std::vector<std::string> keys;
+  PrepareKeys(arg->idx, &keys);
+
+  for (int idx = 0; idx < FLAGS_count; ++idx) {
+    if (idx % 10000 == 0) {
+      LOG(INFO) << "finish " << idx << " mget";
+    }
+
+    std::vector<const char*> get_argv(FLAGS_element_count + 1);
+    std::vector<size_t> get_argvlen(FLAGS_element_count + 1);
+    get_argv[0] = "mget";
+    get_argvlen[0] = 4;
+    for (int i = 0; i < FLAGS_element_count; ++i) {
+      get_argv[i + 1] = keys[idx * FLAGS_element_count+ i].c_str();
+      get_argvlen[i + 1] = keys[idx * FLAGS_element_count+ i].size();
+    }
+
+    int retry_times = 0;
+    while (true) {
+      redisReply* res = nullptr;
+      uint64_t begin = pstd::NowMicros();
+      res = reinterpret_cast<redisReply*>(
+          redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
+      Increment(1);
+      Observer((pstd::NowMicros() - begin) / 1000.0);
+
+      // nullptr res, reconnect
+      if (!res) {
+        FreeAndReconnect(c, arg);
+        continue;
+      }
+
+      // success
+      if (res->type == REDIS_REPLY_ARRAY) {
+        freeReplyObject(res);
+        break;
+      }
+
+      LOG(ERROR) << "mget failed";
+      freeReplyObject(res);
+    }
+  }
+  return Status::OK();
 }
 
 Status RunGetCommand(redisContext*& c, ThreadArg* arg) {
@@ -543,30 +611,39 @@ Status RunSetCommand(redisContext*& c, ThreadArg* arg) {
   std::vector<std::string> keys;
   PrepareKeys(arg->idx, &keys);
 
-  for (int idx = 0; idx < FLAGS_count; ++idx) {
+  for (int idx = 0; idx < FLAGS_count * FLAGS_element_count; ++idx) {
     if (idx % 10000 == 0) {
       LOG(INFO) << "finish " << idx << " request";
     }
-    const char* set_argv[3];
-    size_t set_argvlen[3];
+    const char* set_argv[4];
+    size_t set_argvlen[4];
 
     std::string value;
     std::string key = keys[idx];
     GenerateValue(key, FLAGS_value_size, &value);
+    std::string expire_seconds = "86400";
 
-    set_argv[0] = "set";
-    set_argvlen[0] = 3;
+    set_argv[0] = "setex";
+    set_argvlen[0] = 5;
     set_argv[1] = key.c_str();
     set_argvlen[1] = key.size();
-    set_argv[2] = value.c_str();
-    set_argvlen[2] = value.size();
+    set_argv[2] = expire_seconds.c_str();
+    set_argvlen[2] = expire_seconds.size();
+    set_argv[3] = value.c_str();
+    set_argvlen[3] = value.size();
 
     uint64_t begin = pstd::NowMicros();
 
     res = reinterpret_cast<redisReply*>(
-        redisCommandArgv(c, 3, reinterpret_cast<const char**>(set_argv),
+        redisCommandArgv(c, 4, reinterpret_cast<const char**>(set_argv),
                          reinterpret_cast<const size_t*>(set_argvlen)));
-    hist->Add(pstd::NowMicros() - begin);
+    uint64_t now = pstd::NowMicros();
+    if (now - begin > 10 * 1000) {
+      LOG(ERROR) << "setex costs " << (now - begin) / 1000 << " ms";
+    }
+    Observer((now - begin) / 1000.0);
+    hist->Add(now - begin);
+    Increment(1);
 
     if (!res) {
       LOG(INFO) << FLAGS_command << " timeout, key: " << key;
@@ -578,7 +655,7 @@ Status RunSetCommand(redisContext*& c, ThreadArg* arg) {
       }
     } else if (res->type != REDIS_REPLY_STATUS) {
       LOG(INFO) << FLAGS_command << " invalid type: " << res->type
-                << " key: " << key;
+                << " key: " << key << " response str: " << res->str;
       arg->stat.error_cnt++;
     } else {
       arg->stat.success_cnt++;
@@ -808,7 +885,9 @@ void* ThreadMain(void* arg) {
   }
 
   Status s;
-  if (FLAGS_command == "get") {
+  if (FLAGS_command == "mget") {
+    s = RunBatchGetCommand(c, ta);
+  } else if (FLAGS_command == "get") {
     s = RunGetCommand(c, ta);
   } else if (FLAGS_command == "set") {
     s = RunSetCommand(c, ta);
@@ -844,6 +923,41 @@ int main(int argc, char* argv[]) {
   if (tables.empty()) {
     exit(-1);
   }
+  char host_name[255];
+  if (gethostname(host_name, sizeof(host_name)) == -1) {
+    std::cout << "get hostname failed, exit";
+    exit(1);
+  }
+  std::string bind_addr = FLAGS_exporter_addr;
+  Exposer exposer{bind_addr};
+  auto registry = std::make_shared<Registry>();
+  exposer.RegisterCollectable(registry, "/metrics");
+
+  auto& counter_family = BuildCounter()
+                         .Name("request_count")
+                         .Help("How many is the api called")
+                         .Labels({{"hostname", host_name}, {"command", FLAGS_command}})
+                         .Register(*registry);
+
+  auto& api_counter = counter_family.Add(
+      {{"prometheus_test_counter", "test_counter"}, {"yet_another_label", "value"}});
+  Increment = [&api_counter](double cost) {
+    api_counter.Increment(cost);
+  };
+
+  auto& histogram_family = BuildHistogram()
+                           .Name("request_time")
+                           .Help("analyze the time of request duraiton with histogram")
+                           .Labels({{"hostname", host_name}, {"command", FLAGS_command}})
+                           .Register(*registry);
+  auto& task_histogram = histogram_family.Add({{"prometheus_test_histogram", "test_histogram"},
+      {"yet_another_lable", "value"}}, Histogram::BucketBoundaries{1, 2, 3, 4, 5, 6, 7,
+      8, 10, 12, 14, 17, 20, 24, 29, 34, 40, 48, 57, 68, 81, 96, 114, 135, 160, 190, 226, 268, 318,
+      378, 449, 533, 633, 752, 894, 1062, 1262, 1500, 1782, 2117, 2516, 2990, 3553, 4222, 5017, 5961,
+      7083, 8416, 10000});
+  Observer = [&task_histogram](double cost) {
+    task_histogram.Observe(cost);
+  };
 
   FLAGS_logtostdout = true;
   FLAGS_minloglevel = 0;

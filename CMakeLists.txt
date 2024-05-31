@@ -577,6 +577,24 @@ set(PROTOBUF_LIBRARY ${INSTALL_LIBDIR}/${LIB_PROTOBUF})
 set(PROTOBUF_PROTOC ${STAGED_INSTALL_PREFIX}/bin/protoc)
 set(USE_S3 1)
 
+ExternalProject_Add(prometheus_cpp
+  URL
+  https://github.com/jupp0r/prometheus-cpp/releases/download/v1.2.4/prometheus-cpp-with-submodules.tar.gz
+  CMAKE_ARGS
+  -DBUILD_SHARED_LIBS=ON
+  -DENABLE_PUSH=OFF
+  -DENABLE_COMPRESSION=OFF
+  -DCMAKE_INSTALL_LIBDIR=${INSTALL_LIBDIR}
+  -DCMAKE_INSTALL_INCLUDEDIR=${INSTALL_INCLUDEDIR}
+  BUILD_ALWAYS
+  1
+  BUILD_COMMAND
+  make -j${CPU_CORE}
+)
+
+set(PROMETHEUS_CPP_CORE_LIB ${INSTALL_LIBDIR}/libprometheus-cpp-core.so)
+set(PROMETHEUS_CPP_PULL_LIB ${INSTALL_LIBDIR}/libprometheus-cpp-pull.so)
+
 if (USE_S3)
 ExternalProject_Add(rocksdb
   DEPENDS

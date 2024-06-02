@@ -123,8 +123,9 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
   storage_options.cloud_fs_options.resync_on_open = true;
   storage_options.cloud_fs_options.resync_manifest_on_open = true;
   storage_options.cloud_fs_options.skip_dbid_verification = true;
-  storage_options.cloud_fs_options.sst_file_cache = rocksdb::NewLRUCache(storage_options_.sst_cache_size_, 1/*num_shard_bits*/);
+  storage_options.cloud_fs_options.sst_file_cache = rocksdb::NewLRUCache(storage_options_.sst_cache_size_, 0/*num_shard_bits*/);
   storage_options.options.replication_log_listener = log_listener_;
+
   is_master_.store(tmp_storage_options.cloud_fs_options.is_master);
   if (!tmp_storage_options.cloud_fs_options.is_master) {
     storage_options.options.disable_auto_flush = true;
@@ -142,6 +143,7 @@ Status Redis::Open(const StorageOptions& tmp_storage_options, const std::string&
 
   rocksdb::Options db_ops(storage_options.options);
   db_ops.create_missing_column_families = true;
+  db_ops.listeners.emplace_back(new RocksDBEventListener(index_));
   // db_ops.env = env_;
 
   // string column-family options

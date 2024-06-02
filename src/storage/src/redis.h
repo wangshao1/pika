@@ -35,7 +35,16 @@
 #define SPOP_COMPACT_THRESHOLD_COUNT 500
 #define SPOP_COMPACT_THRESHOLD_DURATION (1000 * 1000)  // 1000ms
 
-#define STRINGFYENUM(x) #x
+static inline std::string StallEnumToString(rocksdb::WriteStallCondition cond) {
+  switch (cond) {
+    case rocksdb::WriteStallCondition::kDelayed:
+      return "delayed";
+    case rocksdb::WriteStallCondition::kStopped:
+      return "stopped";
+    case rocksdb::WriteStallCondition::kNormal:
+      return "normal";
+  }
+}
 
 namespace storage {
 using Status = rocksdb::Status;
@@ -512,15 +521,18 @@ private:
 };
 
 class RocksDBEventListener : public rocksdb::EventListener {
-  RocksDBEventListener() {}
+public:
+  RocksDBEventListener(int index) : index_(index) {}
   ~RocksDBEventListener() {}
   virtual void OnStallConditionsChanged(const rocksdb::WriteStallInfo& info) override {
-    LOG(INFO) << "column_family name: " << info.cf_name
-              << " change from stall condition: " << STRINGFYENUM(info.prev)
-              << " to stall condition: " << STRINGFYENUM(info.cur);
+    LOG(INFO) << "rocksdb id: " << index_ 
+              << "column_family name: " << info.cf_name
+              << " change from stall condition: " << StallEnumToString(info.condition.prev)
+              << " to stall condition: " << StallEnumToString(info.condition.cur);
   }
   void OnCompactionCompleted(rocksdb::DB* /*db*/, const rocksdb::CompactionJobInfo& info) override {
-    LOG(INFO) << " column_family name: " << info.cf_name
+    LOG(INFO) << "rocksdb id: " << index_ 
+              << " column_family name: " << info.cf_name
               << " thread_id: " << info.thread_id
               << " job_id: " << info.job_id
               << " input level: " << info.base_input_level
@@ -530,12 +542,15 @@ class RocksDBEventListener : public rocksdb::EventListener {
   }
   void OnFlushCompleted(rocksdb::DB* /*db*/,
                         const rocksdb::FlushJobInfo& info) override {
-    LOG(INFO) << " column_family name: " << info.cf_name
+    LOG(INFO) << "rocksdb id: " << index_ 
+              << " column_family name: " << info.cf_name
               << " thread_id: " << info.thread_id
               << " job_id: " << info.job_id
               << " triggered_writes_slowdown: " << (info.triggered_writes_slowdown ? "true" : "false")
               << " triggered_writes_stop: " << (info.triggered_writes_stop ? "true" : "false");
   }
+private:
+  int index_ = 0;
 };
 
 }  //  namespace storage

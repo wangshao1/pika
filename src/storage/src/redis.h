@@ -525,13 +525,13 @@ public:
   RocksDBEventListener(int index) : index_(index) {}
   ~RocksDBEventListener() {}
   virtual void OnStallConditionsChanged(const rocksdb::WriteStallInfo& info) override {
-    LOG(INFO) << "rocksdb id: " << index_ 
+    LOG(INFO) << "stall condition changed, rocksdb id: " << index_
               << "column_family name: " << info.cf_name
               << " change from stall condition: " << StallEnumToString(info.condition.prev)
               << " to stall condition: " << StallEnumToString(info.condition.cur);
   }
   void OnCompactionCompleted(rocksdb::DB* /*db*/, const rocksdb::CompactionJobInfo& info) override {
-    LOG(INFO) << "rocksdb id: " << index_ 
+    LOG(INFO) << "compaction completed, rocksdb id: " << index_
               << " column_family name: " << info.cf_name
               << " thread_id: " << info.thread_id
               << " job_id: " << info.job_id
@@ -542,7 +542,7 @@ public:
   }
   void OnFlushCompleted(rocksdb::DB* /*db*/,
                         const rocksdb::FlushJobInfo& info) override {
-    LOG(INFO) << "rocksdb id: " << index_ 
+    LOG(INFO) << "flush completed, rocksdb id: " << index_
               << " column_family name: " << info.cf_name
               << " thread_id: " << info.thread_id
               << " job_id: " << info.job_id

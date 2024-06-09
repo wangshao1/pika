@@ -766,6 +766,9 @@ std::string LogListener::OnReplicationLogRecord(rocksdb::ReplicationLogRecord re
   if (!redis_inst->IsMaster()) {
     return "0";
   }
+  if (record.type != rocksdb::ReplicationLogRecord::kMemtableWrite) {
+    redis_inst->cfs_->WaitPendingObjects();
+  }
 
   auto s = wal_writer_->Put(record.contents, db_id,
       redis_inst->GetIndex(), record.type);

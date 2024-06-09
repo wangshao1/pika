@@ -53,6 +53,7 @@ using Slice = rocksdb::Slice;
 class LogListener;
 class Redis {
  public:
+  friend class LogListener;
   Redis(Storage* storage, int32_t index, std::shared_ptr<pstd::WalWriter> wal_writer = nullptr);
   virtual ~Redis();
 

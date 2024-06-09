@@ -608,10 +608,10 @@ ExternalProject_Add(rocksdb
   ${LIBJEMALLOC_NAME}
   URL
   #temporary for debug, skip download from github
-  #http://10.224.129.40:8000/sst_cache_on_write/rocksdb_cloud.tar.gz
-  /home/wangshaoyi/work/rocksdb_cloud.tar.gz
+  http://10.224.129.40:8000/async_upload/rocksdb_cloud.tar.gz
+  #/home/wangshaoyi/work/rocksdb_cloud.tar.gz
   URL_HASH
-  MD5=bca45663712bf56d6d713074b3663ee1
+  MD5=31c2188019b0d9ebc11d4df42ce885f2
   DOWNLOAD_NO_PROGRESS
   1
   UPDATE_COMMAND

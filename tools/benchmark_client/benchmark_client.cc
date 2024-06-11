@@ -373,7 +373,10 @@ Status RunGetCommand(redisContext*& c, ThreadArg* arg) {
     res = reinterpret_cast<redisReply*>(
         redisCommandArgv(c, 2, reinterpret_cast<const char**>(argv),
                          reinterpret_cast<const size_t*>(argvlen)));
-    hist->Add(pstd::NowMicros() - begin);
+    uint64_t now = pstd::NowMicros();
+    Observer((now - begin) / 1000.0);
+    hist->Add(now - begin);
+    Increment(1);
 
     if (!res) {
       LOG(INFO) << FLAGS_command << " timeout, key: " << key;

@@ -609,7 +609,6 @@ ExternalProject_Add(rocksdb
   URL
   #temporary for debug, skip download from github
   http://10.224.129.40:8000/async_upload/rocksdb_cloud.tar.gz
-  #/home/wangshaoyi/work/rocksdb_cloud.tar.gz
   URL_HASH
   MD5=31c2188019b0d9ebc11d4df42ce885f2
   DOWNLOAD_NO_PROGRESS

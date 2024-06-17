@@ -300,7 +300,7 @@ Status SyncMasterDB::GetSafetyPurgeBinlog(std::string* safety_purge) {
       LOG(ERROR) << "get oldest binlog to keep failed";
     }
     oldest_filenum = oldest_filenum > 0 ? oldest_filenum - 1 : 0;
-    purge_max = std::min(purge_max, oldest_filenum); 
+    purge_max = std::min(purge_max, oldest_filenum);
 #endif
   }
   *safety_purge = (success ? kBinlogPrefix + std::to_string(static_cast<int32_t>(purge_max)) : "none");
@@ -685,10 +685,16 @@ void PikaReplicaManager::ScheduleWriteBinlogTask(const std::string& db,
   pika_repl_client_->ScheduleWriteBinlogTask(db, res, conn, res_private_data);
 }
 
+#ifdef USE_S3
+void PikaReplicaManager::ScheduleWriteDBTask(ReplClientWriteDBTaskArg* arg) {
+  pika_repl_client_->ScheduleWriteDBTask(arg);
+}
+#else
 void PikaReplicaManager::ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, const LogOffset& offset,
                                              const std::string& db_name) {
   pika_repl_client_->ScheduleWriteDBTask(cmd_ptr, offset, db_name);
 }
+#endif
 
 void PikaReplicaManager::ReplServerRemoveClientConn(int fd) { pika_repl_server_->RemoveClientConn(fd); }
 

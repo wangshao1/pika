@@ -112,6 +112,10 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     return;
   }
 
+#ifdef USE_S3
+  std::vector<std::future<bool>> pending_tasks;
+#endif
+
   for (int i : *index) {
     const InnerMessage::InnerResponse::BinlogSync& binlog_res = res->binlog_sync(i);
     // if pika are not current a slave or DB not in
@@ -152,12 +156,12 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
         return;
       }
       db->Logger()->Put(binlog_res.binlog());
-      auto s = g_pika_server->GetDB(worker->db_name_)->ApplyWAL(binlog_item.rocksdb_id(), binlog_item.type(), binlog_item.content());
-      if (!s.ok()) {
-        LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
-        slave_db->SetReplState(ReplState::kTryConnect);
-        return;
-      }
+
+      std::shared_ptr<std::promise<bool>> prom_ptr =
+          std::make_shared<std::promise<bool>>();
+      pending_tasks.emplace_back(prom_ptr->get_future());
+      auto task_arg = new ReplClientWriteDBTaskArg(binlog_item, worker->db_name_, prom_ptr);
+      g_pika_rm->ScheduleWriteDBTask(task_arg);
     } else {
       if (!PikaBinlogTransverter::BinlogItemWithoutContentDecode(TypeFirst, binlog_res.binlog(), &worker->binlog_item_)) {
         LOG(WARNING) << "Binlog item decode failed";
@@ -177,6 +181,15 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
       }
     }
   }
+#ifdef USE_S3
+  for (const auto& fut : pending_tasks) {
+    if (!fut.get()) {
+      LOG(WARNING) << "applywal failed";
+      slave_db->SetReplState(ReplState::kTryConnect);
+      return;
+    }
+  }
+#endif
 
   LogOffset ack_end;
   if (only_keepalive) {
@@ -233,6 +246,29 @@ int PikaReplBgWorker::HandleWriteBinlog(net::RedisParser* parser, const net::Red
   return 0;
 }
 
+#ifdef USE_S3
+void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
+  std::unique_ptr<ReplClientWriteDBTaskArg> task_arg(static_cast<ReplClientWriteDBTaskArg*>(arg));
+  std::string db_name = task_arg->db_name_;
+  std::shared_ptr<std::promise<bool>> prom_ptr = task_arg->prom_ptr_;
+  std::shared_ptr<SyncMasterDB> db =
+      g_pika_rm->GetSyncMasterDBByName(DBInfo(db_name));
+  if (!db) {
+    LOG(WARNING) << db_name << " not found";
+    prom_ptr.set_value(false);
+    return;
+  }
+  auto s = g_pika_server->GetDB(db_name)->ApplyWAL(
+      task_arg->binlog_item_.rocksdb_id(), task_arg->binlog_item_.type(),
+      task_arg->binlog_item_.content());
+  if (!s.ok()) {
+    LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
+    prom_ptr.set_value(false);
+    return;
+  }
+  prom_ptr.set_vlaue(true);
+}
+#else
 void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
   std::unique_ptr<ReplClientWriteDBTaskArg> task_arg(static_cast<ReplClientWriteDBTaskArg*>(arg));
   const std::shared_ptr<Cmd> c_ptr = task_arg->cmd_ptr;

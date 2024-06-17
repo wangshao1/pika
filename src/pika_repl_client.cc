@@ -74,6 +74,12 @@ void PikaReplClient::ScheduleWriteBinlogTask(const std::string& db_name,
   bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteBinlog, static_cast<void*>(task_arg));
 }
 
+#ifdef USE_S3
+void PikaReplClient::ScheduleWriteDBTask(ReplClientWriteDBTaskArg* arg) {
+  size_t index = arg->binlog_item_->rocksdb_id() % g_pika_conf->sync_thread_num();
+  bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(task_arg));
+}
+#else
 void PikaReplClient::ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, const LogOffset& offset,
                                          const std::string& db_name) {
   const PikaCmdArgsType& argv = cmd_ptr->argv();
@@ -82,6 +88,7 @@ void PikaReplClient::ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, co
   auto task_arg = new ReplClientWriteDBTaskArg(cmd_ptr, offset, db_name);
   bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(task_arg));
 }
+#endif
 
 size_t PikaReplClient::GetHashIndex(const std::string& key, bool upper_half) {
   size_t hash_base = bg_workers_.size() / 2;

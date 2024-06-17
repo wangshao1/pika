@@ -182,7 +182,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
     }
   }
 #ifdef USE_S3
-  for (const auto& fut : pending_tasks) {
+  for (auto& fut : pending_tasks) {
     if (!fut.get()) {
       LOG(WARNING) << "applywal failed";
       slave_db->SetReplState(ReplState::kTryConnect);
@@ -255,7 +255,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
       g_pika_rm->GetSyncMasterDBByName(DBInfo(db_name));
   if (!db) {
     LOG(WARNING) << db_name << " not found";
-    prom_ptr.set_value(false);
+    prom_ptr->set_value(false);
     return;
   }
   auto s = g_pika_server->GetDB(db_name)->ApplyWAL(
@@ -263,10 +263,10 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
       task_arg->binlog_item_.content());
   if (!s.ok()) {
     LOG(WARNING) << "applywal at slave node failed, error: " << s.ToString();
-    prom_ptr.set_value(false);
+    prom_ptr->set_value(false);
     return;
   }
-  prom_ptr.set_vlaue(true);
+  prom_ptr->set_value(true);
 }
 #else
 void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
@@ -315,3 +315,4 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
     }
   }
 }
+#endif

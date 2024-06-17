@@ -181,7 +181,11 @@ class PikaReplicaManager {
   void ScheduleWriteBinlogTask(const std::string& db_name,
                                const std::shared_ptr<InnerMessage::InnerResponse>& res,
                                const std::shared_ptr<net::PbConn>& conn, void* res_private_data);
+#ifdef USE_S3
+  void ScheduleWriteDBTask(ReplClientWriteDBTaskArg* arg);
+#else
   void ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, const LogOffset& offset, const std::string& db_name);
+#endif
   void ReplServerRemoveClientConn(int fd);
   void ReplServerUpdateClientConnMap(const std::string& ip_port, int fd);
 

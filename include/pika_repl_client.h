@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <future>
 
 #include "net/include/client_thread.h"
 #include "net/include/net_conn.h"
@@ -19,6 +20,7 @@
 #include "include/pika_binlog_reader.h"
 #include "include/pika_repl_bgworker.h"
 #include "include/pika_repl_client_thread.h"
+#include "pika_cloud_binlog.pb.h"
 
 #include "net/include/thread_pool.h"
 #include "pika_inner_message.pb.h"
@@ -45,15 +47,15 @@ struct ReplClientWriteBinlogTaskArg {
 #ifdef USE_S3
 struct ReplClientWriteDBTaskArg {
   ReplClientWriteDBTaskArg(const cloud::BinlogCloudItem& binlog,
-      std::string db_name, std::shared_ptr<std::promise> prom_ptr)
+      std::string db_name, std::shared_ptr<std::promise<bool>> prom_ptr)
       : binlog_item_(binlog),
-        db_name_(std::move(_db_name)),
+        db_name_(std::move(db_name)),
         prom_ptr_(prom_ptr) {}
   ~ReplClientWriteDBTaskArg() = default;
 
   cloud::BinlogCloudItem binlog_item_;
   std::string db_name_;
-  std::shared_ptr<std::promise> prom_ptr_;
+  std::shared_ptr<std::promise<bool>> prom_ptr_;
 };
 #else
 struct ReplClientWriteDBTaskArg {

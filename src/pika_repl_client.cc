@@ -76,8 +76,8 @@ void PikaReplClient::ScheduleWriteBinlogTask(const std::string& db_name,
 
 #ifdef USE_S3
 void PikaReplClient::ScheduleWriteDBTask(ReplClientWriteDBTaskArg* arg) {
-  size_t index = arg->binlog_item_->rocksdb_id() % g_pika_conf->sync_thread_num();
-  bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(task_arg));
+  size_t index = arg->binlog_item_.rocksdb_id() % g_pika_conf->sync_thread_num();
+  bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(arg));
 }
 #else
 void PikaReplClient::ScheduleWriteDBTask(const std::shared_ptr<Cmd>& cmd_ptr, const LogOffset& offset,

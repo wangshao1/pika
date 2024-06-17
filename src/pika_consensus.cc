@@ -410,7 +410,9 @@ uint32_t ConsensusCoordinator::term() {
 }
 
 void ConsensusCoordinator::InternalApplyFollower(const MemLog::LogItem& log) {
+#ifndef USE_S3
   g_pika_rm->ScheduleWriteDBTask(log.cmd_ptr, log.offset, db_name_);
+#endif
 }
 
 int ConsensusCoordinator::InitCmd(net::RedisParser* parser, const net::RedisCmdArgsType& argv) {

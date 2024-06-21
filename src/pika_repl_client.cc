@@ -76,7 +76,7 @@ void PikaReplClient::ScheduleWriteBinlogTask(const std::string& db_name,
 
 #ifdef USE_S3
 void PikaReplClient::ScheduleWriteDBTask(ReplClientWriteDBTaskArg* arg) {
-  size_t index = arg->binlog_item_.rocksdb_id() % g_pika_conf->sync_thread_num();
+  size_t index = arg->binlog_item_.rocksdb_id() % g_pika_conf->sync_thread_num() + g_pika_conf->sync_thread_num();
   bg_workers_[index]->Schedule(&PikaReplBgWorker::HandleBGWorkerWriteDB, static_cast<void*>(arg));
 }
 #else

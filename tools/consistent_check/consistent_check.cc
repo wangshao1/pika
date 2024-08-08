@@ -305,8 +305,9 @@ redisContext* Prepare(ThreadArg* arg) {
   return c;
 }
 
-Status RunSingleStringCheck(redisContext*& c, ThreadArg* arg) {
+Status RunSingleStringCheck(redisContext*& c, redisContext*& c1, ThreadArg* arg) {
   redisReply* res = nullptr;
+  redisReply* slave_res = nullptr;
   std::vector<std::string> keys;
   PrepareKeys(arg->idx, &keys);
   uint64_t value_version = arg->value_version++;
@@ -339,22 +340,28 @@ Status RunSingleStringCheck(redisContext*& c, ThreadArg* arg) {
     while (true) {
       res = reinterpret_cast<redisReply*>(
           redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
-
+      slave_res = reinterpret_cast<redisReply*>(
+          redisCommandArgv(c1, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
       // nullptr res, reconnect
       if (!res) {
         FreeAndReconnect(c, arg);
         continue;
       }
-
+      if (!slave_res) {
+        FreeAndReconnect(c1, arg);
+        continue;
+      }
       // success
-      if (res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(res->str))) {
+      if ((res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(res->str))) && (slave_res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(slave_res->str)))) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         break;
       }
 
       // can retry
       if (++retry_times < FLAGS_max_retries) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         usleep(5000);
         continue;
       }
@@ -362,18 +369,21 @@ Status RunSingleStringCheck(redisContext*& c, ThreadArg* arg) {
       // log and terminate process
       LOG(ERROR) << "string single key consistent_check failed, key: " << key
                  << " expect type : " << REDIS_REPLY_STRING
+                 << " slave actual type : " << slave_res->type
                  << " actual type : " << res->type
                  << " expect value: " << value
+                 << " slave actual value: " << slave_res->str
                  << " actual value: " << res->str;
 
       freeReplyObject(res);
+      freeReplyObject(slave_res);
       exit(1);
     }
   }
   return Status::OK();
 }
 
-Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
+Status RunBatchStringCheck(redisContext*& c, redisContext*& c1, ThreadArg* arg) {
   std::vector<std::string> keys;
   PrepareKeys(arg->idx, &keys);
   uint64_t value_version = arg->value_version++;
@@ -411,24 +421,32 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
     int retry_times = 0;
     while (true) {
       redisReply* res = nullptr;
+      redisReply* slave_res = nullptr;
       res = reinterpret_cast<redisReply*>(
           redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
-
+      slave_res = reinterpret_cast<redisReply*>(
+          redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
       // nullptr res, reconnect
       if (!res) {
         FreeAndReconnect(c, arg);
         continue;
       }
+      if (!slave_res) {
+        FreeAndReconnect(c1, arg);
+        continue;
+      }
 
       // success
-      if (res->type == REDIS_REPLY_ARRAY && CompareValue(expect_values, res)) {
+      if ((res->type == REDIS_REPLY_ARRAY && CompareValue(expect_values, res)) && (slave_res->type == REDIS_REPLY_ARRAY && CompareValue(expect_values, slave_res))) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         break;
       }
 
       // can retry
       if (++retry_times < FLAGS_max_retries) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         usleep(5000);
         continue;
       }
@@ -447,16 +465,23 @@ Status RunBatchStringCheck(redisContext*& c, ThreadArg* arg) {
         LOG(ERROR) << "expect: " << value << " actual: "
                    << std::string(res->element[i]->str, res->element[i]->len);
       }
+      LOG(ERROR) << "expect vs slave actual value: ";
+      for (size_t i = 0; i < slave_res->elements; i++) {
+        LOG(ERROR) << "expect: " << value << " actual: "
+                   << std::string(slave_res->element[i]->str, slave_res->element[i]->len);
+      }
       freeReplyObject(res);
+      freeReplyObject(slave_res);
       exit(1);
     }
   }
   return Status::OK();
 }
 
-Status RunSingleHashCheck(redisContext*& c, ThreadArg* arg) {
+Status RunSingleHashCheck(redisContext*& c, redisContext*& c1, ThreadArg* arg) {
   Status s;
   redisReply* res = nullptr;
+  redisReply* slave_res = nullptr;
   std::vector<std::pair<std::string, std::set<std::string>>> keys;
   PreparePkeyMembers(arg->idx, &keys);
   uint64_t value_version = arg->value_version++;
@@ -496,22 +521,29 @@ Status RunSingleHashCheck(redisContext*& c, ThreadArg* arg) {
       while (true) {
         res = reinterpret_cast<redisReply*>(
             redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
-
+        slave_res = reinterpret_cast<redisReply*>(
+            redisCommandArgv(c1, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
         // nullptr res, reconnect
         if (!res) {
           FreeAndReconnect(c, arg);
           continue;
         }
+        if (!slave_res) {
+          FreeAndReconnect(c1, arg);
+          continue;
+        }
 
         // success
-        if (res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(res->str, res->len))) {
+        if ((res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(res->str, res->len))) && (slave_res->type == REDIS_REPLY_STRING && CompareValue(value, std::string(slave_res->str, slave_res->len)))) {
           freeReplyObject(res);
+          freeReplyObject(slave_res);
           break;
         }
 
         // can retry
         if (++retry_times < FLAGS_max_retries) {
           freeReplyObject(res);
+          freeReplyObject(slave_res);
           usleep(5000);
           continue;
         }
@@ -521,10 +553,13 @@ Status RunSingleHashCheck(redisContext*& c, ThreadArg* arg) {
                    << " pkey: " << pkey
                    << " expect type : " << REDIS_REPLY_ARRAY
                    << " actual type : " << res->type
+                   << " slave actual type : " << slave_res->type
                    << " request key : " << (*member_iter)
                    << " expect value : " << value
-                   << " actual value : " << std::string(res->str, res->len);
+                   << " actual value : " << std::string(res->str, res->len)
+                   << " slave actual value : " << std::string(slave_res->str, slave_res->len);
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         exit(1);
       }
       member_iter++;
@@ -534,8 +569,9 @@ Status RunSingleHashCheck(redisContext*& c, ThreadArg* arg) {
   return s;
 }
 
-Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
+Status RunBatchHashCheck(redisContext*& c, redisContext*& c1, ThreadArg* arg) {
   redisReply* res = nullptr;
+  redisReply* slave_res = nullptr;
   std::vector<std::pair<std::string, std::set<std::string>>> keys;
   PreparePkeyMembers(arg->idx, &keys);
   uint64_t value_version = arg->value_version++;
@@ -599,22 +635,29 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
       while (true) {
         res = reinterpret_cast<redisReply*>(
             redisCommandArgv(c, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
-
+        slave_res = reinterpret_cast<redisReply*>(
+            redisCommandArgv(c1, get_argv.size(), &(get_argv[0]), &(get_argvlen[0])));
         // nullptr res, reconnect
         if (!res) {
           FreeAndReconnect(c, arg);
           continue;
         }
+        if (!slave_res) {
+          FreeAndReconnect(c1, arg);
+          continue;
+        }
 
         // success
-        if (res->type == REDIS_REPLY_ARRAY && CompareValue(expect_value, res)) {
+        if ((res->type == REDIS_REPLY_ARRAY && CompareValue(expect_value, res)) && (slave_res->type == REDIS_REPLY_ARRAY && CompareValue(expect_value, slave_res))) {
           freeReplyObject(res);
+          freeReplyObject(slave_res);
           break;
         }
 
         // can retry
         if (++retry_times < FLAGS_max_retries) {
           freeReplyObject(res);
+          freeReplyObject(slave_res);
           usleep(5000);
           continue;
         }
@@ -633,7 +676,13 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
           LOG(ERROR) << "expect: " << value << " actual: "
                      << std::string(res->element[i]->str, res->element[i]->len);
         }
+        LOG(ERROR) << "slave expect vs actual value: ";
+        for (size_t i = 0; i < slave_res->elements; i++) {
+          LOG(ERROR) << "slave expect: " << value << " actual: "
+             << std::string(slave_res->element[i]->str, slave_res->element[i]->len);
+        }
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         exit(1);
       }
     }
@@ -649,22 +698,29 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
     while (retry_times < FLAGS_max_retries) {
       res = reinterpret_cast<redisReply*>(
           redisCommandArgv(c, getall_argv.size(), &(getall_argv[0]), &(getall_argvlen[0])));
-
+      slave_res = reinterpret_cast<redisReply*>(
+          redisCommandArgv(c1, getall_argv.size(), &(getall_argv[0]), &(getall_argvlen[0])));
       // nullptr res, reconnect
       if (!res) {
         FreeAndReconnect(c, arg);
         continue;
       }
+      if (!slave_res) {
+        FreeAndReconnect(c1, arg);
+        continue;
+      }
 
       // success
-      if (res->type == REDIS_REPLY_ARRAY && CompareValue(member2value, res)) {
+      if ((res->type == REDIS_REPLY_ARRAY && CompareValue(member2value, res)) && (slave_res->type == REDIS_REPLY_ARRAY && CompareValue(member2value, slave_res))) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         break;
       }
 
       // can retry
       if (++retry_times < FLAGS_max_retries) {
         freeReplyObject(res);
+        freeReplyObject(slave_res);
         usleep(5000);
         continue;
       }
@@ -684,7 +740,13 @@ Status RunBatchHashCheck(redisContext*& c, ThreadArg* arg) {
         LOG(ERROR) << "expect: " << value << " actual: "
                    << std::string(res->element[i]->str, res->element[i]->len);
       }
+      LOG(ERROR) << "slave expect vs actual value: ";
+      for (size_t i = 0; i < slave_res->elements; i++) {
+        LOG(ERROR) << "expect: " << value << " actual: "
+                   << std::string(slave_res->element[i]->str, slave_res->element[i]->len);
+      }
       freeReplyObject(res);
+      freeReplyObject(slave_res);
       exit(1);
     }
   }
@@ -701,20 +763,25 @@ void* ThreadMain(void* arg) {
   }
 
   redisContext* c = Prepare(ta);
+  redisContext* c1 = Prepare(ta);
+  c1->tcp.port = 9251;
   if (!c) {
+    return nullptr;
+  }
+  if (!c1) {
     return nullptr;
   }
 
   Status s;
   while (s.ok()) {
     if (FLAGS_type == "string" && FLAGS_is_batch) {
-      s = RunBatchStringCheck(c, ta);
+      s = RunBatchStringCheck(c, c1, ta);
     } else if (FLAGS_type == "string" && !FLAGS_is_batch) {
-      s = RunSingleStringCheck(c, ta);
+      s = RunSingleStringCheck(c, c1, ta);
     } else if (FLAGS_type == "hash" && FLAGS_is_batch) {
-      s = RunBatchHashCheck(c, ta);
+      s = RunBatchHashCheck(c, c1, ta);
     } else if (FLAGS_type == "hash" && !FLAGS_is_batch) {
-      s = RunSingleHashCheck(c, ta);
+      s = RunSingleHashCheck(c, c1, ta);
     }
   }
 
@@ -723,6 +790,7 @@ void* ThreadMain(void* arg) {
     printf("%s, %s, thread exit...\n", thread_info.c_str(), s.ToString().c_str());
   }
   redisFree(c);
+  redisFree(c1);
   return nullptr;
 }
 

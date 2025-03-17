@@ -4,9 +4,12 @@
 package proxy
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"pika/codis/v2/pkg/models"
+	"pika/codis/v2/pkg/utils/log"
 )
 
 type Slot struct {
@@ -54,7 +57,26 @@ func (s *Slot) blockAndWait() {
 		s.lock.hold = true
 		s.lock.Lock()
 	}
-	s.refs.Wait()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+
+	go func() {
+		s.refs.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+		log.Warnf("slot %d has waited for 3 seconds, force kill backend connection", s.id)
+		s.backend.bc.BlockAndClose()
+		s.migrate.bc.BlockAndClose()
+		s.refs.Wait()
+	}
 }
 
 func (s *Slot) unblock() {

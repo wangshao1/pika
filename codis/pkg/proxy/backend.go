@@ -380,7 +380,8 @@ type sharedBackendConn struct {
 
 	single []*BackendConn
 
-	refcnt int
+	refcnt   int
+	blocking atomic2.Bool
 }
 
 func newSharedBackendConn(addr string, pool *sharedBackendConnPool) *sharedBackendConn {
@@ -411,6 +412,15 @@ func newSharedBackendConn(addr string, pool *sharedBackendConnPool) *sharedBacke
 	return s
 }
 
+func (s *sharedBackendConn) BlockAndClose() {
+	s.blocking.Set(true)
+	for _, conns := range s.conns {
+		for _, conn := range conns {
+			conn.Close()
+		}
+	}
+}
+
 func (s *sharedBackendConn) Addr() string {
 	if s == nil {
 		return ""
@@ -439,7 +449,7 @@ func (s *sharedBackendConn) Release() {
 }
 
 func (s *sharedBackendConn) Retain() *sharedBackendConn {
-	if s == nil {
+	if s == nil || s.blocking.IsTrue() {
 		return nil
 	}
 	if s.refcnt <= 0 {
@@ -451,7 +461,7 @@ func (s *sharedBackendConn) Retain() *sharedBackendConn {
 }
 
 func (s *sharedBackendConn) KeepAlive() {
-	if s == nil {
+	if s == nil || s.blocking.IsTrue() {
 		return
 	}
 	for _, parallel := range s.conns {
@@ -462,7 +472,7 @@ func (s *sharedBackendConn) KeepAlive() {
 }
 
 func (s *sharedBackendConn) BackendConn(database int32, seed uint, must bool, isQuick bool) *BackendConn {
-	if s == nil {
+	if s == nil || s.blocking.IsTrue() {
 		return nil
 	}
 

@@ -58,7 +58,7 @@ func (d *forwardSync) process(s *Slot, r *Request, hkey []byte) (*BackendConn, e
 	}
 	r.Group = &s.refs
 	r.Group.Add(1)
-	return d.forward2(s, r), nil
+	return d.forward2(s, r)
 }
 
 type forwardSemiAsync struct {
@@ -128,7 +128,11 @@ func (d *forwardSemiAsync) process(s *Slot, r *Request, hkey []byte) (_ *Backend
 	}
 	r.Group = &s.refs
 	r.Group.Add(1)
-	return d.forward2(s, r), false, nil
+	bc, err := d.forward2(s, r)
+	if err != nil {
+		return nil, true, err
+	}
+	return bc, false, nil
 }
 
 type forwardHelper struct {
@@ -213,7 +217,7 @@ func (d *forwardHelper) slotsmgrtExecWrapper(s *Slot, hkey []byte, database int3
 	}
 }
 
-func (d *forwardHelper) forward2(s *Slot, r *Request) *BackendConn {
+func (d *forwardHelper) forward2(s *Slot, r *Request) (*BackendConn, error) {
 	var database = r.Database
 	if s.migrate.bc == nil && !r.IsMasterOnly() && len(s.replicaGroups) != 0 {
 		var seed = r.Seed16()
@@ -222,11 +226,15 @@ func (d *forwardHelper) forward2(s *Slot, r *Request) *BackendConn {
 			for range group {
 				i = (i + 1) % uint(len(group))
 				if bc := group[i].BackendConn(database, seed, false, r.OpFlag.IsQuick()); bc != nil {
-					return bc
+					return bc, nil
 				}
 			}
 		}
 	}
 	//  fix:https://github.com/OpenAtomFoundation/pika/issues/2174
-	return s.backend.bc.BackendConn(database, uint(s.id), true, r.OpFlag.IsQuick())
+	bc := s.backend.bc.BackendConn(database, uint(s.id), true, r.OpFlag.IsQuick())
+	if bc == nil {
+		return nil, errors.Errorf("backend server %s is invalid", s.backend.bc.addr)
+	}
+	return bc, nil
 }

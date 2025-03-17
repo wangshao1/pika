@@ -149,7 +149,11 @@ func (d *forwardHelper) slotsmgrt(s *Slot, hkey []byte, database int32, seed uin
 	}
 	m.Batch = &sync.WaitGroup{}
 
-	s.migrate.bc.BackendConn(database, seed, true, m.OpFlag.IsQuick()).PushBack(m)
+	bc := s.migrate.bc.BackendConn(database, seed, true, m.OpFlag.IsQuick())
+	if bc == nil {
+		return fmt.Errorf("backendconn has been block")
+	}
+	bc.PushBack(m)
 
 	m.Batch.Wait()
 
@@ -180,7 +184,11 @@ func (d *forwardHelper) slotsmgrtExecWrapper(s *Slot, hkey []byte, database int3
 	m.Multi = append(m.Multi, multi...)
 	m.Batch = &sync.WaitGroup{}
 
-	s.migrate.bc.BackendConn(database, seed, true, m.OpFlag.IsQuick()).PushBack(m)
+	bc := s.migrate.bc.BackendConn(database, seed, true, m.OpFlag.IsQuick())
+	if bc == nil {
+		return nil, false, fmt.Errorf("backend server is blocking")
+	}
+	bc.PushBack(m)
 
 	m.Batch.Wait()
 

@@ -236,6 +236,25 @@ void PikaClientConn::ProcessSlowlog(const PikaCmdArgsType& argv, std::shared_ptr
   if (time_stat_->total_time() > g_pika_conf->slowlog_slower_than()) {
     g_pika_server->SlowlogPushEntry(argv, time_stat_->start_ts() / 1000000, time_stat_->total_time());
     if (g_pika_conf->slowlog_write_errorlog()) {
+
+      // Limit the frequency of slow request log printing
+      static thread_local uint64_t last_print_time = 0;
+      static thread_local int log_cnt = 0;
+      const int64_t kOneSecond = 1000000;
+
+      uint64_t limit_per_second = g_pika_conf->SlowLogRatePerThread();
+      if (time_stat_->process_done_ts_ - last_print_time < kOneSecond) {
+        if (log_cnt++ > limit_per_second) {
+          return;
+        }
+      } else {
+        if (log_cnt > limit_per_second) {
+          LOG(INFO) << "trimed slow log entry nums: " << (log_cnt - limit_per_second);
+        }
+        last_print_time = time_stat_->process_done_ts_;
+        log_cnt = 0;
+      }
+
       bool trim = false;
       std::string slow_log;
       uint32_t cmd_size = 0;

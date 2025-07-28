@@ -1936,6 +1936,12 @@ void ConfigCmd::ConfigGet(std::string& ret) {
     EncodeString(&config_body, g_pika_conf->slowlog_write_errorlog() ? "yes" : "no");
   }
 
+  if (pstd::stringmatch(pattern.data(), "slow-log-rate-per-thread", 1) != 0) {
+    elements += 2;
+    EncodeString(&config_body, "slow-log-rate-per-thread");
+    EncodeNumber(&config_body, g_pika_conf->SlowLogRatePerThread());
+  }
+
   if (pstd::stringmatch(pattern.data(), "slowlog-log-slower-than", 1) != 0) {
     elements += 2;
     EncodeString(&config_body, "slowlog-log-slower-than");
@@ -2484,6 +2490,13 @@ void ConfigCmd::ConfigSet(std::shared_ptr<DB> db) {
       return;
     }
     g_pika_conf->SetSlowlogSlowerThan(static_cast<int>(ival));
+    res_.AppendStringRaw("+OK\r\n");
+  } else if (set_item == "slow-log-rate-per-thread") {
+    if ((pstd::string2int(value.data(), value.size(), &ival) == 0) || ival < 0) {
+      res_.AppendStringRaw("-ERR Invalid argument \'" + value + "\' for CONFIG SET 'slow-log-rate-per-thread'\r\n");
+      return;
+    }
+    g_pika_conf->SetSlowLogRatePerThread(static_cast<int>(ival));
     res_.AppendStringRaw("+OK\r\n");
   } else if (set_item == "slowlog-max-len") {
     if ((pstd::string2int(value.data(), value.size(), &ival) == 0) || ival < 0) {

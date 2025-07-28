@@ -337,6 +337,7 @@ class PikaConf : public pstd::BaseConf {
   }
   bool slowlog_write_errorlog() { return slowlog_write_errorlog_.load(); }
   int slowlog_slower_than() { return slowlog_log_slower_than_.load(); }
+  int SlowLogRatePerThread() { return slow_log_rate_per_thread_.load(); }
   int slowlog_max_len() {
     std::shared_lock l(rwlock_);
     return slowlog_max_len_;
@@ -617,6 +618,11 @@ class PikaConf : public pstd::BaseConf {
     TryPushDiffCommands("slowlog-log-slower-than", std::to_string(value));
     slowlog_log_slower_than_.store(value);
   }
+  void SetSlowLogRatePerThread(const int value) {
+    std::lock_guard l(rwlock_);
+    TryPushDiffCommands("slow-log-rate-per-thread", std::to_string(value));
+    slow_log_rate_per_thread_.store(value);
+  }
   void SetSlowlogMaxLen(const int value) {
     std::lock_guard l(rwlock_);
     TryPushDiffCommands("slowlog-max-len", std::to_string(value));
@@ -760,7 +766,7 @@ class PikaConf : public pstd::BaseConf {
 
   int CacheValueItemMaxSize() const {
     return cache_value_item_max_size_.load();
-  } 
+  }
 
   bool UpdateCacheValueItemMaxSize(int size) {
     if (size > MAX_CACHE_ITEMS_SIZE || size <= 0) {
@@ -772,7 +778,7 @@ class PikaConf : public pstd::BaseConf {
 
   size_t MaxKeySizeInCache() const {
     return max_key_size_in_cache_.load();
-  } 
+  }
 
   bool UpdateMaxKeySizeInCache(size_t size) {
     if (size > MAX_CACHE_MAX_KEY_SIZE || size <= 0) {
@@ -897,7 +903,7 @@ class PikaConf : public pstd::BaseConf {
   int admin_thread_pool_size_ = 0;
   std::unordered_set<std::string> slow_cmd_set_;
   // Because the exporter of Pika_exporter implements Auth authentication
-  // with the Exporter of Pika, and the Exporter authenticates the Auth when 
+  // with the Exporter of Pika, and the Exporter authenticates the Auth when
   // users connect to Pika, the Auth is added to the management command thread pool
   std::unordered_set<std::string> admin_cmd_set_ = {"info", "ping", "monitor", "auth"};
   int sync_thread_num_ = 0;
@@ -949,6 +955,7 @@ class PikaConf : public pstd::BaseConf {
   int root_connection_num_ = 0;
   std::atomic<bool> slowlog_write_errorlog_;
   std::atomic<int> slowlog_log_slower_than_;
+  std::atomic_int slow_log_rate_per_thread_ = 2000;
   std::atomic<bool> slotmigrate_;
   std::atomic<int> binlog_writer_num_;
   int slowlog_max_len_ = 0;

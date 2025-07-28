@@ -88,6 +88,10 @@ int PikaConf::Load() {
   GetConfInt("slowlog-log-slower-than", &tmp_slowlog_log_slower_than);
   slowlog_log_slower_than_.store(tmp_slowlog_log_slower_than);
 
+  int tmp_slow_log_rate_per_thread = 2000;
+  GetConfInt("slow-log-rate-per-thread", &tmp_slow_log_rate_per_thread);
+  slow_log_rate_per_thread_.store(tmp_slow_log_rate_per_thread);
+
   GetConfInt("slowlog-max-len", &slowlog_max_len_);
   if (slowlog_max_len_ == 0) {
     slowlog_max_len_ = 128;
@@ -411,7 +415,7 @@ int PikaConf::Load() {
   if (max_cache_statistic_keys_ <= 0) {
     max_cache_statistic_keys_ = 0;
   }
-  
+
   // disable_auto_compactions
   GetConfBool("disable_auto_compactions", &disable_auto_compactions_);
 
@@ -583,7 +587,7 @@ int PikaConf::Load() {
   // slaveof
   slaveof_ = "";
   GetConfStr("slaveof", &slaveof_);
-  
+
   int cache_num = 16;
   GetConfInt("cache-num", &cache_num);
   cache_num_ = (0 >= cache_num || 48 < cache_num) ? 16 : cache_num;

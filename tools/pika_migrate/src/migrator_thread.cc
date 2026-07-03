@@ -40,45 +40,30 @@ void MigratorThread::MigrateStringsDB() {
     }
   }
 
-  int64_t ttl = -1;
   int64_t cursor = 0;
-  storage::Status s;
-  std::string value;
-  std::vector<std::string> keys;
-  std::map<storage::DataType, int64_t> type_timestamp;
-  std::map<storage::DataType, rocksdb::Status> type_status;
+  std::vector<storage::KeyValueTTL> kvs;
   while (true) {
-    cursor = storage_->Scan(storage::DataType::kStrings, cursor, "*", scan_batch_num, &keys);
+    // Read key + value + ttl in a single scan pass, avoiding the extra
+    // Get()/TTL() point lookups that used to run once per key.
+    cursor = storage_->ScanStringsWithValue(cursor, "*", scan_batch_num, &kvs);
 
-    for (const auto& key : keys) {
-      s = storage_->Get(key, &value);
-      if (!s.ok()) {
-        LOG(WARNING) << "get " << key << " error: " << s.ToString();
-        continue;
-      }
-
+    for (const auto& kv : kvs) {
       net::RedisCmdArgsType argv;
       std::string cmd;
 
       argv.push_back("SET");
-      argv.push_back(key);
-      argv.push_back(value);
+      argv.push_back(kv.key);
+      argv.push_back(kv.value);
 
-      ttl = -1;
-      type_status.clear();
-      type_timestamp = storage_->TTL(key, &type_status);
-      if (type_timestamp[storage::kStrings] != -2) {
-        ttl = type_timestamp[storage::kStrings];
-      }
-
-      if (ttl > 0) {
+      // kv.ttl: >0 remaining seconds, -1 no expiration (0/negative are skipped).
+      if (kv.ttl > 0) {
         argv.push_back("EX");
-        argv.push_back(std::to_string(ttl));
+        argv.push_back(std::to_string(kv.ttl));
       }
 
       net::SerializeRedisCommand(argv, &cmd);
       PlusNum();
-      DispatchKey(cmd, key);
+      DispatchKey(cmd, kv.key);
     }
 
     if (!cursor) {

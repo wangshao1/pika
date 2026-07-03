@@ -1352,6 +1352,57 @@ bool RedisStrings::Scan(const std::string& start_key, const std::string& pattern
   return is_finish;
 }
 
+bool RedisStrings::ScanWithValue(const std::string& start_key, const std::string& pattern,
+                                 std::vector<KeyValueTTL>* kvs, int64_t* count, std::string* next_key) {
+  std::string key;
+  bool is_finish = true;
+  rocksdb::ReadOptions iterator_options;
+  const rocksdb::Snapshot* snapshot;
+  ScopeSnapshot ss(db_, &snapshot);
+  iterator_options.snapshot = snapshot;
+  iterator_options.fill_cache = false;
+
+  int64_t unix_time;
+  rocksdb::Env::Default()->GetCurrentTime(&unix_time);
+
+  // Note: This is a string type and does not need to pass the column family as
+  // a parameter, use the default column family
+  rocksdb::Iterator* it = db_->NewIterator(iterator_options);
+
+  it->Seek(start_key);
+  while (it->Valid() && (*count) > 0) {
+    ParsedStringsValue parsed_strings_value(it->value());
+    if (parsed_strings_value.IsStale()) {
+      it->Next();
+      continue;
+    } else {
+      key = it->key().ToString();
+      if (StringMatch(pattern.data(), pattern.size(), key.data(), key.size(), 0) != 0) {
+        KeyValueTTL kvt;
+        kvt.key = key;
+        kvt.value = parsed_strings_value.value().ToString();
+        // timestamp()==0 means permanent survival; otherwise it is an absolute
+        // unix timestamp, convert it to remaining seconds.
+        int32_t timestamp = parsed_strings_value.timestamp();
+        kvt.ttl = (timestamp == 0) ? -1 : (timestamp - unix_time);
+        kvs->push_back(std::move(kvt));
+      }
+      (*count)--;
+      it->Next();
+    }
+  }
+
+  std::string prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
+  if (it->Valid() && (it->key().compare(prefix) <= 0 || it->key().starts_with(prefix))) {
+    is_finish = false;
+    *next_key = it->key().ToString();
+  } else {
+    *next_key = "";
+  }
+  delete it;
+  return is_finish;
+}
+
 bool RedisStrings::PKExpireScan(const std::string& start_key, int32_t min_timestamp, int32_t max_timestamp,
                                 std::vector<std::string>* keys, int64_t* leftover_visits, std::string* next_key) {
   bool is_finish = true;

@@ -86,6 +86,14 @@ struct KeyValue {
   bool operator<(const KeyValue& kv) const { return key < kv.key; }
 };
 
+// Used by data migration: carries key, value and remaining ttl(seconds)
+// read from a single scan pass, avoiding extra Get()/TTL() round-trips.
+struct KeyValueTTL {
+  std::string key;
+  std::string value;
+  int64_t ttl;  // >0: remaining seconds; -1: no expiration
+};
+
 struct KeyInfo {
   uint64_t keys;
   uint64_t expires;
@@ -968,6 +976,13 @@ class Storage {
   // in the next call
   int64_t Scan(const DataType& dtype, int64_t cursor, const std::string& pattern, int64_t count,
                std::vector<std::string>* keys);
+
+  // Scan the strings database and return key/value/ttl together in a single
+  // pass. Intended for data migration to avoid the extra Get()/TTL() point
+  // lookups per key. Cursor semantics match Scan(kStrings, ...): start with 0,
+  // a non-zero return means there is more to scan.
+  int64_t ScanStringsWithValue(int64_t cursor, const std::string& pattern, int64_t count,
+                               std::vector<KeyValueTTL>* kvs);
 
   // Iterate over a collection of elements, obtaining the item which timeout
   // conforms to the inequality (min_ttl < item_ttl < max_ttl)

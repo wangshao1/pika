@@ -967,6 +967,42 @@ int64_t Storage::Scan(const DataType& dtype, int64_t cursor, const std::string& 
   return cursor_ret;
 }
 
+int64_t Storage::ScanStringsWithValue(int64_t cursor, const std::string& pattern, int64_t count,
+                                      std::vector<KeyValueTTL>* kvs) {
+  kvs->clear();
+  bool is_finish;
+  int64_t leftover_visits = count;
+  int64_t step_length = count;
+  int64_t cursor_ret = 0;
+  std::string start_key;
+  std::string next_key;
+  std::string prefix;
+
+  prefix = isTailWildcard(pattern) ? pattern.substr(0, pattern.size() - 1) : "";
+
+  if (cursor < 0) {
+    return cursor_ret;
+  }
+
+  Status s = GetStartKey(DataType::kStrings, cursor, &start_key);
+  if (s.IsNotFound()) {
+    start_key = std::string(1, DataTypeTag[kStrings]) + prefix;
+    cursor = 0;
+  }
+  // Strip the leading data-type tag ('k') to get the real rocksdb start key.
+  start_key.erase(start_key.begin());
+
+  is_finish = strings_db_->ScanWithValue(start_key, pattern, kvs, &leftover_visits, &next_key);
+  if ((leftover_visits == 0) && !is_finish) {
+    cursor_ret = cursor + step_length;
+    StoreCursorStartKey(DataType::kStrings, cursor_ret, std::string("k") + next_key);
+  } else {
+    // is_finish, or the whole strings database has been scanned.
+    cursor_ret = 0;
+  }
+  return cursor_ret;
+}
+
 int64_t Storage::PKExpireScan(const DataType& dtype, int64_t cursor, int32_t min_ttl, int32_t max_ttl, int64_t count,
                               std::vector<std::string>* keys) {
   keys->clear();

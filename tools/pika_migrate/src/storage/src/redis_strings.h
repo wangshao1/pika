@@ -67,6 +67,10 @@ class RedisStrings : public Redis {
   Status Del(const Slice& key) override;
   bool Scan(const std::string& start_key, const std::string& pattern, std::vector<std::string>* keys, int64_t* count,
             std::string* next_key) override;
+  // Like Scan(), but also returns the user value and remaining ttl(seconds)
+  // for each key, all read from the same iterator/snapshot in one pass.
+  bool ScanWithValue(const std::string& start_key, const std::string& pattern, std::vector<KeyValueTTL>* kvs,
+                     int64_t* count, std::string* next_key);
   bool PKExpireScan(const std::string& start_key, int32_t min_timestamp, int32_t max_timestamp,
                     std::vector<std::string>* keys, int64_t* leftover_visits, std::string* next_key) override;
   Status Expireat(const Slice& key, int32_t timestamp) override;

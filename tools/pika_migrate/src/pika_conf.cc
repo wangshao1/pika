@@ -674,6 +674,13 @@ int PikaConf::Load() {
   redis_sender_num_ = 8;
   GetConfInt("redis-sender-num", &redis_sender_num_);
 
+  // Number of commands each RedisSender pipelines before waiting for replies.
+  redis_pipeline_size_ = 100;
+  GetConfInt("redis-pipeline-size", &redis_pipeline_size_);
+  if (redis_pipeline_size_ < 1) {
+    redis_pipeline_size_ = 1;
+  }
+
   // max conn rbuf size
   int tmp_max_conn_rbuf_size = PIKA_MAX_CONN_RBUF;
   GetConfIntHuman("max-conn-rbuf-size", &tmp_max_conn_rbuf_size);

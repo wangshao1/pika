@@ -411,7 +411,7 @@ void MigratorThread::DispatchKey(const std::string &command, const std::string& 
   if (key.size()) { // no empty
     idx = std::hash<std::string>()(key) % thread_num_;
   }
-  (*senders_)[idx]->SendRedisCommand(command);
+  (*senders_)[idx]->SendRedisCommand(key, command);
 }
 
 const char* GetDBTypeString(int type) {

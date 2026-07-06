@@ -6,6 +6,9 @@
 #include <chrono>
 #include <iostream>
 #include <queue>
+#include <vector>
+#include <utility>
+#include <unordered_set>
 #include <mutex>
 #include <condition_variable>
 
@@ -22,10 +25,17 @@ class RedisSender : public net::Thread {
     return elements_;
   }
 
-  void SendRedisCommand(const std::string &command);
+  // key is used to guarantee ordering under a codis-like target: within one
+  // pipeline batch the same key never appears twice (see ThreadMain), so the
+  // proxy's multi-connection fan-out to backends cannot reorder writes of the
+  // same key. Pass an empty key only when the command is not key-scoped.
+  void SendRedisCommand(const std::string &key, const std::string &command);
 
  private:
   int SendCommand(std::string &command);
+  // Pipeline: send a batch of commands then read all replies. On failure it
+  // reconnects and resends the batch one-by-one to preserve ordering.
+  int SendCommands(std::vector<std::string> &commands);
   void ConnectRedis();
   size_t commandQueueSize() {
     std::lock_guard l(command_queue_mutex_);
@@ -40,7 +50,8 @@ class RedisSender : public net::Thread {
   std::condition_variable wsignal_;
   std::mutex signal_mutex_;
   std::mutex command_queue_mutex_;
-  std::queue<std::string> commands_queue_;
+  // Each entry is (key, serialized command). key drives per-batch dedup.
+  std::queue<std::pair<std::string, std::string>> commands_queue_;
   std::string ip_;
   std::string user_;
   std::string password_;

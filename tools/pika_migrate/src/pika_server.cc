@@ -1571,7 +1571,7 @@ Status PikaServer::GetCmdRouting(std::vector<net::RedisCmdArgsType>& redis_cmds,
 int PikaServer::SendRedisCommand(const std::string& command, const std::string& key) {
   // Send command
   size_t idx = std::hash<std::string>()(key) % redis_senders_.size();
-  redis_senders_[idx]->SendRedisCommand(command);
+  redis_senders_[idx]->SendRedisCommand(key, command);
   return 0;
 }
 

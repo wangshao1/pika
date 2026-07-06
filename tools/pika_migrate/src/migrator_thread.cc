@@ -20,6 +20,7 @@
 #include "src/redis_zsets.h"
 #include "src/scope_snapshot.h"
 #include "src/strings_value_format.h"
+#include "pstd/include/pstd_string.h"
 
 #include "include/pika_conf.h"
 
@@ -84,10 +85,7 @@ void MigratorThread::MigrateListsDB() {
 
   int64_t ttl = -1;
   int64_t cursor = 0;
-  storage::Status s;
   std::vector<std::string> keys;
-  std::map<storage::DataType, int64_t> type_timestamp;
-  std::map<storage::DataType, rocksdb::Status> type_status;
 
   while (true) {
     cursor = storage_->Scan(storage::DataType::kLists, cursor, "*", scan_batch_num, &keys);
@@ -95,9 +93,14 @@ void MigratorThread::MigrateListsDB() {
     for (const auto& key : keys) {
       int64_t pos = 0;
       std::vector<std::string> nodes;
-      storage::Status s = storage_->LRange(key, pos, pos + g_pika_conf->sync_batch_num() - 1, &nodes);
+      // Read the first element batch together with the list's ttl in a single
+      // meta lookup, avoiding a separate TTL() point lookup per key.
+      // LRangeWithTTL returns ttl: >0 remaining seconds, -1 permanent, -2 expired.
+      ttl = -1;
+      storage::Status s = storage_->LRangeWithTTL(
+          key, pos, pos + g_pika_conf->sync_batch_num() - 1, &nodes, &ttl);
       if (!s.ok()) {
-        LOG(WARNING) << "db->LRange(key:" << key << ", pos:" << pos
+        LOG(WARNING) << "db->LRangeWithTTL(key:" << key << ", pos:" << pos
           << ", batch size: " << g_pika_conf->sync_batch_num() << ") = " << s.ToString();
         continue;
       }
@@ -123,13 +126,6 @@ void MigratorThread::MigrateListsDB() {
           LOG(WARNING) << "db->LRange(key:" << key << ", pos:" << pos
             << ", batch size:" << g_pika_conf->sync_batch_num() << ") = " << s.ToString();
         }
-      }
-
-      ttl = -1;
-      type_status.clear();
-      type_timestamp = storage_->TTL(key, &type_status);
-      if (type_timestamp[storage::kLists] != -2) {
-        ttl = type_timestamp[storage::kLists];
       }
 
       if (s.ok() && ttl > 0) {
@@ -164,7 +160,6 @@ void MigratorThread::MigrateHashesDB() {
 
   int64_t ttl = -1;
   int64_t cursor = 0;
-  storage::Status s;
   std::vector<std::string> keys;
   std::map<storage::DataType, int64_t> type_timestamp;
   std::map<storage::DataType, rocksdb::Status> type_status;
@@ -173,30 +168,48 @@ void MigratorThread::MigrateHashesDB() {
     cursor = storage_->Scan(storage::DataType::kHashes, cursor, "*", scan_batch_num, &keys);
 
     for (const auto& key : keys) {
-      std::vector<storage::FieldValue> fvs;
-      storage::Status s = storage_->HGetall(key, &fvs);
-      if (!s.ok()) {
-        LOG(WARNING) << "db->HGetall(key:" << key << ") = " << s.ToString();
-        continue;
-      }
+      // Scan the hash's fields in cursor-paged batches so peak memory stays at
+      // one batch instead of the whole hash (large keys would otherwise be read
+      // in full). ttl is fetched once per key outside the paging loop.
+      int64_t field_cursor = 0;
+      bool read_ok = true;
+      do {
+        std::vector<storage::FieldValue> fvs;
+        storage::Status s = storage_->HScan(key, field_cursor, "*", g_pika_conf->sync_batch_num(),
+                                             &fvs, &field_cursor);
+        if (s.IsNotFound()) {
+          // Key absent or already expired: nothing to migrate, skip quietly.
+          break;
+        }
+        if (!s.ok()) {
+          LOG(WARNING) << "db->HScan(key:" << key << ", cursor:" << field_cursor << ") = " << s.ToString();
+          read_ok = false;
+          break;
+        }
+        if (fvs.empty()) {
+          continue;
+        }
 
-      auto it = fvs.begin();
-      while (!should_exit_ && it != fvs.end()) {
         net::RedisCmdArgsType argv;
         std::string cmd;
-
+        argv.reserve(2 + fvs.size() * 2);
         argv.push_back("HMSET");
         argv.push_back(key);
-        for (int idx = 0;
-             idx < g_pika_conf->sync_batch_num() && !should_exit_ && it != fvs.end();
-             idx++, it++) {
-          argv.push_back(it->field);
-          argv.push_back(it->value);
+        for (auto& fv : fvs) {
+          if (should_exit_) {
+            break;
+          }
+          argv.push_back(std::move(fv.field));
+          argv.push_back(std::move(fv.value));
         }
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
         DispatchKey(cmd, key);
+      } while (!should_exit_ && field_cursor != 0);
+
+      if (!read_ok) {
+        continue;
       }
 
       ttl = -1;
@@ -206,7 +219,7 @@ void MigratorThread::MigrateHashesDB() {
         ttl = type_timestamp[storage::kHashes];
       }
 
-      if (s.ok() && ttl > 0) {
+      if (ttl > 0) {
         net::RedisCmdArgsType argv;
         std::string cmd;
 
@@ -238,7 +251,6 @@ void MigratorThread::MigrateSetsDB() {
 
   int64_t ttl = -1;
   int64_t cursor = 0;
-  storage::Status s;
   std::vector<std::string> keys;
   std::map<storage::DataType, int64_t> type_timestamp;
   std::map<storage::DataType, rocksdb::Status> type_status;
@@ -247,28 +259,47 @@ void MigratorThread::MigrateSetsDB() {
     cursor = storage_->Scan(storage::DataType::kSets, cursor, "*", scan_batch_num, &keys);
 
     for (const auto& key : keys) {
-      std::vector<std::string> members;
-      storage::Status s = storage_->SMembers(key, &members);
-      if (!s.ok()) {
-        LOG(WARNING) << "db->SMembers(key:" << key << ") = " << s.ToString();
-        continue;
-      }
-      auto it = members.begin();
-      while (!should_exit_ && it != members.end()) {
+      // Scan the set's members in cursor-paged batches so peak memory stays at
+      // one batch instead of the whole set. ttl is fetched once per key outside
+      // the paging loop.
+      int64_t member_cursor = 0;
+      bool read_ok = true;
+      do {
+        std::vector<std::string> members;
+        storage::Status s = storage_->SScan(key, member_cursor, "*", g_pika_conf->sync_batch_num(),
+                                             &members, &member_cursor);
+        if (s.IsNotFound()) {
+          // Key absent or already expired: nothing to migrate, skip quietly.
+          break;
+        }
+        if (!s.ok()) {
+          LOG(WARNING) << "db->SScan(key:" << key << ", cursor:" << member_cursor << ") = " << s.ToString();
+          read_ok = false;
+          break;
+        }
+        if (members.empty()) {
+          continue;
+        }
+
         std::string cmd;
         net::RedisCmdArgsType argv;
-
+        argv.reserve(2 + members.size());
         argv.push_back("SADD");
         argv.push_back(key);
-        for (int idx = 0;
-             idx < g_pika_conf->sync_batch_num() && !should_exit_ && it != members.end();
-             idx++, it++) {
-          argv.push_back(*it);
+        for (auto& member : members) {
+          if (should_exit_) {
+            break;
+          }
+          argv.push_back(std::move(member));
         }
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
         DispatchKey(cmd, key);
+      } while (!should_exit_ && member_cursor != 0);
+
+      if (!read_ok) {
+        continue;
       }
 
       ttl = -1;
@@ -278,7 +309,7 @@ void MigratorThread::MigrateSetsDB() {
         ttl = type_timestamp[storage::kSets];
       }
 
-      if (s.ok() && ttl > 0) {
+      if (ttl > 0) {
         net::RedisCmdArgsType argv;
         std::string cmd;
 
@@ -310,7 +341,6 @@ void MigratorThread::MigrateZsetsDB() {
 
   int64_t ttl = -1;
   int64_t cursor = 0;
-  storage::Status s;
   std::vector<std::string> keys;
   std::map<storage::DataType, int64_t> type_timestamp;
   std::map<storage::DataType, rocksdb::Status> type_status;
@@ -319,29 +349,53 @@ void MigratorThread::MigrateZsetsDB() {
     cursor = storage_->Scan(storage::DataType::kZSets, cursor, "*", scan_batch_num, &keys);
 
     for (const auto& key : keys) {
-      std::vector<storage::ScoreMember> score_members;
-      storage::Status s = storage_->ZRange(key, 0, -1, &score_members);
-      if (!s.ok()) {
-        LOG(WARNING) << "db->ZRange(key:" << key << ") = " << s.ToString();
-        continue;
-      }
-      auto it = score_members.begin();
-      while (!should_exit_ && it != score_members.end()) {
+      // Scan the zset's members in cursor-paged batches so peak memory stays at
+      // one batch instead of the whole zset. ttl is fetched once per key outside
+      // the paging loop.
+      int64_t member_cursor = 0;
+      bool read_ok = true;
+      do {
+        std::vector<storage::ScoreMember> score_members;
+        storage::Status s = storage_->ZScan(key, member_cursor, "*", g_pika_conf->sync_batch_num(),
+                                             &score_members, &member_cursor);
+        if (s.IsNotFound()) {
+          // Key absent or already expired: nothing to migrate, skip quietly.
+          break;
+        }
+        if (!s.ok()) {
+          LOG(WARNING) << "db->ZScan(key:" << key << ", cursor:" << member_cursor << ") = " << s.ToString();
+          read_ok = false;
+          break;
+        }
+        if (score_members.empty()) {
+          continue;
+        }
+
         net::RedisCmdArgsType argv;
         std::string cmd;
-
+        argv.reserve(2 + score_members.size() * 2);
         argv.push_back("ZADD");
         argv.push_back(key);
-        for (int idx = 0;
-             idx < g_pika_conf->sync_batch_num() && !should_exit_ && it != score_members.end();
-             idx++, it++) {
-          argv.push_back(std::to_string(it->score));
-          argv.push_back(it->member);
+        for (auto& sm : score_members) {
+          if (should_exit_) {
+            break;
+          }
+          // Format score with d2string (%.17g + integer/nan/inf/-0 handling),
+          // matching the source node's ZADD/ZRANGE output. std::to_string uses
+          // %f (6 decimals) and would lose precision.
+          char score_buf[32];
+          int64_t score_len = pstd::d2string(score_buf, sizeof(score_buf), sm.score);
+          argv.push_back(std::string(score_buf, score_len));
+          argv.push_back(std::move(sm.member));
         }
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
         DispatchKey(cmd, key);
+      } while (!should_exit_ && member_cursor != 0);
+
+      if (!read_ok) {
+        continue;
       }
 
       ttl = -1;
@@ -351,7 +405,7 @@ void MigratorThread::MigrateZsetsDB() {
         ttl = type_timestamp[storage::kZSets];
       }
 
-      if (s.ok() && ttl > 0) {
+      if (ttl > 0) {
         net::RedisCmdArgsType argv;
         std::string cmd;
 

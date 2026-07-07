@@ -14,10 +14,12 @@
 #include <glog/logging.h>
 
 #include "include/pika_conf.h"
+#include "pstd/include/env.h"
 
 extern PikaConf* g_pika_conf;
 
 static time_t kCheckDiff = 1;
+static const int64_t kSlowLogThresholdUs = 3000;
 
 RedisSender::RedisSender(int id, std::string ip, int64_t port, std::string user, std::string password):
   id_(id),
@@ -115,12 +117,32 @@ void RedisSender::Stop() {
 }
 
 void RedisSender::SendRedisCommand(const std::string &key, const std::string &command) {
+  const auto start_us = pstd::NowMicros();
   std::unique_lock lock(signal_mutex_);
-  wsignal_.wait(lock, [this]() { return commandQueueSize() < 100000; });
+  const auto signal_mutex_lock_us = pstd::NowMicros();
+  wsignal_.wait(lock, [this]() { return commandQueueSize() < 100000 || should_exit_; });
+  const auto signal_wait_us = pstd::NowMicros();
+  lock.unlock();
+
   if (!should_exit_) {
-    std::lock_guard l(command_queue_mutex_);
-    commands_queue_.push(std::make_pair(key, command));
+    const auto queue_mutex_start_us = pstd::NowMicros();
+    {
+      std::lock_guard l(command_queue_mutex_);
+      commands_queue_.push(std::make_pair(key, command));
+    }
+    const auto queue_push_us = pstd::NowMicros();
     rsignal_.notify_one();
+    const auto end_us = pstd::NowMicros();
+
+    if (end_us - start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "RedisSender enqueue slow, id: " << id_
+                << ", total cost: " << (end_us - start_us) / 1000 << " ms"
+                << ", signal_mutex lock: " << (signal_mutex_lock_us - start_us) / 1000 << " ms"
+                << ", signal wait: " << (signal_wait_us - signal_mutex_lock_us) / 1000 << " ms"
+                << ", queue push: " << (queue_push_us - queue_mutex_start_us) / 1000 << " ms"
+                << ", notify: " << (end_us - queue_push_us) / 1000 << " ms"
+                << ", command size: " << command.size();
+    }
   }
 }
 
@@ -173,6 +195,7 @@ int RedisSender::SendCommands(std::vector<std::string> &commands) {
     last_write_time_ = now;
   }
 
+  const auto start_us = pstd::NowMicros();
   // Fast path: send the whole batch, then receive one reply per command.
   bool ok = true;
   for (auto &command : commands) {
@@ -190,6 +213,13 @@ int RedisSender::SendCommands(std::vector<std::string> &commands) {
         break;
       }
     }
+  }
+  const auto end_us = pstd::NowMicros();
+  if (end_us - start_us >= kSlowLogThresholdUs) {
+    LOG(INFO) << "RedisSender send slow, id: " << id_
+              << ", commands: " << commands.size()
+              << ", cost: " << (end_us - start_us) / 1000 << " ms"
+              << ", status: " << ok;
   }
   if (ok) {
     return 0;
@@ -218,9 +248,11 @@ void *RedisSender::ThreadMain() {
   const size_t pipeline_size = static_cast<size_t>(g_pika_conf->redis_pipeline_size());
 
   while (!should_exit_) {
-    std::unique_lock lock(signal_mutex_);
-    while (commandQueueSize() == 0 && !should_exit_) {
-      rsignal_.wait_for(lock, std::chrono::milliseconds(100));
+    {
+      std::unique_lock lock(signal_mutex_);
+      while (commandQueueSize() == 0 && !should_exit_) {
+        rsignal_.wait_for(lock, std::chrono::milliseconds(100));
+      }
     }
 
     if (should_exit_) {

@@ -21,10 +21,12 @@
 #include "src/scope_snapshot.h"
 #include "src/strings_value_format.h"
 #include "pstd/include/pstd_string.h"
+#include "pstd/include/env.h"
 
 #include "include/pika_conf.h"
 
 const int64_t MAX_BATCH_NUM = 30000;
+static const int64_t kSlowLogThresholdUs = 3000;
 
 extern PikaConf* g_pika_conf;
 
@@ -44,9 +46,15 @@ void MigratorThread::MigrateStringsDB() {
   int64_t cursor = 0;
   std::vector<storage::KeyValueTTL> kvs;
   while (true) {
+    auto start_us = pstd::NowMicros();
     // Read key + value + ttl in a single scan pass, avoiding the extra
     // Get()/TTL() point lookups that used to run once per key.
     cursor = storage_->ScanStringsWithValue(cursor, "*", scan_batch_num, &kvs);
+    auto scan_end_us = pstd::NowMicros();
+    if (scan_end_us - start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "String scan slow, commands: " << kvs.size()
+                << ", cost: " << (scan_end_us - start_us) / 1000 << " ms";
+    }
 
     for (const auto& kv : kvs) {
       net::RedisCmdArgsType argv;
@@ -64,7 +72,14 @@ void MigratorThread::MigrateStringsDB() {
 
       net::SerializeRedisCommand(argv, &cmd);
       PlusNum();
+      auto dispatch_us = pstd::NowMicros();
       DispatchKey(cmd, kv.key);
+      auto end_us = pstd::NowMicros();
+      if (end_us - dispatch_us >= kSlowLogThresholdUs) {
+        LOG(INFO) << "DispatchKey slow, key: " << kv.key
+                  << ", cost: " << (end_us - dispatch_us) / 1000 << " ms"
+                  << ", command size: " << cmd.size();
+      }
     }
 
     if (!cursor) {
@@ -141,6 +156,7 @@ void MigratorThread::MigrateListsDB() {
         DispatchKey(cmd, key);
       }
     }
+
 
     if (!cursor) {
       break;
@@ -320,6 +336,7 @@ void MigratorThread::MigrateSetsDB() {
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
         DispatchKey(cmd, key);
+
       }
     }
 
@@ -380,6 +397,7 @@ void MigratorThread::MigrateZsetsDB() {
           if (should_exit_) {
             break;
           }
+
           // Format score with d2string (%.17g + integer/nan/inf/-0 handling),
           // matching the source node's ZADD/ZRANGE output. std::to_string uses
           // %f (6 decimals) and would lose precision.

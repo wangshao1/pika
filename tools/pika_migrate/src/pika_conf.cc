@@ -681,6 +681,17 @@ int PikaConf::Load() {
     redis_pipeline_size_ = 1;
   }
 
+  // Micro-batching window (microseconds). After the send queue becomes
+  // non-empty, a RedisSender waits up to this long for more commands to arrive
+  // so a pipeline batch can fill up to redis-pipeline-size, instead of flushing
+  // a single command per network round-trip. 0 disables the wait (flush ASAP).
+  int tmp_redis_pipeline_wait_us = 300;
+  GetConfInt("redis-pipeline-wait-us", &tmp_redis_pipeline_wait_us);
+  if (tmp_redis_pipeline_wait_us < 0) {
+    tmp_redis_pipeline_wait_us = 0;
+  }
+  redis_pipeline_wait_us_ = tmp_redis_pipeline_wait_us;
+
   // max conn rbuf size
   int tmp_max_conn_rbuf_size = PIKA_MAX_CONN_RBUF;
   GetConfIntHuman("max-conn-rbuf-size", &tmp_max_conn_rbuf_size);

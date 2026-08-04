@@ -53,7 +53,7 @@ void PikaReplBgWorker::HandleBGWorkerWriteBinlog(void* arg) {
   PikaReplBgWorker* worker = task_arg->worker;
   worker->ip_port_ = conn->ip_port();
 
-  DEFER { 
+  DEFER {
     delete index;
     delete task_arg;
   };
@@ -279,7 +279,7 @@ void PikaReplBgWorker::WriteDBInSyncWay(const std::shared_ptr<Cmd>& c_ptr) {
 
 void PikaReplBgWorker::ParseAndSendPikaCommand(const std::shared_ptr<Cmd>& c_ptr) {
   const PikaCmdArgsType& argv = c_ptr->argv();
-    if (!strcasecmp(argv[0].data(), "pksetexat")) {
+  if (!strcasecmp(argv[0].data(), "pksetexat")) {
     if (argv.size() != 4) {
       LOG(WARNING) << "find invaild command, command size: " << argv.size();
       return;

@@ -894,6 +894,7 @@ class PikaConf : public pstd::BaseConf {
   int sync_batch_num() { return sync_batch_num_; }
   int redis_sender_num() { return redis_sender_num_; }
   int redis_pipeline_size() { return redis_pipeline_size_; }
+  int64_t redis_pipeline_wait_us() { return redis_pipeline_wait_us_; }
  private:
   int port_ = 0;
   int slave_priority_ = 100;
@@ -1080,6 +1081,7 @@ class PikaConf : public pstd::BaseConf {
   int sync_batch_num_;
   int redis_sender_num_;
   int redis_pipeline_size_;
+  int64_t redis_pipeline_wait_us_;
 };
 
 #endif

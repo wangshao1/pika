@@ -246,6 +246,7 @@ void *RedisSender::ThreadMain() {
   ConnectRedis();
 
   const size_t pipeline_size = static_cast<size_t>(g_pika_conf->redis_pipeline_size());
+  const int64_t pipeline_wait_us = g_pika_conf->redis_pipeline_wait_us();
 
   while (!should_exit_) {
     {
@@ -261,6 +262,21 @@ void *RedisSender::ThreadMain() {
 
     if (commandQueueSize() == 0) {
       continue;
+    }
+
+    // Micro-batching window: the producer side (binlog replay / migrator) often
+    // enqueues one command at a time, so without waiting the queue usually holds
+    // a single command when we wake up and every network round-trip carries just
+    // one command. Wait up to pipeline_wait_us for the queue to fill toward
+    // pipeline_size, so one round-trip amortizes many commands. Flush early the
+    // moment we have a full batch; exit the wait promptly on shutdown.
+    if (pipeline_wait_us > 0 && commandQueueSize() < pipeline_size) {
+      const int64_t deadline_us = pstd::NowMicros() + pipeline_wait_us;
+      while (!should_exit_
+             && commandQueueSize() < pipeline_size
+             && pstd::NowMicros() < deadline_us) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+      }
     }
 
     // Build one pipeline batch. Rule: the same key must not appear twice in a

@@ -285,19 +285,31 @@ void PikaReplBgWorker::ParseAndSendPikaCommand(const std::shared_ptr<Cmd>& c_ptr
       return;
     } else {
       std::string key = argv[1];
-      int timestamp = std::atoi(argv[2].data());
+      int64_t timestamp = strtoll(argv[2].data(), nullptr, 10);
       std::string value = argv[3];
 
-      int seconds = timestamp - time(NULL);
-      PikaCmdArgsType tmp_argv;
-      tmp_argv.push_back("setex");
-      tmp_argv.push_back(key);
-      tmp_argv.push_back(std::to_string(seconds));
-      tmp_argv.push_back(value);
+      // Always write the value with a plain SET, then apply the absolute
+      // expiry with a separate EXPIREAT only when one is actually set.
+      // Using the absolute timestamp keeps the TTL consistent with the
+      // source even across replay delays, and avoids a negative/zero TTL
+      // that a relative SETEX would compute when timestamp is 0 (no expiry).
+      PikaCmdArgsType set_argv;
+      set_argv.push_back("set");
+      set_argv.push_back(key);
+      set_argv.push_back(value);
+      std::string set_cmd;
+      net::SerializeRedisCommand(set_argv, &set_cmd);
+      g_pika_server->SendRedisCommand(set_cmd, key);
 
-      std::string command;
-      net::SerializeRedisCommand(tmp_argv, &command);
-      g_pika_server->SendRedisCommand(command, key);
+      if (timestamp > 0) {
+        PikaCmdArgsType expire_argv;
+        expire_argv.push_back("expireat");
+        expire_argv.push_back(key);
+        expire_argv.push_back(argv[2]);
+        std::string expire_cmd;
+        net::SerializeRedisCommand(expire_argv, &expire_cmd);
+        g_pika_server->SendRedisCommand(expire_cmd, key);
+      }
     }
   } else {
     std::string key = argv.size() >= 2 ? argv[1] : argv[0];

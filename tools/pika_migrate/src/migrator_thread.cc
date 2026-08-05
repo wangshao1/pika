@@ -12,6 +12,7 @@
 #define GLOG_USE_GLOG_EXPORT
 #include <glog/logging.h>
 
+#include "rocksdb/env.h"
 #include "storage/storage.h"
 #include "src/redis_strings.h"
 #include "src/redis_lists.h"
@@ -64,12 +65,6 @@ void MigratorThread::MigrateStringsDB() {
       argv.push_back(kv.key);
       argv.push_back(kv.value);
 
-      // kv.ttl: >0 remaining seconds, -1 no expiration (0/negative are skipped).
-      if (kv.ttl > 0) {
-        argv.push_back("EX");
-        argv.push_back(std::to_string(kv.ttl));
-      }
-
       net::SerializeRedisCommand(argv, &cmd);
       PlusNum();
       auto dispatch_us = pstd::NowMicros();
@@ -79,6 +74,24 @@ void MigratorThread::MigrateStringsDB() {
         LOG(INFO) << "DispatchKey slow, key: " << kv.key
                   << ", cost: " << (end_us - dispatch_us) / 1000 << " ms"
                   << ", command size: " << cmd.size();
+      }
+
+      // kv.ttl: >0 remaining seconds, -1 no expiration (0/negative are skipped).
+      // Convert the relative remaining-seconds to an ABSOLUTE unix deadline at
+      // scan time and send EXPIREAT, so that time spent queued before this
+      // command actually reaches the target does not inflate the expiry. Emitted
+      // as a separate command (same key) so ordering after SET is preserved.
+      if (kv.ttl > 0) {
+        int64_t curtime = 0;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
+        net::RedisCmdArgsType ttl_argv;
+        std::string ttl_cmd;
+        ttl_argv.push_back("EXPIREAT");
+        ttl_argv.push_back(kv.key);
+        ttl_argv.push_back(std::to_string(curtime + kv.ttl));
+        net::SerializeRedisCommand(ttl_argv, &ttl_cmd);
+        PlusNum();
+        DispatchKey(ttl_cmd, kv.key);
       }
     }
 
@@ -144,12 +157,16 @@ void MigratorThread::MigrateListsDB() {
       }
 
       if (s.ok() && ttl > 0) {
+        int64_t curtime = 0;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
         net::RedisCmdArgsType argv;
         std::string cmd;
 
-        argv.push_back("EXPIRE");
+        // Relative ttl -> absolute unix deadline at scan time, sent as EXPIREAT,
+        // so queueing/network delay before delivery does not inflate the expiry.
+        argv.push_back("EXPIREAT");
         argv.push_back(key);
-        argv.push_back(std::to_string(ttl));
+        argv.push_back(std::to_string(curtime + ttl));
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
@@ -236,12 +253,16 @@ void MigratorThread::MigrateHashesDB() {
       }
 
       if (ttl > 0) {
+        int64_t curtime = 0;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
         net::RedisCmdArgsType argv;
         std::string cmd;
 
-        argv.push_back("EXPIRE");
+        // Relative ttl -> absolute unix deadline at scan time, sent as EXPIREAT,
+        // so queueing/network delay before delivery does not inflate the expiry.
+        argv.push_back("EXPIREAT");
         argv.push_back(key);
-        argv.push_back(std::to_string(ttl));
+        argv.push_back(std::to_string(curtime + ttl));
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
@@ -326,12 +347,16 @@ void MigratorThread::MigrateSetsDB() {
       }
 
       if (ttl > 0) {
+        int64_t curtime = 0;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
         net::RedisCmdArgsType argv;
         std::string cmd;
 
-        argv.push_back("EXPIRE");
+        // Relative ttl -> absolute unix deadline at scan time, sent as EXPIREAT,
+        // so queueing/network delay before delivery does not inflate the expiry.
+        argv.push_back("EXPIREAT");
         argv.push_back(key);
-        argv.push_back(std::to_string(ttl));
+        argv.push_back(std::to_string(curtime + ttl));
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();
@@ -424,12 +449,16 @@ void MigratorThread::MigrateZsetsDB() {
       }
 
       if (ttl > 0) {
+        int64_t curtime = 0;
+        rocksdb::Env::Default()->GetCurrentTime(&curtime);
         net::RedisCmdArgsType argv;
         std::string cmd;
 
-        argv.push_back("EXPIRE");
+        // Relative ttl -> absolute unix deadline at scan time, sent as EXPIREAT,
+        // so queueing/network delay before delivery does not inflate the expiry.
+        argv.push_back("EXPIREAT");
         argv.push_back(key);
-        argv.push_back(std::to_string(ttl));
+        argv.push_back(std::to_string(curtime + ttl));
 
         net::SerializeRedisCommand(argv, &cmd);
         PlusNum();

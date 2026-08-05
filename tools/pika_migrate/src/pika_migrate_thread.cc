@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <memory>
 
+#include "rocksdb/env.h"
+
 #include "include/pika_command.h"
 #include "include/pika_conf.h"
 #include "include/pika_define.h"
@@ -134,9 +136,14 @@ static int migrateKeyTTl(net::NetCli *cli, const std::string& key, storage::Data
     argv.emplace_back(key);
     net::SerializeRedisCommand(argv, &send_str);
   } else if (0 < type_timestamp[data_type]) {
-    argv.emplace_back("expire");
+    // storage()->TTL returns remaining seconds (relative). Convert to an
+    // absolute unix deadline now and send EXPIREAT, so any delay before this
+    // command reaches the target does not inflate the key's expiry.
+    int64_t curtime = 0;
+    rocksdb::Env::Default()->GetCurrentTime(&curtime);
+    argv.emplace_back("expireat");
     argv.emplace_back(key);
-    argv.emplace_back(std::to_string(type_timestamp[data_type]));
+    argv.emplace_back(std::to_string(curtime + type_timestamp[data_type]));
     net::SerializeRedisCommand(argv, &send_str);
   } else {
     // no expire

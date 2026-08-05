@@ -20,7 +20,14 @@ class RedisSender : public net::Thread {
  public:
   RedisSender(int id, std::string ip, int64_t port, std::string user, std::string password);
   virtual ~RedisSender();
+  // Forced stop: exit as soon as possible, ABANDONING any commands still queued.
+  // Use only when correctness of the queued data no longer matters (e.g. process
+  // teardown in ~PikaServer()).
   void Stop(void);
+  // Graceful stop: keep sending until the queue is fully drained, THEN exit.
+  // Use at the end of a migration once all producers have finished, so no
+  // enqueued command is dropped (a source of src/dst divergence).
+  void GracefulStop(void);
   int64_t elements() {
     return elements_;
   }
@@ -58,7 +65,11 @@ class RedisSender : public net::Thread {
   std::string ip_;
   std::string user_;
   std::string password_;
+  // should_exit_ requests the thread to stop. When graceful_exit_ is also set,
+  // the thread first drains commands_queue_ before leaving; otherwise it leaves
+  // immediately and any queued commands are dropped.
   bool should_exit_;
+  std::atomic<bool> graceful_exit_{false};
   int64_t elements_;
   std::atomic<time_t> last_write_time_;
 };

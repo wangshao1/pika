@@ -1617,8 +1617,10 @@ void PikaServer::RetransmitData(const std::string& path) {
   for (size_t i = 0; i < migrators.size(); i++) {
     migrators[i]->JoinThread();
   }
+  // All producers (migrators) have finished, so every key is now enqueued in the
+  // senders. Drain the queues before stopping so no command is dropped.
   for (size_t i = 0; i < redis_senders_.size(); i++) {
-    redis_senders_[i]->Stop();
+    redis_senders_[i]->GracefulStop();
   }
   for (size_t i = 0; i < redis_senders_.size(); i++) {
     redis_senders_[i]->JoinThread();

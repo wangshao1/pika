@@ -179,6 +179,18 @@ void RedisSender::ConnectRedis() {
 void RedisSender::Stop() {
   set_should_stop();
   should_exit_ = true;
+  graceful_exit_ = false;
+  rsignal_.notify_all();
+  wsignal_.notify_all();
+}
+
+void RedisSender::GracefulStop() {
+  // Ask the thread to stop, but only after the queue is fully drained. Order
+  // matters: set graceful_exit_ before should_exit_ so ThreadMain never observes
+  // should_exit_ == true without graceful_exit_ == true and skips the drain.
+  graceful_exit_ = true;
+  set_should_stop();
+  should_exit_ = true;
   rsignal_.notify_all();
   wsignal_.notify_all();
 }
@@ -364,7 +376,7 @@ void *RedisSender::ThreadMain() {
   const size_t pipeline_size = static_cast<size_t>(g_pika_conf->redis_pipeline_size());
   const int64_t pipeline_wait_us = g_pika_conf->redis_pipeline_wait_us();
 
-  while (!should_exit_) {
+  while (!should_exit_ || (graceful_exit_ && commandQueueSize() > 0)) {
     {
       std::unique_lock lock(signal_mutex_);
       while (commandQueueSize() == 0 && !should_exit_) {
@@ -372,7 +384,15 @@ void *RedisSender::ThreadMain() {
       }
     }
 
-    if (should_exit_) {
+    // Stop decision:
+    //  - forced stop (should_exit_ && !graceful_exit_): leave now, dropping the
+    //    queue (the caller has declared the queued data no longer matters).
+    //  - graceful stop (should_exit_ && graceful_exit_): keep going until the
+    //    queue is empty, then leave, so no enqueued command is dropped.
+    if (should_exit_ && !graceful_exit_) {
+      break;
+    }
+    if (should_exit_ && graceful_exit_ && commandQueueSize() == 0) {
       break;
     }
 
@@ -388,7 +408,7 @@ void *RedisSender::ThreadMain() {
     // moment we have a full batch; exit the wait promptly on shutdown.
     if (pipeline_wait_us > 0 && commandQueueSize() < pipeline_size) {
       const int64_t deadline_us = pstd::NowMicros() + pipeline_wait_us;
-      while (!should_exit_
+      while (!(should_exit_ && !graceful_exit_)
              && commandQueueSize() < pipeline_size
              && pstd::NowMicros() < deadline_us) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -441,14 +461,22 @@ void *RedisSender::ThreadMain() {
     }
   }
 
-  // On exit, warn if there are still un-sent commands in the queue: they will
-  // be dropped and are a source of src/dst divergence.
+  // On exit, warn if there are still un-sent commands in the queue.
+  //  - forced stop: expected, the queue is intentionally abandoned.
+  //  - graceful stop: should be 0 here; a non-zero count means the drain loop
+  //    exited early and is a real bug worth surfacing.
   {
     size_t remained = commandQueueSize();
     if (remained > 0) {
-      LOG(WARNING) << "RedisSender " << id_ << " exiting with " << remained
-                   << " un-sent commands still in queue, target: " << ip_ << ":" << port_
-                   << ", these commands will be DROPPED";
+      if (graceful_exit_) {
+        LOG(WARNING) << "RedisSender " << id_ << " graceful-exit but " << remained
+                     << " commands still queued (drain incomplete), target: " << ip_ << ":" << port_
+                     << ", these commands will be DROPPED";
+      } else {
+        LOG(WARNING) << "RedisSender " << id_ << " forced-exit with " << remained
+                     << " un-sent commands still in queue, target: " << ip_ << ":" << port_
+                     << ", these commands will be DROPPED";
+      }
     }
   }
 

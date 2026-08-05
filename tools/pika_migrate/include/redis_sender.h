@@ -32,10 +32,13 @@ class RedisSender : public net::Thread {
   void SendRedisCommand(const std::string &key, const std::string &command);
 
  private:
-  int SendCommand(std::string &command);
+  // key is carried only for logging (which key/command failed); command is the
+  // serialized RESP bytes actually sent.
+  int SendCommand(const std::string &key, std::string &command);
   // Pipeline: send a batch of commands then read all replies. On failure it
   // reconnects and resends the batch one-by-one to preserve ordering.
-  int SendCommands(std::vector<std::string> &commands);
+  // Each entry is (key, serialized command); key is used only for logging.
+  int SendCommands(std::vector<std::pair<std::string, std::string>> &commands);
   void ConnectRedis();
   size_t commandQueueSize() {
     std::lock_guard l(command_queue_mutex_);

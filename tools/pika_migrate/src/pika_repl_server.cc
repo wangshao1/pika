@@ -111,15 +111,20 @@ pstd::Status PikaReplServer::Write(const std::string& ip, const int port, const 
   std::shared_lock l(client_conn_rwlock_);
   const std::string ip_port = pstd::IpPortString(ip, port);
   if (client_conn_map_.find(ip_port) == client_conn_map_.end()) {
+    LOG(WARNING) << "PikaReplServer::Write fd not found for " << ip_port << ", msg size: " << msg.size();
     return Status::NotFound("The " + ip_port + " fd cannot be found");
   }
   int fd = client_conn_map_[ip_port];
   std::shared_ptr<net::PbConn> conn = std::dynamic_pointer_cast<net::PbConn>(pika_repl_server_thread_->get_conn(fd));
   if (!conn) {
+    LOG(WARNING) << "PikaReplServer::Write conn not found for " << ip_port << ", fd: " << fd
+                 << ", msg size: " << msg.size();
     return Status::NotFound("The" + ip_port + " conn cannot be found");
   }
 
   if (conn->WriteResp(msg)) {
+    LOG(WARNING) << "PikaReplServer::Write WriteResp failed for " << ip_port << ", msg size: " << msg.size()
+                 << ", closing conn";
     conn->NotifyClose();
     return Status::Corruption("The" + ip_port + " conn, Write Resp Failed");
   }

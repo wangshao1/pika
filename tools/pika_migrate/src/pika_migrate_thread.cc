@@ -1,5 +1,7 @@
 #include <glog/logging.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <memory>
 
 #include "include/pika_command.h"
@@ -23,12 +25,65 @@ extern std::unique_ptr<PikaConf> g_pika_conf;
 extern std::unique_ptr<PikaReplicaManager> g_pika_rm;
 extern std::unique_ptr<PikaCmdTableManager> g_pika_cmd_table_manager;
 
-// do migrate key to dest pika server
-static int doMigrate(net::NetCli *cli, std::string send_str) {
+// Turn a serialized RESP command into a readable, bounded "CMD arg ..." string
+// for logging on failure. Caps arg count and per-arg length so a large value
+// cannot flood the log.
+static std::string MigrateCommandToReadable(const std::string& command) {
+  static const size_t kMaxArgs = 8;
+  static const size_t kMaxArgLen = 64;
+  std::string out;
+  if (command.empty() || command[0] != '*') {
+    out.assign(command, 0, kMaxArgLen);
+    if (command.size() > kMaxArgLen) {
+      out += "...";
+    }
+    return out;
+  }
+  size_t nl = command.find('\n');
+  if (nl == std::string::npos) {
+    return "<unparsable>";
+  }
+  long argc = strtol(command.c_str() + 1, nullptr, 10);
+  size_t i = nl + 1;
+  size_t printed = 0;
+  for (long a = 0; a < argc; ++a) {
+    if (i >= command.size() || command[i] != '$') {
+      break;
+    }
+    long len = strtol(command.c_str() + i + 1, nullptr, 10);
+    nl = command.find('\n', i);
+    if (nl == std::string::npos || len < 0) {
+      break;
+    }
+    size_t arg_start = nl + 1;
+    if (arg_start + static_cast<size_t>(len) > command.size()) {
+      break;
+    }
+    if (printed >= kMaxArgs) {
+      out += " ...(" + std::to_string(argc) + " args total)";
+      break;
+    }
+    if (!out.empty()) {
+      out += ' ';
+    }
+    size_t show = static_cast<size_t>(len) < kMaxArgLen ? static_cast<size_t>(len) : kMaxArgLen;
+    out.append(command, arg_start, show);
+    if (static_cast<size_t>(len) > kMaxArgLen) {
+      out += "...";
+    }
+    ++printed;
+    i = arg_start + static_cast<size_t>(len) + 2;
+  }
+  return out;
+}
+
+// do migrate key to dest pika server. key is carried only for logging.
+static int doMigrate(net::NetCli *cli, std::string send_str, const std::string& key) {
   pstd::Status s;
   s = cli->Send(&send_str);
   if (!s.ok()) {
-    LOG(WARNING) << "DB Migrate Send error: " << s.ToString();
+    LOG(WARNING) << "DB Migrate Send error: " << s.ToString() << ", key: " << key
+                 << ", command: " << MigrateCommandToReadable(send_str);
     return -1;
   }
   return 1;
@@ -88,7 +143,7 @@ static int migrateKeyTTl(net::NetCli *cli, const std::string& key, storage::Data
     return 0;
   }
 
-  if (doMigrate(cli, send_str) < 0) {
+  if (doMigrate(cli, send_str, key) < 0) {
     return -1;
   }
 
@@ -131,7 +186,7 @@ static int MigrateKv(net::NetCli *cli, const std::string& key, const std::shared
   net::SerializeRedisCommand(argv, &send_str);
 
   int send_num = 0;
-  if (doMigrate(cli, send_str) < 0) {
+  if (doMigrate(cli, send_str, key) < 0) {
     return -1;
   } else {
     ++send_num;
@@ -165,7 +220,7 @@ static int MigrateHash(net::NetCli *cli, const std::string& key, const std::shar
         argv.emplace_back(field_value.value);
       }
       net::SerializeRedisCommand(argv, &send_str);
-      if (doMigrate(cli, send_str) < 0) {
+      if (doMigrate(cli, send_str, key) < 0) {
         return -1;
       } else {
         ++send_num;
@@ -193,7 +248,7 @@ static int MigrateList(net::NetCli *cli, const std::string& key, const std::shar
   argv.emplace_back("DEL");
   argv.emplace_back(key);
   net::SerializeRedisCommand(argv, &send_str);
-  if (doMigrate(cli, send_str) < 0) {
+  if (doMigrate(cli, send_str, key) < 0) {
     return -1;
   } else {
     ++send_num;
@@ -214,7 +269,7 @@ static int MigrateList(net::NetCli *cli, const std::string& key, const std::shar
       }
 
       net::SerializeRedisCommand(argv, &send_str);
-      if (doMigrate(cli, send_str) < 0) {
+      if (doMigrate(cli, send_str, key) < 0) {
         return -1;
       } else {
         ++send_num;
@@ -253,7 +308,7 @@ static int MigrateSet(net::NetCli *cli, const std::string& key, const std::share
         argv.emplace_back(member);
       }
       net::SerializeRedisCommand(argv, &send_str);
-      if (doMigrate(cli, send_str) < 0) {
+      if (doMigrate(cli, send_str, key) < 0) {
         return -1;
       } else {
         ++send_num;
@@ -292,7 +347,7 @@ static int MigrateZset(net::NetCli *cli, const std::string& key, const std::shar
         argv.emplace_back(score_member.member);
       }
       net::SerializeRedisCommand(argv, &send_str);
-      if (doMigrate(cli, send_str) < 0) {
+      if (doMigrate(cli, send_str, key) < 0) {
         return -1;
       } else {
         ++send_num;
@@ -443,7 +498,8 @@ bool PikaParseSendThread::CheckMigrateRecv(int64_t need_receive_num) {
     pstd::Status s;
     s = cli_->Recv(&argv);
     if (!s.ok()) {
-      LOG(ERROR) << "PikaParseSendThread::CheckMigrateRecv Recv error: " << s.ToString();
+      LOG(ERROR) << "PikaParseSendThread::CheckMigrateRecv Recv error: " << s.ToString() << ", dest: " << dest_ip_
+                 << ":" << dest_port_ << ", reply idx: " << i << "/" << need_receive_num;
       return false;
     }
 
@@ -459,7 +515,8 @@ bool PikaParseSendThread::CheckMigrateRecv(int64_t need_receive_num) {
         (kInnerReplOk == pstd::StringToLower(reply) || pstd::string2int(reply.data(), reply.size(), &ret))) {
       continue;
     } else {
-      LOG(ERROR) << "PikaParseSendThread::CheckMigrateRecv reply error: " << reply;
+      LOG(ERROR) << "PikaParseSendThread::CheckMigrateRecv reply error: " << reply << ", dest: " << dest_ip_ << ":"
+                 << dest_port_ << ", reply idx: " << i << "/" << need_receive_num;
       return false;
     }
   }
@@ -495,7 +552,8 @@ void *PikaParseSendThread::ThreadMain() {
     int32_t migrate_keys_num = 0;
     for (const auto& send_key : send_keys) {
       if (0 > (send_num = MigrateOneKey(cli_, send_key.second, send_key.first, false))) {
-        LOG(WARNING) << "PikaParseSendThread::ThreadMain MigrateOneKey: " << send_key.second << " failed !!!";
+        LOG(WARNING) << "PikaParseSendThread::ThreadMain MigrateOneKey failed, key: " << send_key.second
+                     << ", key_type: " << send_key.first << ", dest: " << dest_ip_ << ":" << dest_port_ << " !!!";
         migrate_thread_->OnTaskFailed();
         migrate_thread_->DecWorkingThreadNum();
         return nullptr;
@@ -507,7 +565,9 @@ void *PikaParseSendThread::ThreadMain() {
 
     // check response
     if (!CheckMigrateRecv(need_receive_num)) {
-      LOG(INFO) << "PikaMigrateThread::ThreadMain CheckMigrateRecv failed !!!";
+      LOG(WARNING) << "PikaParseSendThread::ThreadMain CheckMigrateRecv failed, dest: " << dest_ip_ << ":"
+                   << dest_port_ << ", need_receive_num: " << need_receive_num
+                   << ", these keys may not have been written to the target !!!";
       migrate_thread_->OnTaskFailed();
       migrate_thread_->DecWorkingThreadNum();
       return nullptr;
@@ -907,6 +967,10 @@ void *PikaMigrateThread::ThreadMain() {
       std::unique_lock lw(workers_mutex_);
       while (!should_exit_ && is_task_success_ && send_num_ != response_num_) {
         if (workers_cond_.wait_for(lw, std::chrono::seconds(60)) == std::cv_status::timeout) {
+          LOG(WARNING) << "PikaMigrateThread::ThreadMain wait ParseSenderThread timeout after 60s, dest: " << dest_ip_
+                       << ":" << dest_port_ << ", send_num: " << send_num_ << ", response_num: " << response_num_
+                       << ", " << (send_num_ - response_num_)
+                       << " in-flight keys not yet acked by the target (possible send/recv timeout)";
           break;
         }
       }

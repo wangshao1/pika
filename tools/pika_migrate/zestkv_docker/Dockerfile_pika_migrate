@@ -1,0 +1,34 @@
+FROM zestkv/pika_builder:ubuntu_22.04 as builder
+
+LABEL maintainer="wangshaoyi@360.com"
+
+ENV PIKA_MIGRATE=/pika_migrate \
+    PIKA_MIGRATE_BUILD_DIR=/tmp/pika_migrate \
+    PATH=${PIKA_MIGRATE}:${PIKA}/bin:${PATH} \
+    BUILD_TYPE=RelWithDebInfo
+
+WORKDIR ${PIKA_MIGRATE_BUILD_DIR}
+
+COPY . ${PIKA_MIGRATE_BUILD_DIR}
+
+RUN  ./build.sh
+
+FROM zestkv/pika_runner:ubuntu_22.04
+
+LABEL maintainer="wangshaoyi@360.com"
+
+ENV PIKA_MIGRATE=/pika_migrate \
+    PIKA_MIGRATE_BUILD_DIR=/tmp/pika_migrate \
+    PATH=${PIKA_MIGRATE}:${PIKA_MIGRATE}/bin:${PATH}
+
+WORKDIR ${PIKA_MIGRATE}
+
+RUN apt update && apt install -y less
+
+COPY --from=builder ${PIKA_MIGRATE_BUILD_DIR}/output/pika ${PIKA_MIGRATE}/bin/pika
+COPY --from=builder ${PIKA_MIGRATE_BUILD_DIR}/conf/pika.conf ${PIKA_MIGRATE}/conf/pika.conf
+
+
+EXPOSE 9221
+
+CMD ["/pika_migrate/bin/pika_migrate", "-c", "/pika_migrate/conf/pika.conf"]

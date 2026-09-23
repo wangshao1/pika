@@ -692,6 +692,23 @@ int PikaConf::Load() {
   }
   redis_pipeline_wait_us_ = tmp_redis_pipeline_wait_us;
 
+  // Pipeline window: how many batches a RedisSender may stage per pass. A
+  // batch never holds the same key twice, because per-key order must survive a
+  // proxy that fans a connection out to several backends. A repeated key used
+  // to truncate the batch; with a window it goes into the next batch instead.
+  // Batches are still sent one after another, so 1 is exactly the old
+  // single-batch behaviour.
+  int tmp_redis_pipeline_window = 1;
+  GetConfInt("redis-pipeline-window", &tmp_redis_pipeline_window);
+  if (tmp_redis_pipeline_window < 1) {
+    tmp_redis_pipeline_window = 1;
+  } else if (tmp_redis_pipeline_window > 64) {
+    // Upper bound: staging the window costs up to O(window^2 * pipeline_size)
+    // key lookups per pass and holds that many batches in memory.
+    tmp_redis_pipeline_window = 64;
+  }
+  redis_pipeline_window_ = tmp_redis_pipeline_window;
+
   // max conn rbuf size
   int tmp_max_conn_rbuf_size = PIKA_MAX_CONN_RBUF;
   GetConfIntHuman("max-conn-rbuf-size", &tmp_max_conn_rbuf_size);

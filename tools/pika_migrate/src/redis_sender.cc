@@ -375,6 +375,18 @@ void *RedisSender::ThreadMain() {
 
   const size_t pipeline_size = static_cast<size_t>(g_pika_conf->redis_pipeline_size());
   const int64_t pipeline_wait_us = g_pika_conf->redis_pipeline_wait_us();
+  // How many batches a single pass may stage (see the batch build below). 1
+  // keeps the strict single-batch behaviour. Clamped again here so an
+  // out-of-range value can never shrink the window to zero.
+  int pipeline_window_conf = g_pika_conf->redis_pipeline_window();
+  if (pipeline_window_conf < 1) {
+    pipeline_window_conf = 1;
+  }
+  const size_t pipeline_window = static_cast<size_t>(pipeline_window_conf);
+  // Commands one pass can stage across the whole window. The micro-batching
+  // wait below targets this instead of a single batch, otherwise it would stop
+  // waiting as soon as the first batch is full and the window would stay empty.
+  const size_t window_capacity = pipeline_size * pipeline_window;
 
   while (!should_exit_ || (graceful_exit_ && commandQueueSize() > 0)) {
     {
@@ -404,60 +416,97 @@ void *RedisSender::ThreadMain() {
     // enqueues one command at a time, so without waiting the queue usually holds
     // a single command when we wake up and every network round-trip carries just
     // one command. Wait up to pipeline_wait_us for the queue to fill toward
-    // pipeline_size, so one round-trip amortizes many commands. Flush early the
-    // moment we have a full batch; exit the wait promptly on shutdown.
-    if (pipeline_wait_us > 0 && commandQueueSize() < pipeline_size) {
+    // the window capacity, so one round-trip amortizes many commands. Flush
+    // early the moment the window can be fully staged; exit the wait promptly
+    // on shutdown.
+    if (pipeline_wait_us > 0 && commandQueueSize() < window_capacity) {
       const int64_t deadline_us = pstd::NowMicros() + pipeline_wait_us;
       while (!(should_exit_ && !graceful_exit_)
-             && commandQueueSize() < pipeline_size
+             && commandQueueSize() < window_capacity
              && pstd::NowMicros() < deadline_us) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
       }
     }
 
-    // Build one pipeline batch. Rule: the same key must not appear twice in a
-    // batch. When a duplicate key is seen we stop the batch there and leave
-    // that command for the next batch, so commands for the same key are always
-    // sent in separate, serialized batches. This preserves per-key write order
-    // even when the target proxy fans out to backends over multiple
-    // connections (codis-like), where a single connection no longer implies
-    // ordering. An empty key is treated as a standalone single-command batch.
-    std::vector<std::pair<std::string, std::string>> batch;
-    std::unordered_set<std::string> seen_keys;
+    // Build the pipeline window: up to pipeline_window batches per pass.
+    //
+    // Rule (unchanged): a batch must not hold the same key twice, because the
+    // target proxy (codis-like) can fan one connection's commands out to
+    // different backends, where a single connection no longer implies ordering.
+    // The old code truncated the batch at the first duplicate key, which for the
+    // SET k v / EXPIREAT k t pattern emitted by the migrator collapsed almost
+    // every batch to 1-2 commands. With a window a duplicate key is placed into
+    // the next batch that does not hold it, so the batches stay full while the
+    // per-key rule still holds.
+    //
+    // Order safety: the window is sent batch by batch in index order and each
+    // SendCommands() waits for every reply before the next batch goes out, so at
+    // most one batch is ever in flight. Inside a pass a key lands in strictly
+    // increasing batch indices (every earlier batch either already holds that
+    // key or is full, which is why it was not chosen for the previous command of
+    // this key), and across passes the previous window is fully acknowledged
+    // first. So commands for the same key always reach the target in enqueue
+    // order, exactly as with pipeline_window = 1.
+    //
+    // A command with an empty key is not key-scoped: it travels alone in its own
+    // batch and ends the pass, so it can never be reordered behind commands that
+    // were enqueued after it.
+    std::vector<std::vector<std::pair<std::string, std::string>>> batches;
+    std::vector<std::unordered_set<std::string>> batches_keys;
     {
       std::lock_guard l(command_queue_mutex_);
-      while (!commands_queue_.empty() && batch.size() < pipeline_size) {
+      while (!commands_queue_.empty()) {
         const std::string& next_key = commands_queue_.front().first;
 
         if (next_key.empty()) {
-          // Non key-scoped command: only allow it as the first (and only) entry
-          // of a batch, then stop so it is flushed on its own.
-          if (!batch.empty()) {
+          if (batches.empty()) {
+            // Nothing staged yet: flush it right now as a single-command batch.
+            batches.emplace_back(1, commands_queue_.front());
+            batches_keys.emplace_back();
+            elements_++;
+            commands_queue_.pop();
+          }
+          // Otherwise leave it at the queue front; the next pass sends it alone,
+          // after this window has been acknowledged.
+          break;
+        }
+
+        // Choose the first batch, in index order, that still has room and does
+        // not hold this key yet.
+        size_t idx = batches.size();
+        for (size_t i = 0; i < batches.size(); ++i) {
+          if (batches[i].size() < pipeline_size
+              && batches_keys[i].find(next_key) == batches_keys[i].end()) {
+            idx = i;
             break;
           }
-          batch.push_back(commands_queue_.front());
-          elements_++;
-          commands_queue_.pop();
-          break;
         }
 
-        // Key already in this batch -> stop, defer it to the next batch.
-        if (seen_keys.find(next_key) != seen_keys.end()) {
-          break;
+        if (idx == batches.size()) {
+          if (batches.size() >= pipeline_window) {
+            // Window exhausted: every batch is either full or already holds
+            // this key, so the rest of the queue waits for the next pass.
+            break;
+          }
+          batches.emplace_back();
+          batches_keys.emplace_back();
         }
 
-        seen_keys.insert(next_key);
-        batch.push_back(commands_queue_.front());
+        batches_keys[idx].insert(next_key);
+        batches[idx].push_back(commands_queue_.front());
         elements_++;
         commands_queue_.pop();
       }
     }
 
     wsignal_.notify_all();
-    ret = SendCommands(batch);
-    if (ret != 0) {
-      LOG(WARNING) << "RedisSender " << id_ << " SendCommands failed, target: " << ip_ << ":" << port_
-                   << ", batch size: " << batch.size() << ", these commands may not have reached the target";
+    for (size_t i = 0; i < batches.size(); ++i) {
+      ret = SendCommands(batches[i]);
+      if (ret != 0) {
+        LOG(WARNING) << "RedisSender " << id_ << " SendCommands failed, target: " << ip_ << ":" << port_
+                     << ", batch: " << i << "/" << batches.size() << ", batch size: " << batches[i].size()
+                     << ", these commands may not have reached the target";
+      }
     }
   }
 

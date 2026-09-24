@@ -31,6 +31,9 @@ class RedisSender : public net::Thread {
   int64_t elements() {
     return elements_;
   }
+  int64_t replies_received() {
+    return replies_received_;
+  }
 
   // key is used to guarantee ordering under a codis-like target: within one
   // pipeline batch the same key never appears twice (see ThreadMain), so the
@@ -71,6 +74,7 @@ class RedisSender : public net::Thread {
   bool should_exit_;
   std::atomic<bool> graceful_exit_{false};
   int64_t elements_;
+  int64_t replies_received_;
   std::atomic<time_t> last_write_time_;
 };
 

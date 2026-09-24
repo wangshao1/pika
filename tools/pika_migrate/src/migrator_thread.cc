@@ -53,7 +53,7 @@ void MigratorThread::MigrateStringsDB() {
     cursor = storage_->ScanStringsWithValue(cursor, "*", scan_batch_num, &kvs);
     auto scan_end_us = pstd::NowMicros();
     if (scan_end_us - start_us >= kSlowLogThresholdUs) {
-      LOG(INFO) << "String scan slow, commands: " << kvs.size()
+      LOG(INFO) << "Source scan slow, type: strings, keys: " << kvs.size()
                 << ", cost: " << (scan_end_us - start_us) / 1000 << " ms";
     }
 
@@ -67,14 +67,7 @@ void MigratorThread::MigrateStringsDB() {
 
       net::SerializeRedisCommand(argv, &cmd);
       PlusNum();
-      auto dispatch_us = pstd::NowMicros();
       DispatchKey(cmd, kv.key);
-      auto end_us = pstd::NowMicros();
-      if (end_us - dispatch_us >= kSlowLogThresholdUs) {
-        LOG(INFO) << "DispatchKey slow, key: " << kv.key
-                  << ", cost: " << (end_us - dispatch_us) / 1000 << " ms"
-                  << ", command size: " << cmd.size();
-      }
 
       // kv.ttl: >0 remaining seconds, -1 no expiration (0/negative are skipped).
       // Convert the relative remaining-seconds to an ABSOLUTE unix deadline at
@@ -116,7 +109,13 @@ void MigratorThread::MigrateListsDB() {
   std::vector<std::string> keys;
 
   while (true) {
+    const auto scan_start_us = pstd::NowMicros();
     cursor = storage_->Scan(storage::DataType::kLists, cursor, "*", scan_batch_num, &keys);
+    const auto scan_end_us = pstd::NowMicros();
+    if (scan_end_us - scan_start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "Source scan slow, type: lists, keys: " << keys.size()
+                << ", cost: " << (scan_end_us - scan_start_us) / 1000 << " ms";
+    }
 
     for (const auto& key : keys) {
       int64_t pos = 0;
@@ -125,8 +124,15 @@ void MigratorThread::MigrateListsDB() {
       // meta lookup, avoiding a separate TTL() point lookup per key.
       // LRangeWithTTL returns ttl: >0 remaining seconds, -1 permanent, -2 expired.
       ttl = -1;
+      const auto read_start_us = pstd::NowMicros();
       storage::Status s = storage_->LRangeWithTTL(
           key, pos, pos + g_pika_conf->sync_batch_num() - 1, &nodes, &ttl);
+      const auto read_end_us = pstd::NowMicros();
+      if (read_end_us - read_start_us >= kSlowLogThresholdUs) {
+        LOG(INFO) << "Source read slow, type: lists, key: " << key
+                  << ", elements: " << nodes.size()
+                  << ", cost: " << (read_end_us - read_start_us) / 1000 << " ms";
+      }
       if (!s.ok()) {
         LOG(WARNING) << "db->LRangeWithTTL(key:" << key << ", pos:" << pos
           << ", batch size: " << g_pika_conf->sync_batch_num() << ") = " << s.ToString();
@@ -149,7 +155,14 @@ void MigratorThread::MigrateListsDB() {
 
         pos += g_pika_conf->sync_batch_num();
         nodes.clear();
+        const auto read_start_us = pstd::NowMicros();
         s = storage_->LRange(key, pos, pos + g_pika_conf->sync_batch_num() - 1, &nodes);
+        const auto read_end_us = pstd::NowMicros();
+        if (read_end_us - read_start_us >= kSlowLogThresholdUs) {
+          LOG(INFO) << "Source read slow, type: lists, key: " << key
+                    << ", elements: " << nodes.size()
+                    << ", cost: " << (read_end_us - read_start_us) / 1000 << " ms";
+        }
         if (!s.ok()) {
           LOG(WARNING) << "db->LRange(key:" << key << ", pos:" << pos
             << ", batch size:" << g_pika_conf->sync_batch_num() << ") = " << s.ToString();
@@ -198,7 +211,13 @@ void MigratorThread::MigrateHashesDB() {
   std::map<storage::DataType, rocksdb::Status> type_status;
 
   while (true) {
+    const auto scan_start_us = pstd::NowMicros();
     cursor = storage_->Scan(storage::DataType::kHashes, cursor, "*", scan_batch_num, &keys);
+    const auto scan_end_us = pstd::NowMicros();
+    if (scan_end_us - scan_start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "Source scan slow, type: hashes, keys: " << keys.size()
+                << ", cost: " << (scan_end_us - scan_start_us) / 1000 << " ms";
+    }
 
     for (const auto& key : keys) {
       // Scan the hash's fields in cursor-paged batches so peak memory stays at
@@ -208,8 +227,15 @@ void MigratorThread::MigrateHashesDB() {
       bool read_ok = true;
       do {
         std::vector<storage::FieldValue> fvs;
+        const auto read_start_us = pstd::NowMicros();
         storage::Status s = storage_->HScan(key, field_cursor, "*", g_pika_conf->sync_batch_num(),
                                              &fvs, &field_cursor);
+        const auto read_end_us = pstd::NowMicros();
+        if (read_end_us - read_start_us >= kSlowLogThresholdUs) {
+          LOG(INFO) << "Source read slow, type: hashes, key: " << key
+                    << ", fields: " << fvs.size()
+                    << ", cost: " << (read_end_us - read_start_us) / 1000 << " ms";
+        }
         if (s.IsNotFound()) {
           // Key absent or already expired: nothing to migrate, skip quietly.
           break;
@@ -293,7 +319,13 @@ void MigratorThread::MigrateSetsDB() {
   std::map<storage::DataType, rocksdb::Status> type_status;
 
   while (true) {
+    const auto scan_start_us = pstd::NowMicros();
     cursor = storage_->Scan(storage::DataType::kSets, cursor, "*", scan_batch_num, &keys);
+    const auto scan_end_us = pstd::NowMicros();
+    if (scan_end_us - scan_start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "Source scan slow, type: sets, keys: " << keys.size()
+                << ", cost: " << (scan_end_us - scan_start_us) / 1000 << " ms";
+    }
 
     for (const auto& key : keys) {
       // Scan the set's members in cursor-paged batches so peak memory stays at
@@ -303,8 +335,15 @@ void MigratorThread::MigrateSetsDB() {
       bool read_ok = true;
       do {
         std::vector<std::string> members;
+        const auto read_start_us = pstd::NowMicros();
         storage::Status s = storage_->SScan(key, member_cursor, "*", g_pika_conf->sync_batch_num(),
                                              &members, &member_cursor);
+        const auto read_end_us = pstd::NowMicros();
+        if (read_end_us - read_start_us >= kSlowLogThresholdUs) {
+          LOG(INFO) << "Source read slow, type: sets, key: " << key
+                    << ", members: " << members.size()
+                    << ", cost: " << (read_end_us - read_start_us) / 1000 << " ms";
+        }
         if (s.IsNotFound()) {
           // Key absent or already expired: nothing to migrate, skip quietly.
           break;
@@ -388,7 +427,13 @@ void MigratorThread::MigrateZsetsDB() {
   std::map<storage::DataType, rocksdb::Status> type_status;
 
   while (true) {
+    const auto scan_start_us = pstd::NowMicros();
     cursor = storage_->Scan(storage::DataType::kZSets, cursor, "*", scan_batch_num, &keys);
+    const auto scan_end_us = pstd::NowMicros();
+    if (scan_end_us - scan_start_us >= kSlowLogThresholdUs) {
+      LOG(INFO) << "Source scan slow, type: zsets, keys: " << keys.size()
+                << ", cost: " << (scan_end_us - scan_start_us) / 1000 << " ms";
+    }
 
     for (const auto& key : keys) {
       // Scan the zset's members in cursor-paged batches so peak memory stays at
@@ -398,8 +443,15 @@ void MigratorThread::MigrateZsetsDB() {
       bool read_ok = true;
       do {
         std::vector<storage::ScoreMember> score_members;
+        const auto read_start_us = pstd::NowMicros();
         storage::Status s = storage_->ZScan(key, member_cursor, "*", g_pika_conf->sync_batch_num(),
                                              &score_members, &member_cursor);
+        const auto read_end_us = pstd::NowMicros();
+        if (read_end_us - read_start_us >= kSlowLogThresholdUs) {
+          LOG(INFO) << "Source read slow, type: zsets, key: " << key
+                    << ", members: " << score_members.size()
+                    << ", cost: " << (read_end_us - read_start_us) / 1000 << " ms";
+        }
         if (s.IsNotFound()) {
           // Key absent or already expired: nothing to migrate, skip quietly.
           break;
@@ -507,12 +559,23 @@ void MigratorThread::MigrateDB() {
 }
 
 void MigratorThread::DispatchKey(const std::string &command, const std::string& key) {
+  const auto dispatch_start_us = pstd::NowMicros();
   thread_index_ = (thread_index_ + 1) % thread_num_;
   size_t idx = thread_index_;
   if (key.size()) { // no empty
     idx = std::hash<std::string>()(key) % thread_num_;
   }
   (*senders_)[idx]->SendRedisCommand(key, command);
+  // Cost here is the enqueue wait inside SendRedisCommand (the sender's queue
+  // is full, i.e. the send side cannot drain what this migrator produces).
+  // Log it for every DB type, not only strings, so backpressure is visible
+  // wherever it happens.
+  const auto dispatch_end_us = pstd::NowMicros();
+  if (dispatch_end_us - dispatch_start_us >= kSlowLogThresholdUs) {
+    LOG(INFO) << "DispatchKey enqueue slow (sender queue backpressure), key: " << key
+              << ", cost: " << (dispatch_end_us - dispatch_start_us) / 1000 << " ms"
+              << ", command size: " << command.size();
+  }
 }
 
 const char* GetDBTypeString(int type) {
@@ -544,8 +607,11 @@ const char* GetDBTypeString(int type) {
 }
 
 void *MigratorThread::ThreadMain() {
+  const auto start_us = pstd::NowMicros();
   MigrateDB();
   should_exit_ = true;
-  LOG(INFO) << GetDBTypeString(type_) << " keys have been dispatched completly";
+  LOG(INFO) << GetDBTypeString(type_)
+            << " migration dispatch complete: dispatched " << num() << " commands in "
+            << (pstd::NowMicros() - start_us) / 1000000.0 << " s";
   return NULL;
 }

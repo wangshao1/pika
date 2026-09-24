@@ -22,6 +22,10 @@ extern PikaConf* g_pika_conf;
 
 static time_t kCheckDiff = 1;
 static const int64_t kSlowLogThresholdUs = 3000;
+// Emit one throughput summary line per sender thread every 10 seconds, so the
+// send-side bottleneck (batch fill vs drain speed) is visible without waiting
+// for the whole migration to finish.
+static const int64_t kThroughputLogPeriodUs = 10 * 1000 * 1000;
 // Caps for turning a serialized command into a readable, single-line log
 // string, so a large value (or a huge multi-field command) can never flood the
 // log. Only used on failure paths.
@@ -92,7 +96,8 @@ RedisSender::RedisSender(int id, std::string ip, int64_t port, std::string user,
   user_(user),
   password_(password),
   should_exit_(false),
-  elements_(0) {
+  elements_(0),
+  replies_received_(0) {
   last_write_time_ = ::time(NULL);
 }
 
@@ -109,7 +114,8 @@ void RedisSender::ConnectRedis() {
     cli_->set_send_timeout(10000);
     pstd::Status s = cli_->Connect(ip_, port_);
     if (!s.ok()) {
-      LOG(WARNING) << "Can not connect to " << ip_ << ":" << port_ << ", status: " << s.ToString();
+      LOG(WARNING) << "RedisSender " << id_ << " can not connect to " << ip_ << ":" << port_
+                   << ", status: " << s.ToString();
       cli_ = NULL;
       sleep(3);
       continue;
@@ -162,7 +168,8 @@ void RedisSender::ConnectRedis() {
               return;
             }
           } else {
-            LOG(WARNING) << s.ToString();
+            LOG(WARNING) << "RedisSender " << id_ << " ping recv failed, target: " << ip_ << ":" << port_
+                         << ", status: " << s.ToString();
             cli_->Close();
             cli_ = NULL;
           }
@@ -257,6 +264,9 @@ int RedisSender::SendCommand(const std::string &key, std::string &command) {
       // success) — logging only, so the diagnosis does not alter the data flow.
       net::RedisCmdArgsType reply;
       pstd::Status rs = cli_->Recv(&reply);
+      if (rs.ok()) {
+        replies_received_++;
+      }
       if (!rs.ok()) {
         LOG(WARNING) << "RedisSender " << id_ << " recv reply failed after send, target: " << ip_ << ":" << port_
                      << ", status: " << rs.ToString() << ", key: " << key
@@ -317,6 +327,7 @@ int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &
       break;
     }
   }
+  const auto send_done_us = pstd::NowMicros();
   if (ok) {
     for (size_t i = 0; i < commands.size(); ++i) {
       net::RedisCmdArgsType reply;
@@ -329,6 +340,7 @@ int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &
         ok = false;
         break;
       }
+      replies_received_++;
       // Connection is healthy but the target rejected this write at the
       // application layer. This does NOT trigger the fallback resend, so log it
       // so silently-dropped writes are visible when src/dst diverge.
@@ -341,9 +353,12 @@ int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &
   }
   const auto end_us = pstd::NowMicros();
   if (end_us - start_us >= kSlowLogThresholdUs) {
-    LOG(INFO) << "RedisSender send slow, id: " << id_
+    LOG(INFO) << "RedisSender batch slow, id: " << id_
               << ", commands: " << commands.size()
               << ", cost: " << (end_us - start_us) / 1000 << " ms"
+              << ", write phase: " << (send_done_us - start_us) / 1000 << " ms"
+              << ", recv phase: " << (end_us - send_done_us) / 1000 << " ms"
+              << ", avg per cmd: " << (end_us - start_us) / commands.size() << " us"
               << ", status: " << ok;
   }
   if (ok) {
@@ -370,8 +385,17 @@ void *RedisSender::ThreadMain() {
   LOG(INFO) << "Start redis sender " << id_ << " thread...";
   // sleep(15);
   int ret = 0;
+  // Throughput summary counters (per sender thread, printed every 10s and at
+  // exit): commands fully sent, SendCommands passes, and pass outcome split.
+  int64_t replies_received_total = 0;
+  int64_t window_passes_total = 0;
+  int64_t failed_passes_total = 0;
 
   ConnectRedis();
+
+  const auto thread_start_us = pstd::NowMicros();
+  auto last_throughput_log_us = thread_start_us;
+  int64_t last_logged_replies = 0;
 
   const size_t pipeline_size = static_cast<size_t>(g_pika_conf->redis_pipeline_size());
   const int64_t pipeline_wait_us = g_pika_conf->redis_pipeline_wait_us();
@@ -387,6 +411,12 @@ void *RedisSender::ThreadMain() {
   // wait below targets this instead of a single batch, otherwise it would stop
   // waiting as soon as the first batch is full and the window would stay empty.
   const size_t window_capacity = pipeline_size * pipeline_window;
+  // Effective batching config: needed to read the throughput summary below
+  // (avg cmds per pass is only meaningful against these limits).
+  LOG(INFO) << "RedisSender " << id_ << " pipeline config, batch size: " << pipeline_size
+            << ", window batches: " << pipeline_window
+            << ", window capacity: " << window_capacity
+            << ", wait us: " << pipeline_wait_us;
 
   while (!should_exit_ || (graceful_exit_ && commandQueueSize() > 0)) {
     {
@@ -502,11 +532,34 @@ void *RedisSender::ThreadMain() {
     wsignal_.notify_all();
     for (size_t i = 0; i < batches.size(); ++i) {
       ret = SendCommands(batches[i]);
+      window_passes_total++;
       if (ret != 0) {
+        failed_passes_total++;
         LOG(WARNING) << "RedisSender " << id_ << " SendCommands failed, target: " << ip_ << ":" << port_
                      << ", batch: " << i << "/" << batches.size() << ", batch size: " << batches[i].size()
                      << ", these commands may not have reached the target";
+      } else {
+        replies_received_total += batches[i].size();
       }
+    }
+
+    const auto now_us = pstd::NowMicros();
+    if (now_us - last_throughput_log_us >= kThroughputLogPeriodUs) {
+      const double period_s = (now_us - last_throughput_log_us) / 1000000.0;
+      const double total_s = (now_us - thread_start_us) / 1000000.0;
+      const int64_t period_replies = replies_received_total - last_logged_replies;
+      LOG(INFO) << "RedisSender throughput, id: " << id_
+                << ", period: " << period_s << " s, replies received: " << period_replies
+                << " (" << (period_s > 0 ? period_replies / period_s : 0.0) << " replies/s)"
+                << ", total replies received: " << replies_received_total
+                << " (" << (total_s > 0 ? replies_received_total / total_s : 0.0) << " replies/s avg)"
+                << ", queue depth: " << commandQueueSize()
+                << ", window passes: " << window_passes_total
+                << " (failed: " << failed_passes_total << ")"
+                << ", avg cmds per pass: "
+                << (window_passes_total > 0 ? replies_received_total / window_passes_total : 0);
+      last_throughput_log_us = now_us;
+      last_logged_replies = replies_received_total;
     }
   }
 
@@ -529,7 +582,15 @@ void *RedisSender::ThreadMain() {
     }
   }
 
-  LOG(INFO) << "RedisSender thread " << id_ << " complete";
+  const auto thread_end_us = pstd::NowMicros();
+  const double total_s = (thread_end_us - thread_start_us) / 1000000.0;
+  LOG(INFO) << "RedisSender thread " << id_ << " complete, target: " << ip_ << ":" << port_
+            << ", dequeued/staged: " << elements_ << " cmds, replies received: " << replies_received_total
+            << " in " << total_s << " s"
+            << ", avg reply rate: " << (total_s > 0 ? replies_received_total / total_s : 0.0) << " replies/s"
+            << ", window passes: " << window_passes_total << " (failed: " << failed_passes_total << ")"
+            << ", avg cmds per pass: "
+            << (window_passes_total > 0 ? replies_received_total / window_passes_total : 0);
   cli_ = NULL;
   return NULL;
 }

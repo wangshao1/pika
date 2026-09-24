@@ -1626,19 +1626,22 @@ void PikaServer::RetransmitData(const std::string& path) {
     redis_senders_[i]->JoinThread();
   }
 
-  int64_t replies = 0, records = 0;
+  int64_t staged = 0, replies_received = 0, records = 0;
   for (size_t i = 0; i < migrators.size(); i++) {
     records += migrators[i]->num();
   }
   migrators.clear();
   for (size_t i = 0; i < redis_senders_.size(); i++) {
-    replies += redis_senders_[i]->elements();
+    staged += redis_senders_[i]->elements();
+    replies_received += redis_senders_[i]->replies_received();
   }
   redis_senders_.clear();
 
   LOG(INFO) << "=============== Retransmit Finish =====================";
-  LOG(INFO) << "Total records : " << records << " have been Scaned";
-  LOG(INFO) << "Total replies : " << replies << " received from redis server";
+  LOG(INFO) << "Total commands produced by migrators: " << records;
+  LOG(INFO) << "Total commands dequeued and staged by senders: " << staged;
+  LOG(INFO) << "Total target replies received: " << replies_received
+            << " (transport replies; target error replies are logged separately)";
   LOG(INFO) << "=======================================================";
 }
 

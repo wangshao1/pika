@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <mutex>
 #include <condition_variable>
+#include <deque>
+#include <memory>
 
 #include "net/include/net_thread.h"
 #include "net/include/net_cli.h"
@@ -45,16 +47,20 @@ class RedisSender : public net::Thread {
   // key is carried only for logging (which key/command failed); command is the
   // serialized RESP bytes actually sent.
   int SendCommand(const std::string &key, std::string &command);
-  // Pipeline: send a batch of commands then read all replies. On failure it
-  // reconnects and resends the batch one-by-one to preserve ordering.
-  // Each entry is (key, serialized command); key is used only for logging.
+  // Compatibility helper for callers that need a synchronous batch.
   int SendCommands(std::vector<std::pair<std::string, std::string>> &commands);
+  // Write a batch without waiting for replies. Replies are consumed later in
+  // exactly the same order as batches were written on this connection.
+  int SendBatch(const std::vector<std::pair<std::string, std::string>> &commands);
+  // Read one response per command from a previously written batch.
+  int RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands);
   void ConnectRedis();
   size_t commandQueueSize() {
     std::lock_guard l(command_queue_mutex_);
     return commands_queue_.size();
   }
   virtual void *ThreadMain();
+  void *LegacyThreadMain();
  private:
   int id_;
   int port_;
@@ -71,11 +77,20 @@ class RedisSender : public net::Thread {
   // should_exit_ requests the thread to stop. When graceful_exit_ is also set,
   // the thread first drains commands_queue_ before leaving; otherwise it leaves
   // immediately and any queued commands are dropped.
-  bool should_exit_;
+  std::atomic<bool> should_exit_;
   std::atomic<bool> graceful_exit_{false};
   int64_t elements_;
   int64_t replies_received_;
   std::atomic<time_t> last_write_time_;
+  struct InFlightBatch {
+    std::vector<std::pair<std::string, std::string>> commands;
+    std::unordered_set<std::string> keys;
+  };
+  std::mutex in_flight_mutex_;
+  std::condition_variable in_flight_cv_;
+  std::deque<std::shared_ptr<InFlightBatch>> in_flight_batches_;
+  std::unordered_set<std::string> in_flight_keys_;
+  std::atomic<bool> receiver_failed_{false};
 };
 
 #endif

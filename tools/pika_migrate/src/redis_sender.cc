@@ -296,7 +296,7 @@ int RedisSender::SendCommand(const std::string &key, std::string &command) {
 // single connection does not disturb the per-key ordering guarantee.
 // If any send/recv in the fast path fails, fall back to per-command sending
 // (with its own reconnect+retry) so no command is lost and order is kept.
-int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &commands) {
+int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>> &commands) {
   if (commands.empty()) {
     return 0;
   }
@@ -314,74 +314,159 @@ int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &
   }
 
   const auto start_us = pstd::NowMicros();
-  // Fast path: send the whole batch, then receive one reply per command.
-  bool ok = true;
   for (auto &kv : commands) {
     pstd::Status s = cli_->Send(&kv.second);
     if (!s.ok()) {
-      LOG(WARNING) << "RedisSender " << id_ << " batch send failed (fast path), target: " << ip_ << ":" << port_
+      LOG(WARNING) << "RedisSender " << id_ << " batch write failed, target: " << ip_ << ":" << port_
                    << ", status: " << s.ToString() << ", batch size: " << commands.size()
-                   << ", key: " << kv.first << ", command: " << CommandToReadable(kv.second)
-                   << ", will fall back to per-command resend";
-      ok = false;
-      break;
-    }
-  }
-  const auto send_done_us = pstd::NowMicros();
-  if (ok) {
-    for (size_t i = 0; i < commands.size(); ++i) {
-      net::RedisCmdArgsType reply;
-      pstd::Status s = cli_->Recv(&reply);
-      if (!s.ok()) {
-        LOG(WARNING) << "RedisSender " << id_ << " batch recv failed (fast path), target: " << ip_ << ":" << port_
-                     << ", status: " << s.ToString() << ", reply idx: " << i << "/" << commands.size()
-                     << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second)
-                     << ", will fall back to per-command resend";
-        ok = false;
-        break;
-      }
-      replies_received_++;
-      // Connection is healthy but the target rejected this write at the
-      // application layer. This does NOT trigger the fallback resend, so log it
-      // so silently-dropped writes are visible when src/dst diverge.
-      if (!reply.empty() && !reply[0].empty() && reply[0][0] == '-') {
-        LOG(WARNING) << "RedisSender " << id_ << " target returned error reply (fast path), target: " << ip_ << ":"
-                     << port_ << ", reply: " << reply[0] << ", reply idx: " << i << "/" << commands.size()
-                     << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second);
-      }
+                   << ", key: " << kv.first << ", command: " << CommandToReadable(kv.second);
+      return -1;
     }
   }
   const auto end_us = pstd::NowMicros();
   if (end_us - start_us >= kSlowLogThresholdUs) {
-    LOG(INFO) << "RedisSender batch slow, id: " << id_
+    LOG(INFO) << "RedisSender batch write slow, id: " << id_
               << ", commands: " << commands.size()
               << ", cost: " << (end_us - start_us) / 1000 << " ms"
-              << ", write phase: " << (send_done_us - start_us) / 1000 << " ms"
-              << ", recv phase: " << (end_us - send_done_us) / 1000 << " ms"
               << ", avg per cmd: " << (end_us - start_us) / commands.size() << " us"
-              << ", status: " << ok;
+              << ", status: success";
   }
-  if (ok) {
-    return 0;
-  }
+  return 0;
+}
 
-  // Slow path: connection got into a bad/undefined state (a partial batch may
-  // have been sent). Drop it and resend every command in order one-by-one.
-  cli_->Close();
-  cli_ = NULL;
-  ConnectRedis();
-  for (auto &kv : commands) {
-    if (SendCommand(kv.first, kv.second) != 0) {
-      LOG(WARNING) << "RedisSender " << id_ << " per-command resend failed (slow path), target: " << ip_ << ":"
-                   << port_ << ", batch size: " << commands.size() << ", key: " << kv.first
-                   << ", command: " << CommandToReadable(kv.second);
+int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands) {
+  for (size_t i = 0; i < commands.size(); ++i) {
+    net::RedisCmdArgsType reply;
+    pstd::Status s = cli_->Recv(&reply);
+    if (!s.ok()) {
+      LOG(WARNING) << "RedisSender " << id_ << " batch read failed, target: " << ip_ << ":" << port_
+                   << ", status: " << s.ToString() << ", reply idx: " << i << "/" << commands.size()
+                   << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second)
+                   << ", in-flight requests have unknown execution status";
       return -1;
+    }
+    replies_received_++;
+    if (!reply.empty() && !reply[0].empty() && reply[0][0] == '-') {
+      LOG(WARNING) << "RedisSender " << id_ << " target returned error reply, target: " << ip_ << ":"
+                   << port_ << ", reply: " << reply[0] << ", reply idx: " << i << "/" << commands.size()
+                   << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second);
     }
   }
   return 0;
 }
 
+int RedisSender::SendCommands(std::vector<std::pair<std::string, std::string>> &commands) {
+  if (SendBatch(commands) != 0) {
+    return -1;
+  }
+  return RecvBatch(commands);
+}
+
 void *RedisSender::ThreadMain() {
+  LOG(INFO) << "Start redis sender " << id_ << " thread with async receiver...";
+  ConnectRedis();
+  const size_t batch_size = std::max<size_t>(1, static_cast<size_t>(g_pika_conf->redis_pipeline_size()));
+  const size_t window = std::max<size_t>(1, static_cast<size_t>(g_pika_conf->redis_pipeline_window()));
+  std::thread receiver([&]() {
+    for (;;) {
+      std::shared_ptr<InFlightBatch> batch;
+      {
+        std::unique_lock lock(in_flight_mutex_);
+        in_flight_cv_.wait(lock, [&]() {
+          return !in_flight_batches_.empty() || should_exit_.load() || receiver_failed_.load();
+        });
+        if (in_flight_batches_.empty()) {
+          if (receiver_failed_.load() || (should_exit_.load() &&
+              (!graceful_exit_.load() || commandQueueSize() == 0))) break;
+          continue;
+        }
+        batch = in_flight_batches_.front();
+      }
+      if (RecvBatch(batch->commands) != 0) {
+        receiver_failed_.store(true);
+        should_exit_.store(true);
+        graceful_exit_.store(false);
+        in_flight_cv_.notify_all();
+        rsignal_.notify_all();
+        break;
+      }
+      {
+        std::lock_guard lock(in_flight_mutex_);
+        in_flight_batches_.pop_front();
+        for (const auto& key : batch->keys) in_flight_keys_.erase(key);
+      }
+      in_flight_cv_.notify_all();
+      wsignal_.notify_all();
+    }
+  });
+
+  while (!should_exit_.load() || graceful_exit_.load()) {
+    if (receiver_failed_.load()) break;
+    if (should_exit_.load() && graceful_exit_.load() && commandQueueSize() == 0) {
+      std::unique_lock lock(in_flight_mutex_);
+      if (in_flight_batches_.empty()) break;
+    }
+    std::unique_lock signal_lock(signal_mutex_);
+    if (commandQueueSize() == 0) {
+      rsignal_.wait_for(signal_lock, std::chrono::milliseconds(100));
+      continue;
+    }
+    signal_lock.unlock();
+
+    auto batch = std::make_shared<InFlightBatch>();
+    {
+      std::unique_lock flight_lock(in_flight_mutex_);
+      if (in_flight_batches_.size() >= window) {
+        in_flight_cv_.wait_for(flight_lock, std::chrono::milliseconds(1));
+        continue;
+      }
+      std::lock_guard queue_lock(command_queue_mutex_);
+      while (!commands_queue_.empty() && batch->commands.size() < batch_size) {
+        const auto& item = commands_queue_.front();
+        if (item.first.empty()) {
+          if (!batch->commands.empty() || !in_flight_batches_.empty()) break;
+          batch->commands.push_back(item);
+          commands_queue_.pop();
+          ++elements_;
+          break;
+        }
+        if (in_flight_keys_.count(item.first) || batch->keys.count(item.first)) break;
+        batch->keys.insert(item.first);
+        batch->commands.push_back(item);
+        commands_queue_.pop();
+        ++elements_;
+      }
+    }
+    if (batch->commands.empty()) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+      continue;
+    }
+    if (SendBatch(batch->commands) != 0) {
+      receiver_failed_.store(true);
+      should_exit_.store(true);
+      graceful_exit_.store(false);
+      LOG(WARNING) << "RedisSender " << id_ << " batch write failed; in-flight request execution status is unknown";
+      break;
+    }
+    {
+      std::lock_guard lock(in_flight_mutex_);
+      for (const auto& key : batch->keys) in_flight_keys_.insert(key);
+      in_flight_batches_.push_back(batch);
+    }
+    in_flight_cv_.notify_one();
+    wsignal_.notify_all();
+  }
+
+  if (cli_ && (receiver_failed_.load() || (should_exit_.load() && !graceful_exit_.load()))) cli_->Close();
+  in_flight_cv_.notify_all();
+  rsignal_.notify_all();
+  if (receiver.joinable()) receiver.join();
+  cli_ = NULL;
+  LOG(INFO) << "RedisSender " << id_ << " async sender exit, queued commands: " << commandQueueSize();
+  return NULL;
+}
+
+void *RedisSender::LegacyThreadMain() {
   LOG(INFO) << "Start redis sender " << id_ << " thread...";
   // sleep(15);
   int ret = 0;
@@ -460,29 +545,17 @@ void *RedisSender::ThreadMain() {
 
     // Build the pipeline window: up to pipeline_window batches per pass.
     //
-    // Rule (unchanged): a batch must not hold the same key twice, because the
-    // target proxy (codis-like) can fan one connection's commands out to
-    // different backends, where a single connection no longer implies ordering.
-    // The old code truncated the batch at the first duplicate key, which for the
-    // SET k v / EXPIREAT k t pattern emitted by the migrator collapsed almost
-    // every batch to 1-2 commands. With a window a duplicate key is placed into
-    // the next batch that does not hold it, so the batches stay full while the
-    // per-key rule still holds.
-    //
-    // Order safety: the window is sent batch by batch in index order and each
-    // SendCommands() waits for every reply before the next batch goes out, so at
-    // most one batch is ever in flight. Inside a pass a key lands in strictly
-    // increasing batch indices (every earlier batch either already holds that
-    // key or is full, which is why it was not chosen for the previous command of
-    // this key), and across passes the previous window is fully acknowledged
-    // first. So commands for the same key always reach the target in enqueue
-    // order, exactly as with pipeline_window = 1.
+    // A key may occur in only one batch in this window. This is stricter than
+    // merely deduplicating within each batch: two batches containing the same
+    // key can never be in flight concurrently. The later command remains at
+    // the queue front and is staged in the next window after acknowledgement.
     //
     // A command with an empty key is not key-scoped: it travels alone in its own
     // batch and ends the pass, so it can never be reordered behind commands that
     // were enqueued after it.
     std::vector<std::vector<std::pair<std::string, std::string>>> batches;
     std::vector<std::unordered_set<std::string>> batches_keys;
+    std::unordered_set<std::string> window_keys;
     {
       std::lock_guard l(command_queue_mutex_);
       while (!commands_queue_.empty()) {
@@ -498,6 +571,11 @@ void *RedisSender::ThreadMain() {
           }
           // Otherwise leave it at the queue front; the next pass sends it alone,
           // after this window has been acknowledged.
+          break;
+        }
+
+        if (window_keys.find(next_key) != window_keys.end()) {
+          // Preserve FIFO order for this key; it depends on the earlier batch.
           break;
         }
 
@@ -523,6 +601,7 @@ void *RedisSender::ThreadMain() {
         }
 
         batches_keys[idx].insert(next_key);
+        window_keys.insert(next_key);
         batches[idx].push_back(commands_queue_.front());
         elements_++;
         commands_queue_.pop();
@@ -530,17 +609,42 @@ void *RedisSender::ThreadMain() {
     }
 
     wsignal_.notify_all();
-    for (size_t i = 0; i < batches.size(); ++i) {
-      ret = SendCommands(batches[i]);
+    // Fill the socket with all independent batches first. Redis responses are
+    // ordered on one connection, so they are consumed in the same batch order
+    // afterwards. This is the actual pipeline window.
+    bool window_ok = true;
+    size_t written_batches = 0;
+    for (; written_batches < batches.size(); ++written_batches) {
+      ret = SendBatch(batches[written_batches]);
       window_passes_total++;
       if (ret != 0) {
+        window_ok = false;
         failed_passes_total++;
-        LOG(WARNING) << "RedisSender " << id_ << " SendCommands failed, target: " << ip_ << ":" << port_
-                     << ", batch: " << i << "/" << batches.size() << ", batch size: " << batches[i].size()
-                     << ", these commands may not have reached the target";
-      } else {
-        replies_received_total += batches[i].size();
+        LOG(WARNING) << "RedisSender " << id_ << " pipeline window write failed, target: " << ip_ << ":" << port_
+                     << ", failed batch: " << written_batches << "/" << batches.size()
+                     << ", in-flight requests have unknown execution status";
+        break;
       }
+    }
+    for (size_t i = 0; window_ok && i < written_batches; ++i) {
+      ret = RecvBatch(batches[i]);
+      if (ret != 0) {
+        window_ok = false;
+        failed_passes_total++;
+        LOG(WARNING) << "RedisSender " << id_ << " pipeline window read failed, target: " << ip_ << ":" << port_
+                     << ", failed batch: " << i << "/" << written_batches
+                     << ", in-flight requests have unknown execution status";
+        break;
+      }
+      replies_received_total += batches[i].size();
+    }
+    if (!window_ok) {
+      // Once multiple writes are in flight, a disconnect makes execution
+      // status ambiguous. Do not blindly resend non-idempotent commands.
+      cli_->Close();
+      cli_ = NULL;
+      should_exit_ = true;
+      graceful_exit_ = false;
     }
 
     const auto now_us = pstd::NowMicros();

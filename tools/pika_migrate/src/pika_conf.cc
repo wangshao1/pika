@@ -671,7 +671,9 @@ int PikaConf::Load() {
   sync_batch_num_ = 100;
   GetConfInt("sync-batch-num", &sync_batch_num_);
 
-  redis_sender_num_ = 8;
+  // Ten sender threads provide parallelism across DB/shard queues while
+  // keeping the default target connection count bounded.
+  redis_sender_num_ = 10;
   GetConfInt("redis-sender-num", &redis_sender_num_);
 
   // Number of commands each RedisSender pipelines before waiting for replies.
@@ -698,7 +700,9 @@ int PikaConf::Load() {
   // to truncate the batch; with a window it goes into the next batch instead.
   // Batches are still sent one after another, so 1 is exactly the old
   // single-batch behaviour.
-  int tmp_redis_pipeline_window = 1;
+  // Three in-flight batches hide target response latency without making the
+  // default reconnect/unknown-execution window unnecessarily large.
+  int tmp_redis_pipeline_window = 3;
   GetConfInt("redis-pipeline-window", &tmp_redis_pipeline_window);
   if (tmp_redis_pipeline_window < 1) {
     tmp_redis_pipeline_window = 1;

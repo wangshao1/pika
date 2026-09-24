@@ -216,65 +216,52 @@ void PikaReplBgWorker::HandleBGWorkerWriteDB(void* arg) {
 
 void PikaReplBgWorker::WriteDBInSyncWay(const std::shared_ptr<Cmd>& c_ptr) {
   const PikaCmdArgsType& argv = c_ptr->argv();
-
   uint64_t start_us = 0;
   if (g_pika_conf->slowlog_slower_than() >= 0) {
     start_us = pstd::NowMicros();
   }
-  // Add read lock for no suspend command
-  pstd::lock::MultiRecordLock record_lock(c_ptr->GetDB()->LockMgr());
-  record_lock.Lock(c_ptr->current_key());
-  if (!c_ptr->IsSuspend()) {
-    c_ptr->GetDB()->DBLockShared();
-  }
-  if (c_ptr->IsNeedCacheDo()
-      && PIKA_CACHE_NONE != g_pika_conf->cache_mode()
-      && c_ptr->GetDB()->cache()->CacheStatus() == PIKA_CACHE_STATUS_OK) {
-    if (c_ptr->is_write()) {
-      ParseAndSendPikaCommand(c_ptr);
-      c_ptr->DoThroughDB();
-      if (c_ptr->IsNeedUpdateCache()) {
-        c_ptr->DoUpdateCache();
-      }
-    } else {
-      LOG(WARNING) << "It is impossbile to reach here";
-    }
-  } else {
-    ParseAndSendPikaCommand(c_ptr);
-    c_ptr->Do();
-  }
-  if (!c_ptr->IsSuspend()) {
-    c_ptr->GetDB()->DBUnlockShared();
-  }
 
-  if (c_ptr->res().ok()
-      && c_ptr->is_write()
-      && c_ptr->name() != kCmdNameFlushdb
-      && c_ptr->name() != kCmdNameFlushall
-      && c_ptr->name() != kCmdNameExec) {
-    auto table_keys = c_ptr->current_key();
-    for (auto& key : table_keys) {
-      key = c_ptr->db_name().append(key);
-    }
-    auto dispatcher = dynamic_cast<net::DispatchThread*>(g_pika_server->pika_dispatch_thread()->server_thread());
-    auto involved_conns = dispatcher->GetInvolvedTxn(table_keys);
-    for (auto& conn : involved_conns) {
-      auto c = std::dynamic_pointer_cast<PikaClientConn>(conn);
-      c->SetTxnWatchFailState(true);
-    }
-  }
+  // Incremental replay intentionally remains a stateless forwarder: the
+  // command is sent to the destination, while the local RocksDB write path is
+  // disabled. The local RocksDB is still used for full-sync snapshots and
+  // changedb replay; this change only affects incremental replay.
+  ParseAndSendPikaCommand(c_ptr);
 
-  record_lock.Unlock(c_ptr->current_key());
+  // Keep slowlog visibility, but measure forwarding latency rather than a
+  // local RocksDB command execution that is no longer performed.
   if (g_pika_conf->slowlog_slower_than() >= 0) {
     auto start_time = static_cast<int32_t>(start_us / 1000000);
     auto duration = static_cast<int64_t>(pstd::NowMicros() - start_us);
     if (duration > g_pika_conf->slowlog_slower_than()) {
       g_pika_server->SlowlogPushEntry(argv, start_time, duration);
       if (g_pika_conf->slowlog_write_errorlog()) {
-        LOG(INFO) << "command: " << argv[0] << ", start_time(s): " << start_time << ", duration(us): " << duration;
+        LOG(INFO) << "incremental forward command: " << argv[0]
+                  << ", start_time(s): " << start_time << ", duration(us): " << duration;
       }
     }
   }
+
+  // Disabled local-RocksDB path (kept here to make the behavior change
+  // explicit and easy to revert). This included DB/cache locks, Do()/
+  // DoThroughDB(), cache updates and transaction-watch bookkeeping.
+  // pstd::lock::MultiRecordLock record_lock(c_ptr->GetDB()->LockMgr());
+  // record_lock.Lock(c_ptr->current_key());
+  // if (!c_ptr->IsSuspend()) {
+  //   c_ptr->GetDB()->DBLockShared();
+  // }
+  // if (c_ptr->IsNeedCacheDo() && PIKA_CACHE_NONE != g_pika_conf->cache_mode()
+  //     && c_ptr->GetDB()->cache()->CacheStatus() == PIKA_CACHE_STATUS_OK) {
+  //   c_ptr->DoThroughDB();
+  //   if (c_ptr->IsNeedUpdateCache()) {
+  //     c_ptr->DoUpdateCache();
+  //   }
+  // } else {
+  //   c_ptr->Do();
+  // }
+  // if (!c_ptr->IsSuspend()) {
+  //   c_ptr->GetDB()->DBUnlockShared();
+  // }
+  // record_lock.Unlock(c_ptr->current_key());
 }
 
 void PikaReplBgWorker::ParseAndSendPikaCommand(const std::shared_ptr<Cmd>& c_ptr) {

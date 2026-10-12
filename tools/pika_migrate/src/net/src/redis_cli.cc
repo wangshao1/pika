@@ -6,8 +6,10 @@
 #include "net/include/redis_cli.h"
 
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <cstdarg>
 #include <cstdio>
@@ -28,6 +30,29 @@
 using pstd::Status;
 
 namespace net {
+
+namespace {
+
+std::string SocketEndpoint(int fd, bool peer) {
+  if (fd < 0) {
+    return "<invalid-fd>";
+  }
+  sockaddr_in addr = {};
+  socklen_t addr_len = sizeof(addr);
+  const int result = peer
+                         ? getpeername(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len)
+                         : getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+  if (result != 0 || addr.sin_family != AF_INET) {
+    return "<unavailable>";
+  }
+  char ip[INET_ADDRSTRLEN] = {};
+  if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == nullptr) {
+    return "<unavailable>";
+  }
+  return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
+}
+
+}  // namespace
 
 class RedisCli : public NetCli {
  public:
@@ -187,7 +212,8 @@ ssize_t RedisCli::BufferRead() {
           }
           return REDIS_EREAD;
         }
-        LOG(WARNING) << "RedisCli read timed out, fd: " << fd() << ", buffered bytes: " << rbuf_offset_
+        LOG(WARNING) << "RedisCli read timed out, fd: " << fd() << ", local: " << SocketEndpoint(fd(), false)
+                     << ", remote: " << SocketEndpoint(fd(), true) << ", buffered bytes: " << rbuf_offset_
                      << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
                      << strerror(read_errno) << "), actual recv timeout: "
                      << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
@@ -430,6 +456,8 @@ int RedisCli::GetReplyFromReader() {
           preview.append(byte_hex);
         }
         LOG(WARNING) << "RedisCli invalid RESP reply type, fd: " << fd()
+                     << ", local: " << SocketEndpoint(fd(), false)
+                     << ", remote: " << SocketEndpoint(fd(), true)
                      << ", type byte: 0x" << type_hex << ", buffer pos: " << rbuf_pos_
                      << ", buffered bytes after type: " << rbuf_offset_
                      << ", stream byte offset: " << (stream_bytes_read_ - rbuf_offset_ - 1)

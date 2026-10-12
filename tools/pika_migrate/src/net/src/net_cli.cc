@@ -12,8 +12,10 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
+#include <glog/logging.h>
 #include <utility>
 
 using pstd::Status;
@@ -138,6 +140,19 @@ Status NetCli::Connect(const std::string& ip, const int port, const std::string&
 
     // connect ok
     rep_->available = true;
+    struct timeval recv_timeout = {};
+    struct timeval send_timeout = {};
+    socklen_t timeout_len = sizeof(struct timeval);
+    const int recv_opt_ret = getsockopt(r->sockfd, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, &timeout_len);
+    timeout_len = sizeof(struct timeval);
+    const int send_opt_ret = getsockopt(r->sockfd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, &timeout_len);
+    const int socket_flags = fcntl(r->sockfd, F_GETFL, 0);
+    LOG(INFO) << "NetCli connected, fd: " << r->sockfd << ", target: " << ip << ":" << port
+              << ", configured recv timeout: " << r->recv_timeout << " ms, actual: "
+              << (recv_opt_ret == 0 ? recv_timeout.tv_sec * 1000 + recv_timeout.tv_usec / 1000 : -1)
+              << " ms, configured send timeout: " << r->send_timeout << " ms, actual: "
+              << (send_opt_ret == 0 ? send_timeout.tv_sec * 1000 + send_timeout.tv_usec / 1000 : -1)
+              << " ms, nonblocking: " << (socket_flags >= 0 && (socket_flags & O_NONBLOCK));
     return s;
   }
   if (!p) {
@@ -247,6 +262,16 @@ Status NetCli::RecvRaw(void* buf, size_t* count) {
       if (errno == EINTR) {
         continue;
       } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int read_errno = errno;
+        struct timeval timeout = {};
+        socklen_t timeout_len = sizeof(timeout);
+        const int opt_ret = getsockopt(r->sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &timeout_len);
+        const int flags = fcntl(r->sockfd, F_GETFL, 0);
+        LOG(WARNING) << "NetCli read timed out, fd: " << r->sockfd << ", bytes requested: " << *count
+                     << ", bytes received: " << pos << ", errno: " << read_errno << " ("
+                     << strerror(read_errno) << "), configured recv timeout: " << r->recv_timeout << " ms, actual: "
+                     << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
+                     << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK));
         return Status::Timeout("Send timeout");
       } else {
         return Status::IOError("read error " + std::string(strerror(errno)));
@@ -281,6 +306,10 @@ int NetCli::set_send_timeout(int send_timeout) {
     r->send_timeout = send_timeout;
     struct timeval timeout = {r->send_timeout / 1000, (r->send_timeout % 1000) * 1000};
     ret = setsockopt(r->sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    if (ret != 0) {
+      LOG(WARNING) << "NetCli failed to set send timeout, fd: " << r->sockfd << ", requested: "
+                   << send_timeout << " ms, errno: " << errno << " (" << strerror(errno) << ")";
+    }
   }
   return ret;
 }
@@ -292,6 +321,10 @@ int NetCli::set_recv_timeout(int recv_timeout) {
     r->recv_timeout = recv_timeout;
     struct timeval timeout = {r->recv_timeout / 1000, (r->recv_timeout % 1000) * 1000};
     ret = setsockopt(r->sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    if (ret != 0) {
+      LOG(WARNING) << "NetCli failed to set recv timeout, fd: " << r->sockfd << ", requested: "
+                   << recv_timeout << " ms, errno: " << errno << " (" << strerror(errno) << ")";
+    }
   }
   return ret;
 }

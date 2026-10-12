@@ -159,6 +159,16 @@ ssize_t RedisCli::BufferRead() {
         // blocking fd after setting setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,...)
         // will return EAGAIN for timeout
       } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int read_errno = errno;
+        struct timeval timeout = {};
+        socklen_t timeout_len = sizeof(timeout);
+        const int opt_ret = getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &timeout, &timeout_len);
+        const int flags = fcntl(fd(), F_GETFL, 0);
+        LOG(WARNING) << "RedisCli read timed out, fd: " << fd() << ", buffered bytes: " << rbuf_offset_
+                     << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
+                     << strerror(read_errno) << "), actual recv timeout: "
+                     << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
+                     << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK));
         return REDIS_ETIMEOUT;
       } else {
         return REDIS_EREAD;

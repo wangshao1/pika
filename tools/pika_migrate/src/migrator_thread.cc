@@ -27,7 +27,7 @@
 #include "include/pika_conf.h"
 
 const int64_t MAX_BATCH_NUM = 30000;
-static const int64_t kSlowLogThresholdUs = 3000;
+static const int64_t kSlowLogThresholdUs = 30000;
 
 extern PikaConf* g_pika_conf;
 

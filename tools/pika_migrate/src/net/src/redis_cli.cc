@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <cstdarg>
 #include <cstdio>
+#include "glog/logging.h"
 
 #include <atomic>
 #include <string>

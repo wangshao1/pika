@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <cstdarg>
+#include <cstdio>
 
 #include <atomic>
 #include <string>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "pstd/include/noncopyable.h"
+#include "pstd/include/xdebug.h"
 #include "net/include/net_cli.h"
 #include "net/include/net_define.h"
 
@@ -370,6 +372,26 @@ int RedisCli::GetReplyFromReader() {
       type = REDIS_REPLY_ARRAY;
       break;
     default:
+      // Keep the diagnostic bounded: reply payloads can contain migrated
+      // values, so log only a short hex prefix rather than raw response data.
+      {
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(p - 1);
+        const size_t available = static_cast<size_t>(rbuf_offset_) + 1;
+        const size_t preview_len = available < 4 ? available : 4;
+        std::string preview;
+        char byte_hex[4];
+        char type_hex[3];
+        std::snprintf(type_hex, sizeof(type_hex), "%02x", bytes[0]);
+        for (size_t i = 0; i < preview_len; ++i) {
+          std::snprintf(byte_hex, sizeof(byte_hex), "%02x", bytes[i]);
+          if (!preview.empty()) preview.append(" ");
+          preview.append(byte_hex);
+        }
+        LOG(WARNING) << "RedisCli invalid RESP reply type, fd: " << fd()
+                     << ", type byte: 0x" << type_hex << ", buffer pos: " << rbuf_pos_
+                     << ", buffered bytes after type: " << rbuf_offset_
+                     << ", preview length: " << preview_len << ", preview hex: " << preview;
+      }
       return REDIS_EPARSE_TYPE;
   }
 

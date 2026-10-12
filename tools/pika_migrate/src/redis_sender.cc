@@ -88,6 +88,8 @@ static std::string CommandToReadable(const std::string& command) {
   return out;
 }
 
+static std::atomic<uint64_t> g_redis_batch_id{1};
+
 RedisSender::RedisSender(int id, std::string ip, int64_t port, std::string user, std::string password):
   id_(id),
   cli_(NULL),
@@ -296,7 +298,8 @@ int RedisSender::SendCommand(const std::string &key, std::string &command) {
 // single connection does not disturb the per-key ordering guarantee.
 // If any send/recv in the fast path fails, fall back to per-command sending
 // (with its own reconnect+retry) so no command is lost and order is kept.
-int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>> &commands) {
+int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>> &commands,
+                           uint64_t batch_id, int64_t* write_done_us) {
   if (commands.empty()) {
     return 0;
   }
@@ -321,12 +324,15 @@ int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>
     pstd::Status s = cli_->Send(&send_buffer);
     if (!s.ok()) {
       LOG(WARNING) << "RedisSender " << id_ << " batch write failed, target: " << ip_ << ":" << port_
-                   << ", status: " << s.ToString() << ", batch size: " << commands.size()
+                   << ", batch id: " << batch_id << ", status: " << s.ToString()
+                   << ", commands: " << commands.size() << ", elapsed: "
+                   << (pstd::NowMicros() - start_us) / 1000 << " ms"
                    << ", key: " << kv.first << ", command: " << CommandToReadable(kv.second);
       return -1;
     }
   }
   const auto end_us = pstd::NowMicros();
+  if (write_done_us != nullptr) *write_done_us = end_us;
   if (end_us - start_us >= kSlowLogThresholdUs) {
     LOG(INFO) << "RedisSender batch write slow, id: " << id_
               << ", commands: " << commands.size()
@@ -338,8 +344,11 @@ int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>
 }
 
 int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands,
-                           size_t* failed_reply_idx) {
+                           size_t* failed_reply_idx, uint64_t batch_id,
+                           int64_t write_done_us) {
+  const auto recv_start_us = pstd::NowMicros();
   for (size_t i = 0; i < commands.size(); ++i) {
+    const auto reply_start_us = pstd::NowMicros();
     net::RedisCmdArgsType reply;
     pstd::Status s = cli_->Recv(&reply);
     if (!s.ok()) {
@@ -347,7 +356,12 @@ int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>
         *failed_reply_idx = i;
       }
       LOG(WARNING) << "RedisSender " << id_ << " batch read failed, target: " << ip_ << ":" << port_
-                   << ", status: " << s.ToString() << ", reply idx: " << i << "/" << commands.size()
+                   << ", batch id: " << batch_id << ", status: " << s.ToString()
+                   << ", reply idx: " << i << "/" << commands.size()
+                   << ", wait since write complete: "
+                   << (write_done_us > 0 ? (reply_start_us - write_done_us) / 1000 : -1) << " ms"
+                   << ", batch receive elapsed: " << (pstd::NowMicros() - recv_start_us) / 1000 << " ms"
+                   << ", current reply wait: " << (pstd::NowMicros() - reply_start_us) / 1000 << " ms"
                    << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second)
                    << ", in-flight requests have unknown execution status";
       return -1;
@@ -358,6 +372,12 @@ int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>
                    << port_ << ", reply: " << reply[0] << ", reply idx: " << i << "/" << commands.size()
                    << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second);
     }
+  }
+  const auto recv_end_us = pstd::NowMicros();
+  if (recv_end_us - recv_start_us >= kSlowLogThresholdUs) {
+    LOG(INFO) << "RedisSender batch receive slow, id: " << id_ << ", batch id: " << batch_id
+              << ", commands: " << commands.size() << ", elapsed: "
+              << (recv_end_us - recv_start_us) / 1000 << " ms";
   }
   return 0;
 }
@@ -394,7 +414,7 @@ void *RedisSender::ThreadMain() {
           batch = in_flight_batches_.front();
         }
         size_t failed_idx = 0;
-        if (RecvBatch(batch->commands, &failed_idx) != 0) {
+        if (RecvBatch(batch->commands, &failed_idx, batch->batch_id, batch->write_done_us) != 0) {
           {
             std::lock_guard lock(in_flight_mutex_);
             failed_batch_ = batch;
@@ -429,6 +449,7 @@ void *RedisSender::ThreadMain() {
       signal_lock.unlock();
 
       auto batch = std::make_shared<InFlightBatch>();
+      batch->batch_id = g_redis_batch_id.fetch_add(1, std::memory_order_relaxed);
       {
         std::unique_lock flight_lock(in_flight_mutex_);
         if (in_flight_batches_.size() >= window) {
@@ -456,7 +477,7 @@ void *RedisSender::ThreadMain() {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
         continue;
       }
-      if (SendBatch(batch->commands) != 0) {
+      if (SendBatch(batch->commands, batch->batch_id, &batch->write_done_us) != 0) {
         // The batch may have been partially written. Stop this sender rather
         // than leaving the receiver thread blocked on an incomplete reply set.
         should_exit_.store(true);

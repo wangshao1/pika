@@ -14,6 +14,8 @@
 #include "glog/logging.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,6 +49,8 @@ class RedisCli : public NetCli {
   int32_t rbuf_offset_{0};
   int elements_;  // the elements number of this current reply
   int err_;
+  uint64_t stream_bytes_read_{0};
+  ssize_t last_read_bytes_{0};
 
   int GetReply();
   int GetReplyFromReader();
@@ -150,6 +154,7 @@ ssize_t RedisCli::BufferRead() {
   }
 
   ssize_t nread;
+  const auto read_start = std::chrono::steady_clock::now();
 
   while (true) {
     nread = read(fd(), rbuf_ + rbuf_offset_, rbuf_size_ - rbuf_offset_);
@@ -160,6 +165,8 @@ ssize_t RedisCli::BufferRead() {
         // blocking fd after setting setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,...)
         // will return EAGAIN for timeout
       } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int64_t read_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - read_start).count();
         const int read_errno = errno;
         struct timeval timeout = {};
         socklen_t timeout_len = sizeof(timeout);
@@ -184,7 +191,8 @@ ssize_t RedisCli::BufferRead() {
                      << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
                      << strerror(read_errno) << "), actual recv timeout: "
                      << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
-                     << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK));
+                     << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK))
+                     << ", read elapsed: " << read_elapsed_ms << " ms";
         if (opt_ret == 0 && (timeout.tv_sec > 0 || timeout.tv_usec > 0)) {
           return REDIS_ETIMEOUT;
         }
@@ -198,6 +206,8 @@ ssize_t RedisCli::BufferRead() {
     }
 
     rbuf_offset_ += static_cast<int32_t>(nread);
+    last_read_bytes_ = nread;
+    stream_bytes_read_ += static_cast<uint64_t>(nread);
     return nread;
   }
 }
@@ -409,7 +419,7 @@ int RedisCli::GetReplyFromReader() {
       {
         const unsigned char* bytes = reinterpret_cast<const unsigned char*>(p - 1);
         const size_t available = static_cast<size_t>(rbuf_offset_) + 1;
-        const size_t preview_len = available < 4 ? available : 4;
+        const size_t preview_len = available < 16 ? available : 16;
         std::string preview;
         char byte_hex[4];
         char type_hex[3];
@@ -422,6 +432,9 @@ int RedisCli::GetReplyFromReader() {
         LOG(WARNING) << "RedisCli invalid RESP reply type, fd: " << fd()
                      << ", type byte: 0x" << type_hex << ", buffer pos: " << rbuf_pos_
                      << ", buffered bytes after type: " << rbuf_offset_
+                     << ", stream byte offset: " << (stream_bytes_read_ - rbuf_offset_ - 1)
+                     << ", stream bytes read: " << stream_bytes_read_
+                     << ", last read bytes: " << last_read_bytes_
                      << ", preview length: " << preview_len << ", preview hex: " << preview;
       }
       return REDIS_EPARSE_TYPE;

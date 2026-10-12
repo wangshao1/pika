@@ -2,6 +2,7 @@
 #define REDIS_SENDER_H_
 
 #include <atomic>
+#include <cstdint>
 #include <thread>
 #include <chrono>
 #include <iostream>
@@ -51,10 +52,12 @@ class RedisSender : public net::Thread {
   int SendCommands(std::vector<std::pair<std::string, std::string>> &commands);
   // Write a batch without waiting for replies. Replies are consumed later in
   // exactly the same order as batches were written on this connection.
-  int SendBatch(const std::vector<std::pair<std::string, std::string>> &commands);
+  int SendBatch(const std::vector<std::pair<std::string, std::string>> &commands,
+                uint64_t batch_id = 0, int64_t* write_done_us = nullptr);
   // Read one response per command from a previously written batch.
   int RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands,
-                size_t* failed_reply_idx = nullptr);
+                size_t* failed_reply_idx = nullptr, uint64_t batch_id = 0,
+                int64_t write_done_us = 0);
   void ConnectRedis();
   size_t commandQueueSize() {
     std::lock_guard l(command_queue_mutex_);
@@ -86,6 +89,8 @@ class RedisSender : public net::Thread {
   struct InFlightBatch {
     std::vector<std::pair<std::string, std::string>> commands;
     std::unordered_set<std::string> keys;
+    uint64_t batch_id{0};
+    int64_t write_done_us{0};
   };
   std::mutex in_flight_mutex_;
   std::condition_variable in_flight_cv_;

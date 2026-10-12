@@ -314,8 +314,11 @@ int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>
   }
 
   const auto start_us = pstd::NowMicros();
-  for (auto &kv : commands) {
-    pstd::Status s = cli_->Send(&kv.second);
+  for (const auto &kv : commands) {
+    // NetCli::Send takes void* even though RedisCli only reads the string.
+    // Pass a mutable local buffer rather than casting away constness.
+    std::string send_buffer = kv.second;
+    pstd::Status s = cli_->Send(&send_buffer);
     if (!s.ok()) {
       LOG(WARNING) << "RedisSender " << id_ << " batch write failed, target: " << ip_ << ":" << port_
                    << ", status: " << s.ToString() << ", batch size: " << commands.size()

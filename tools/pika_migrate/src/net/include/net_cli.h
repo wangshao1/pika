@@ -46,6 +46,7 @@ class NetCli : public pstd::noncopyable {
  protected:
   pstd::Status SendRaw(void* buf, size_t count);
   pstd::Status RecvRaw(void* buf, size_t* count);
+  int recv_timeout() const;
 
  private:
   struct Rep;

@@ -7,6 +7,7 @@
 
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <unistd.h>
 #include <cstdarg>
 #include <cstdio>
@@ -164,12 +165,31 @@ ssize_t RedisCli::BufferRead() {
         socklen_t timeout_len = sizeof(timeout);
         const int opt_ret = getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &timeout, &timeout_len);
         const int flags = fcntl(fd(), F_GETFL, 0);
+        if (flags >= 0 && (flags & O_NONBLOCK)) {
+          pollfd pfd = {fd(), POLLIN, 0};
+          const int timeout_ms = recv_timeout();
+          int poll_ret;
+          do {
+            poll_ret = poll(&pfd, 1, timeout_ms > 0 ? timeout_ms : -1);
+          } while (poll_ret < 0 && errno == EINTR);
+          if (poll_ret > 0) {
+            continue;
+          }
+          if (poll_ret == 0) {
+            return REDIS_ETIMEOUT;
+          }
+          return REDIS_EREAD;
+        }
         LOG(WARNING) << "RedisCli read timed out, fd: " << fd() << ", buffered bytes: " << rbuf_offset_
                      << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
                      << strerror(read_errno) << "), actual recv timeout: "
                      << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
                      << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK));
-        return REDIS_ETIMEOUT;
+        if (opt_ret == 0 && (timeout.tv_sec > 0 || timeout.tv_usec > 0)) {
+          return REDIS_ETIMEOUT;
+        }
+        errno = read_errno;
+        return REDIS_EREAD;
       } else {
         return REDIS_EREAD;
       }

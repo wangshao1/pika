@@ -264,7 +264,8 @@ int RedisCli::ProcessBulkItem() {
       rbuf_pos_ += bytelen; /* case '$-1\r\n' */
       rbuf_offset_ -= bytelen;
       return REDIS_OK;
-    } else if (len + 2 <= rbuf_offset_) {
+    } else if (len >= 0 && static_cast<size_t>(bytelen) + static_cast<size_t>(len) + 2 <=
+                               static_cast<size_t>(rbuf_offset_)) {
       argv_.push_back(std::string(p + bytelen, len));
       elements_--;
 

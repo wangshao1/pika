@@ -53,7 +53,8 @@ class RedisSender : public net::Thread {
   // exactly the same order as batches were written on this connection.
   int SendBatch(const std::vector<std::pair<std::string, std::string>> &commands);
   // Read one response per command from a previously written batch.
-  int RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands);
+  int RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands,
+                size_t* failed_reply_idx = nullptr);
   void ConnectRedis();
   size_t commandQueueSize() {
     std::lock_guard l(command_queue_mutex_);
@@ -91,6 +92,8 @@ class RedisSender : public net::Thread {
   std::deque<std::shared_ptr<InFlightBatch>> in_flight_batches_;
   std::unordered_set<std::string> in_flight_keys_;
   std::atomic<bool> receiver_failed_{false};
+  std::shared_ptr<InFlightBatch> failed_batch_;
+  size_t failed_reply_idx_{0};
 };
 
 #endif

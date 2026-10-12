@@ -110,7 +110,7 @@ void RedisSender::ConnectRedis() {
     // Connect to redis
     cli_ = std::shared_ptr<net::NetCli>(net::NewRedisCli());
     cli_->set_connect_timeout(1000);
-    cli_->set_recv_timeout(10000);
+    cli_->set_recv_timeout(300000);
     cli_->set_send_timeout(10000);
     pstd::Status s = cli_->Connect(ip_, port_);
     if (!s.ok()) {
@@ -337,11 +337,15 @@ int RedisSender::SendBatch(const std::vector<std::pair<std::string, std::string>
   return 0;
 }
 
-int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands) {
+int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>> &commands,
+                           size_t* failed_reply_idx) {
   for (size_t i = 0; i < commands.size(); ++i) {
     net::RedisCmdArgsType reply;
     pstd::Status s = cli_->Recv(&reply);
     if (!s.ok()) {
+      if (failed_reply_idx != nullptr) {
+        *failed_reply_idx = i;
+      }
       LOG(WARNING) << "RedisSender " << id_ << " batch read failed, target: " << ip_ << ":" << port_
                    << ", status: " << s.ToString() << ", reply idx: " << i << "/" << commands.size()
                    << ", key: " << commands[i].first << ", command: " << CommandToReadable(commands[i].second)
@@ -370,100 +374,150 @@ void *RedisSender::ThreadMain() {
   ConnectRedis();
   const size_t batch_size = std::max<size_t>(1, static_cast<size_t>(g_pika_conf->redis_pipeline_size()));
   const size_t window = std::max<size_t>(1, static_cast<size_t>(g_pika_conf->redis_pipeline_window()));
-  std::thread receiver([&]() {
-    for (;;) {
-      std::shared_ptr<InFlightBatch> batch;
-      {
+  while (true) {
+    receiver_failed_.store(false);
+    failed_batch_.reset();
+    failed_reply_idx_ = 0;
+    std::thread receiver([&]() {
+      for (;;) {
+        std::shared_ptr<InFlightBatch> batch;
+        {
+          std::unique_lock lock(in_flight_mutex_);
+          in_flight_cv_.wait(lock, [&]() {
+            return !in_flight_batches_.empty() || should_exit_.load() || receiver_failed_.load();
+          });
+          if (in_flight_batches_.empty()) {
+            if (receiver_failed_.load() || (should_exit_.load() &&
+                (!graceful_exit_.load() || commandQueueSize() == 0))) break;
+            continue;
+          }
+          batch = in_flight_batches_.front();
+        }
+        size_t failed_idx = 0;
+        if (RecvBatch(batch->commands, &failed_idx) != 0) {
+          {
+            std::lock_guard lock(in_flight_mutex_);
+            failed_batch_ = batch;
+            failed_reply_idx_ = failed_idx;
+            receiver_failed_.store(true);
+          }
+          in_flight_cv_.notify_all();
+          rsignal_.notify_all();
+          break;
+        }
+        {
+          std::lock_guard lock(in_flight_mutex_);
+          in_flight_batches_.pop_front();
+          for (const auto& key : batch->keys) in_flight_keys_.erase(key);
+        }
+        in_flight_cv_.notify_all();
+        wsignal_.notify_all();
+      }
+    });
+
+    while (!should_exit_.load() || graceful_exit_.load()) {
+      if (receiver_failed_.load()) break;
+      if (should_exit_.load() && graceful_exit_.load() && commandQueueSize() == 0) {
         std::unique_lock lock(in_flight_mutex_);
-        in_flight_cv_.wait(lock, [&]() {
-          return !in_flight_batches_.empty() || should_exit_.load() || receiver_failed_.load();
-        });
-        if (in_flight_batches_.empty()) {
-          if (receiver_failed_.load() || (should_exit_.load() &&
-              (!graceful_exit_.load() || commandQueueSize() == 0))) break;
+        if (in_flight_batches_.empty()) break;
+      }
+      std::unique_lock signal_lock(signal_mutex_);
+      if (commandQueueSize() == 0) {
+        rsignal_.wait_for(signal_lock, std::chrono::milliseconds(100));
+        continue;
+      }
+      signal_lock.unlock();
+
+      auto batch = std::make_shared<InFlightBatch>();
+      {
+        std::unique_lock flight_lock(in_flight_mutex_);
+        if (in_flight_batches_.size() >= window) {
+          in_flight_cv_.wait_for(flight_lock, std::chrono::milliseconds(1));
           continue;
         }
-        batch = in_flight_batches_.front();
+        std::lock_guard queue_lock(command_queue_mutex_);
+        while (!commands_queue_.empty() && batch->commands.size() < batch_size) {
+          const auto& item = commands_queue_.front();
+          if (item.first.empty()) {
+            if (!batch->commands.empty() || !in_flight_batches_.empty()) break;
+            batch->commands.push_back(item);
+            commands_queue_.pop();
+            ++elements_;
+            break;
+          }
+          if (in_flight_keys_.count(item.first) || batch->keys.count(item.first)) break;
+          batch->keys.insert(item.first);
+          batch->commands.push_back(item);
+          commands_queue_.pop();
+          ++elements_;
+        }
       }
-      if (RecvBatch(batch->commands) != 0) {
-        receiver_failed_.store(true);
+      if (batch->commands.empty()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        continue;
+      }
+      if (SendBatch(batch->commands) != 0) {
+        // The batch may have been partially written. Stop this sender rather
+        // than leaving the receiver thread blocked on an incomplete reply set.
         should_exit_.store(true);
         graceful_exit_.store(false);
-        in_flight_cv_.notify_all();
-        rsignal_.notify_all();
+        LOG(WARNING) << "RedisSender " << id_ << " batch write failed; in-flight request execution status is unknown";
         break;
       }
       {
         std::lock_guard lock(in_flight_mutex_);
-        in_flight_batches_.pop_front();
-        for (const auto& key : batch->keys) in_flight_keys_.erase(key);
+        for (const auto& key : batch->keys) in_flight_keys_.insert(key);
+        in_flight_batches_.push_back(batch);
       }
-      in_flight_cv_.notify_all();
+      in_flight_cv_.notify_one();
       wsignal_.notify_all();
     }
-  });
 
-  while (!should_exit_.load() || graceful_exit_.load()) {
-    if (receiver_failed_.load()) break;
-    if (should_exit_.load() && graceful_exit_.load() && commandQueueSize() == 0) {
-      std::unique_lock lock(in_flight_mutex_);
-      if (in_flight_batches_.empty()) break;
-    }
-    std::unique_lock signal_lock(signal_mutex_);
-    if (commandQueueSize() == 0) {
-      rsignal_.wait_for(signal_lock, std::chrono::milliseconds(100));
-      continue;
-    }
-    signal_lock.unlock();
+    if (cli_ && (receiver_failed_.load() || (should_exit_.load() && !graceful_exit_.load()))) cli_->Close();
+    in_flight_cv_.notify_all();
+    rsignal_.notify_all();
+    if (receiver.joinable()) receiver.join();
 
-    auto batch = std::make_shared<InFlightBatch>();
+    if (!receiver_failed_.load()) break;
+
+    // A timed-out reply makes this command and all later writes on the old
+    // connection ambiguous. Replay from the first unacknowledged command,
+    // followed by later in-flight batches and then commands still queued.
+    std::queue<std::pair<std::string, std::string>> recovered;
     {
-      std::unique_lock flight_lock(in_flight_mutex_);
-      if (in_flight_batches_.size() >= window) {
-        in_flight_cv_.wait_for(flight_lock, std::chrono::milliseconds(1));
-        continue;
-      }
-      std::lock_guard queue_lock(command_queue_mutex_);
-      while (!commands_queue_.empty() && batch->commands.size() < batch_size) {
-        const auto& item = commands_queue_.front();
-        if (item.first.empty()) {
-          if (!batch->commands.empty() || !in_flight_batches_.empty()) break;
-          batch->commands.push_back(item);
-          commands_queue_.pop();
-          ++elements_;
-          break;
+      std::lock_guard flight_lock(in_flight_mutex_);
+      bool found_failed = false;
+      for (const auto& batch : in_flight_batches_) {
+        size_t begin = 0;
+        if (!found_failed && batch == failed_batch_) {
+          begin = std::min(failed_reply_idx_, batch->commands.size());
+          found_failed = true;
         }
-        if (in_flight_keys_.count(item.first) || batch->keys.count(item.first)) break;
-        batch->keys.insert(item.first);
-        batch->commands.push_back(item);
-        commands_queue_.pop();
-        ++elements_;
+        if (!found_failed) continue;
+        for (size_t i = begin; i < batch->commands.size(); ++i) recovered.push(batch->commands[i]);
       }
-    }
-    if (batch->commands.empty()) {
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
-      continue;
-    }
-    if (SendBatch(batch->commands) != 0) {
-      receiver_failed_.store(true);
-      should_exit_.store(true);
-      graceful_exit_.store(false);
-      LOG(WARNING) << "RedisSender " << id_ << " batch write failed; in-flight request execution status is unknown";
-      break;
+      in_flight_batches_.clear();
+      in_flight_keys_.clear();
+      failed_batch_.reset();
     }
     {
-      std::lock_guard lock(in_flight_mutex_);
-      for (const auto& key : batch->keys) in_flight_keys_.insert(key);
-      in_flight_batches_.push_back(batch);
+      std::lock_guard queue_lock(command_queue_mutex_);
+      while (!commands_queue_.empty()) {
+        recovered.push(commands_queue_.front());
+        commands_queue_.pop();
+      }
+      commands_queue_.swap(recovered);
     }
-    in_flight_cv_.notify_one();
+    const size_t retry_count = commandQueueSize();
+    LOG(WARNING) << "RedisSender " << id_ << " reconnecting after reply timeout; retrying "
+                 << retry_count << " commands from the first unacknowledged command";
+    cli_ = nullptr;
+    if (should_exit_.load() && !graceful_exit_.load()) break;
+    ConnectRedis();
     wsignal_.notify_all();
+    rsignal_.notify_all();
   }
 
-  if (cli_ && (receiver_failed_.load() || (should_exit_.load() && !graceful_exit_.load()))) cli_->Close();
-  in_flight_cv_.notify_all();
-  rsignal_.notify_all();
-  if (receiver.joinable()) receiver.join();
   cli_ = NULL;
   LOG(INFO) << "RedisSender " << id_ << " async sender exit, queued commands: " << commandQueueSize();
   return NULL;

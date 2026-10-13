@@ -104,6 +104,8 @@ class RedisSender : public net::Thread {
   std::atomic<uint64_t> receiving_batch_id_{0};
   std::atomic<size_t> receiving_reply_idx_{0};
   std::atomic<int64_t> receiving_reply_start_us_{0};
+  std::atomic<bool> receiver_reading_reply_{false};
+  std::atomic<uint64_t> receiver_current_batch_id_{0};
   std::shared_ptr<InFlightBatch> failed_batch_;
   size_t failed_reply_idx_{0};
 };

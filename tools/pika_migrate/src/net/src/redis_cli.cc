@@ -82,6 +82,7 @@ class RedisCli : public NetCli {
   uint64_t buffer_compactions_{0};
   int32_t last_compact_from_pos_{0};
   int32_t last_compact_remaining_{0};
+  uint64_t recv_calls_{0};
 
   int GetReply();
   int GetReplyFromReader();
@@ -154,25 +155,61 @@ Status RedisCli::Send(void* msg) {
 
 // The result is useless
 Status RedisCli::Recv(void* trival) {
+  const uint64_t recv_call = ++recv_calls_;
+  const auto recv_start = std::chrono::steady_clock::now();
+  // Recv is called for every Redis reply; sample entry logs to avoid flooding
+  // the migration log while still identifying long-running connections.
+  if (recv_call == 1 || recv_call % 10000 == 0) {
+    LOG(INFO) << "RedisCli Recv started, fd: " << fd()
+              << ", local: " << SocketEndpoint(fd(), false)
+              << ", remote: " << SocketEndpoint(fd(), true)
+              << ", call: " << recv_call << ", buffered bytes: " << rbuf_offset_
+              << ", parser position: " << rbuf_pos_;
+  }
+
   argv_.clear();
   int result = GetReply();
+  const int recv_errno = errno;
+  const int64_t recv_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - recv_start)
+                                      .count();
+  Status status;
   switch (result) {
     case REDIS_OK:
       if (trival) {
         *static_cast<RedisCmdArgsType*>(trival) = argv_;
       }
-      return Status::OK();
+      status = Status::OK();
+      break;
     case REDIS_ETIMEOUT:
-      return Status::Timeout("");
+      status = Status::Timeout("");
+      break;
     case REDIS_EREAD_NULL:
-      return Status::IOError("Read null");
+      status = Status::IOError("Read null");
+      break;
     case REDIS_EREAD:
-      return Status::IOError("read failed caz " + std::string(strerror(errno)));
+      status = Status::IOError("read failed caz " + std::string(strerror(recv_errno)));
+      break;
     case REDIS_EPARSE_TYPE:
-      return Status::IOError("invalid type");
+      status = Status::IOError("invalid type");
+      break;
     default:  // other error
-      return Status::IOError("other error, maybe " + std::string(strerror(errno)));
+      status = Status::IOError("other error, maybe " + std::string(strerror(recv_errno)));
+      break;
   }
+
+  if (!status.ok() || recv_elapsed_ms >= 1000) {
+    LOG(WARNING) << "RedisCli Recv finished, fd: " << fd()
+                 << ", local: " << SocketEndpoint(fd(), false)
+                 << ", remote: " << SocketEndpoint(fd(), true)
+                 << ", call: " << recv_call << ", result: " << result
+                 << ", elapsed: " << recv_elapsed_ms << " ms"
+                 << ", errno: " << recv_errno << " (" << strerror(recv_errno) << ")"
+                 << ", reply args: " << argv_.size() << ", buffered bytes: " << rbuf_offset_
+                 << ", parser position: " << rbuf_pos_
+                 << ", stream bytes read: " << stream_bytes_read_;
+  }
+  return status;
 }
 
 ssize_t RedisCli::BufferRead() {

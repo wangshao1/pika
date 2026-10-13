@@ -362,8 +362,11 @@ int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>
     receiving_batch_id_.store(batch_id, std::memory_order_relaxed);
     receiving_reply_idx_.store(i, std::memory_order_relaxed);
     receiving_reply_start_us_.store(reply_start_us, std::memory_order_relaxed);
+    receiver_current_batch_id_.store(batch_id, std::memory_order_relaxed);
+    receiver_reading_reply_.store(true, std::memory_order_release);
     net::RedisCmdArgsType reply;
     pstd::Status s = cli_->Recv(&reply);
+    receiver_reading_reply_.store(false, std::memory_order_release);
     if (!s.ok()) {
       if (failed_reply_idx != nullptr) {
         *failed_reply_idx = i;
@@ -390,6 +393,7 @@ int RedisSender::RecvBatch(const std::vector<std::pair<std::string, std::string>
   const auto recv_end_us = pstd::NowMicros();
   receiving_batch_id_.store(0, std::memory_order_relaxed);
   receiving_reply_start_us_.store(0, std::memory_order_relaxed);
+  receiver_current_batch_id_.store(0, std::memory_order_relaxed);
   if (recv_end_us - recv_start_us >= kSlowLogThresholdUs) {
     LOG(INFO) << "RedisSender batch receive slow, role: " << role_ << ", id: " << id_
               << ", fd: " << (cli_ ? cli_->fd() : -1) << ", batch id: " << batch_id
@@ -420,7 +424,11 @@ void *RedisSender::ThreadMain() {
     failed_reply_idx_ = 0;
     receiving_batch_id_.store(0, std::memory_order_relaxed);
     receiving_reply_start_us_.store(0, std::memory_order_relaxed);
+    receiver_reading_reply_.store(false, std::memory_order_relaxed);
+    receiver_current_batch_id_.store(0, std::memory_order_relaxed);
     std::thread receiver([&]() {
+      LOG(INFO) << "RedisSender receiver thread started, role: " << role_ << ", id: " << id_
+                << ", fd: " << (cli_ ? cli_->fd() : -1);
       for (;;) {
         std::shared_ptr<InFlightBatch> batch;
         {
@@ -435,6 +443,9 @@ void *RedisSender::ThreadMain() {
                          << ", id: " << id_
                          << ", fd: " << (cli_ ? cli_->fd() : -1) << ", target: " << ip_ << ":" << port_
                          << ", in-flight batches: " << in_flight_count
+                         << ", current read active: " << receiver_reading_reply_.load(std::memory_order_acquire)
+                         << ", current batch id: " << receiver_current_batch_id_.load(std::memory_order_relaxed)
+                         << ", current reply idx: " << receiving_reply_idx_.load(std::memory_order_relaxed)
                          << ", queue depth: " << commandQueueSize()
                          << ", should_exit: " << should_exit_.load()
                          << ", graceful_exit: " << graceful_exit_.load()
@@ -458,6 +469,9 @@ void *RedisSender::ThreadMain() {
           }
           in_flight_cv_.notify_all();
           rsignal_.notify_all();
+          LOG(WARNING) << "RedisSender receiver thread exiting after read failure, role: " << role_
+                       << ", id: " << id_ << ", fd: " << (cli_ ? cli_->fd() : -1)
+                       << ", batch id: " << batch->batch_id << ", failed reply idx: " << failed_idx;
           break;
         }
         {
@@ -468,6 +482,10 @@ void *RedisSender::ThreadMain() {
         in_flight_cv_.notify_all();
         wsignal_.notify_all();
       }
+      LOG(INFO) << "RedisSender receiver thread exited, role: " << role_ << ", id: " << id_
+                << ", fd: " << (cli_ ? cli_->fd() : -1)
+                << ", should_exit: " << should_exit_.load()
+                << ", receiver_failed: " << receiver_failed_.load();
     });
 
     while (!should_exit_.load() || graceful_exit_.load()) {
@@ -497,6 +515,8 @@ void *RedisSender::ThreadMain() {
                        << ", oldest batch id: " << oldest_batch_id
                        << ", oldest batch age: " << oldest_batch_age_ms << " ms"
                        << ", receiving batch id: " << receiving_batch_id_.load(std::memory_order_relaxed)
+                       << ", receiver read active: " << receiver_reading_reply_.load(std::memory_order_acquire)
+                       << ", receiver current batch id: " << receiver_current_batch_id_.load(std::memory_order_relaxed)
                        << ", reply idx: " << receiving_reply_idx_.load(std::memory_order_relaxed)
                        << ", current reply wait: "
                        << (reply_start_us > 0 ? (now_us - reply_start_us) / 1000 : -1) << " ms"
@@ -604,7 +624,16 @@ void *RedisSender::ThreadMain() {
     }
     in_flight_cv_.notify_all();
     rsignal_.notify_all();
-    if (receiver.joinable()) receiver.join();
+    if (receiver.joinable()) {
+      LOG(INFO) << "RedisSender joining receiver thread, role: " << role_ << ", id: " << id_
+                << ", fd: " << (cli_ ? cli_->fd() : -1)
+                << ", read active: " << receiver_reading_reply_.load(std::memory_order_acquire)
+                << ", current batch id: " << receiver_current_batch_id_.load(std::memory_order_relaxed)
+                << ", reply idx: " << receiving_reply_idx_.load(std::memory_order_relaxed);
+      receiver.join();
+      LOG(INFO) << "RedisSender receiver join completed, role: " << role_ << ", id: " << id_
+                << ", fd: " << (cli_ ? cli_->fd() : -1);
+    }
 
     if (!receiver_failed_.load()) break;
 

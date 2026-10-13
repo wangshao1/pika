@@ -21,7 +21,8 @@
 
 class RedisSender : public net::Thread {
  public:
-  RedisSender(int id, std::string ip, int64_t port, std::string user, std::string password);
+  RedisSender(int id, std::string ip, int64_t port, std::string user, std::string password,
+              std::string role = "sender");
   virtual ~RedisSender();
   // Forced stop: exit as soon as possible, ABANDONING any commands still queued.
   // Use only when correctness of the queued data no longer matters (e.g. process
@@ -67,6 +68,7 @@ class RedisSender : public net::Thread {
   void *LegacyThreadMain();
  private:
   int id_;
+  std::string role_;
   int port_;
   std::shared_ptr<net::NetCli> cli_;
   std::condition_variable rsignal_;

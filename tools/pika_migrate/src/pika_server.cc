@@ -109,7 +109,8 @@ PikaServer::PikaServer()
                                                               g_pika_conf->target_redis_host(),
                                                               g_pika_conf->target_redis_port(),
                                                               g_pika_conf->target_redis_user(),
-                                                              g_pika_conf->target_redis_pwd()));
+                                                              g_pika_conf->target_redis_pwd(),
+                                                              "server"));
   }
 
   acl_ = std::make_unique<::Acl>();
@@ -1599,7 +1600,8 @@ void PikaServer::RetransmitData(const std::string& path) {
   std::vector<std::shared_ptr<MigratorThread>> migrators;
 
   for (int i = 0; i < thread_num; i++) {
-    redis_senders_.emplace_back(std::make_shared<RedisSender>(i, target_host, target_port, target_user, target_pwd));
+    redis_senders_.emplace_back(
+        std::make_shared<RedisSender>(i, target_host, target_port, target_user, target_pwd, "retransmit"));
   }
   migrators.emplace_back(std::make_shared<MigratorThread>(storage_, &redis_senders_, storage::kStrings, thread_num));
   migrators.emplace_back(std::make_shared<MigratorThread>(storage_, &redis_senders_, storage::kLists, thread_num));
@@ -1623,7 +1625,9 @@ void PikaServer::RetransmitData(const std::string& path) {
     redis_senders_[i]->GracefulStop();
   }
   for (size_t i = 0; i < redis_senders_.size(); i++) {
+    LOG(INFO) << "Retransmit waiting for sender thread join, id: " << i;
     redis_senders_[i]->JoinThread();
+    LOG(INFO) << "Retransmit sender thread joined, id: " << i;
   }
 
   int64_t staged = 0, replies_received = 0, records = 0;

@@ -495,22 +495,35 @@ int RedisCli::GetReplyFromReader() {
       return REDIS_EPARSE_TYPE;
   }
 
+  int result;
   switch (type) {
     case REDIS_REPLY_ERROR:
     case REDIS_REPLY_STATUS:
     case REDIS_REPLY_INTEGER:
       // elements_ = 1;
-      return ProcessLineItem();
+      result = ProcessLineItem();
+      break;
     case REDIS_REPLY_STRING:
       // need processBulkItem();
       // elements_ = 1;
-      return ProcessBulkItem();
+      result = ProcessBulkItem();
+      break;
     case REDIS_REPLY_ARRAY:
       // need processMultiBulkItem();
-      return ProcessMultiBulkItem();
+      result = ProcessMultiBulkItem();
+      break;
     default:
       return REDIS_EPARSE_TYPE;  // Avoid warning.
   }
+
+  // The type byte is consumed before parsing the remainder of the reply.
+  // If the reply is incomplete, restore it so BufferRead() compacts the full
+  // reply prefix and the next parse attempt starts at the same RESP boundary.
+  if (result == REDIS_HALF) {
+    --rbuf_pos_;
+    ++rbuf_offset_;
+  }
+  return result;
 }
 
 NetCli* NewRedisCli() { return new RedisCli(); }

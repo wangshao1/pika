@@ -99,6 +99,10 @@ class RedisSender : public net::Thread {
   std::deque<std::shared_ptr<InFlightBatch>> in_flight_batches_;
   std::unordered_set<std::string> in_flight_keys_;
   std::atomic<bool> receiver_failed_{false};
+  // Set only after the sender loop has finished taking and writing batches.
+  // A graceful stop must not let the receiver exit while a batch is between
+  // being removed from commands_queue_ and being published to in_flight_batches_.
+  std::atomic<bool> sender_done_{false};
   // Read by the sender thread for low-frequency diagnostics while the receiver
   // is blocked waiting for a reply.
   std::atomic<uint64_t> receiving_batch_id_{0};

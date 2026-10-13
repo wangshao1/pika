@@ -420,6 +420,7 @@ void *RedisSender::ThreadMain() {
   int64_t next_progress_log_us = next_idle_log_us;
   while (true) {
     receiver_failed_.store(false);
+    sender_done_.store(false, std::memory_order_release);
     failed_batch_.reset();
     failed_reply_idx_ = 0;
     receiving_batch_id_.store(0, std::memory_order_relaxed);
@@ -434,7 +435,9 @@ void *RedisSender::ThreadMain() {
         {
           std::unique_lock lock(in_flight_mutex_);
           const bool signaled = in_flight_cv_.wait_for(lock, std::chrono::seconds(30), [&]() {
-            return !in_flight_batches_.empty() || should_exit_.load() || receiver_failed_.load();
+            return !in_flight_batches_.empty() || receiver_failed_.load() ||
+                   (should_exit_.load() &&
+                    (!graceful_exit_.load() || sender_done_.load(std::memory_order_acquire)));
           });
           if (!signaled) {
             const size_t in_flight_count = in_flight_batches_.size();
@@ -453,8 +456,12 @@ void *RedisSender::ThreadMain() {
             continue;
           }
           if (in_flight_batches_.empty()) {
-            if (receiver_failed_.load() || (should_exit_.load() &&
-                (!graceful_exit_.load() || commandQueueSize() == 0))) break;
+            if (receiver_failed_.load() ||
+                (should_exit_.load() &&
+                 (!graceful_exit_.load() ||
+                  (sender_done_.load(std::memory_order_acquire) && commandQueueSize() == 0)))) {
+              break;
+            }
             continue;
           }
           batch = in_flight_batches_.front();
@@ -607,6 +614,8 @@ void *RedisSender::ThreadMain() {
       wsignal_.notify_all();
     }
 
+    sender_done_.store(true, std::memory_order_release);
+    in_flight_cv_.notify_all();
     if (cli_ && (receiver_failed_.load() || (should_exit_.load() && !graceful_exit_.load()))) {
       size_t in_flight_count = 0;
       {

@@ -192,7 +192,9 @@ static int CheckSockAliveness(int fd) {
 
   ret = PollFd(fd, POLLIN | POLLPRI, 0);
   if (0 < ret) {
-    int64_t num = ::recv(fd, buf, 1, MSG_PEEK);
+    // Do not change O_NONBLOCK on the shared socket: the receiver thread may
+    // be reading it concurrently. MSG_DONTWAIT makes only this probe nonblocking.
+    int64_t num = ::recv(fd, buf, 1, MSG_PEEK | MSG_DONTWAIT);
     if (num == 0) {
       return -1;
     }
@@ -208,27 +210,13 @@ static int CheckSockAliveness(int fd) {
 }
 
 int NetCli::CheckAliveness() {
-  int flag;
-  bool block;
   int sock = fd();
 
   if (sock < 0) {
     return -1;
   }
 
-  flag = fcntl(sock, F_GETFL, 0);
-  block = ((flag & O_NONBLOCK) == 0);
-  if (block) {
-    fcntl(sock, F_SETFL, flag | O_NONBLOCK);
-  }
-
-  int ret = CheckSockAliveness(sock);
-
-  if (block) {
-    fcntl(sock, F_SETFL, flag);
-  }
-
-  return ret;
+  return CheckSockAliveness(sock);
 }
 
 Status NetCli::SendRaw(void* buf, size_t count) {

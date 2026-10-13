@@ -193,6 +193,12 @@ ssize_t RedisCli::BufferRead() {
   while (true) {
     last_read_stream_offset_ = stream_bytes_read_ - rbuf_offset_;
     last_read_buffer_offset_ = rbuf_offset_;
+    struct timeval recv_timeout_before = {};
+    socklen_t recv_timeout_before_len = sizeof(recv_timeout_before);
+    const int recv_timeout_before_ret =
+        getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &recv_timeout_before, &recv_timeout_before_len);
+    const int flags_before = fcntl(fd(), F_GETFL, 0);
+    const int configured_recv_timeout_ms = recv_timeout();
     nread = read(fd(), rbuf_ + rbuf_offset_, rbuf_size_ - rbuf_offset_);
 
     if (nread == -1) {
@@ -201,16 +207,31 @@ ssize_t RedisCli::BufferRead() {
         // blocking fd after setting setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,...)
         // will return EAGAIN for timeout
       } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        const int64_t read_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        const int64_t read_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - read_start).count();
         const int read_errno = errno;
         struct timeval timeout = {};
         socklen_t timeout_len = sizeof(timeout);
         const int opt_ret = getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &timeout, &timeout_len);
         const int flags = fcntl(fd(), F_GETFL, 0);
+        LOG(WARNING) << "RedisCli read returned EAGAIN, fd: " << fd()
+                     << ", local: " << SocketEndpoint(fd(), false)
+                     << ", remote: " << SocketEndpoint(fd(), true) << ", buffered bytes: " << rbuf_offset_
+                     << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
+                     << strerror(read_errno) << "), recv timeout before read: "
+                     << (recv_timeout_before_ret == 0
+                             ? recv_timeout_before.tv_sec * 1000 + recv_timeout_before.tv_usec / 1000
+                             : -1)
+                     << " ms (getsockopt: " << recv_timeout_before_ret << "), recv timeout after read: "
+                     << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
+                     << " ms (getsockopt: " << opt_ret << "), configured recv timeout: "
+                     << configured_recv_timeout_ms << " ms, nonblocking before/after: "
+                     << (flags_before >= 0 && (flags_before & O_NONBLOCK)) << "/"
+                     << (flags >= 0 && (flags & O_NONBLOCK)) << ", read elapsed: "
+                     << read_elapsed_us << " us";
         if (flags >= 0 && (flags & O_NONBLOCK)) {
           pollfd pfd = {fd(), POLLIN, 0};
-          const int timeout_ms = recv_timeout();
+          const int timeout_ms = configured_recv_timeout_ms;
           int poll_ret;
           do {
             poll_ret = poll(&pfd, 1, timeout_ms > 0 ? timeout_ms : -1);
@@ -219,17 +240,16 @@ ssize_t RedisCli::BufferRead() {
             continue;
           }
           if (poll_ret == 0) {
+            LOG(WARNING) << "RedisCli poll timed out after EAGAIN, fd: " << fd()
+                         << ", timeout: " << timeout_ms << " ms";
             return REDIS_ETIMEOUT;
           }
+          const int poll_errno = errno;
+          LOG(WARNING) << "RedisCli poll failed after EAGAIN, fd: " << fd() << ", errno: "
+                       << poll_errno << " (" << strerror(poll_errno) << "), revents: " << pfd.revents;
+          errno = poll_errno;
           return REDIS_EREAD;
         }
-        LOG(WARNING) << "RedisCli read timed out, fd: " << fd() << ", local: " << SocketEndpoint(fd(), false)
-                     << ", remote: " << SocketEndpoint(fd(), true) << ", buffered bytes: " << rbuf_offset_
-                     << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
-                     << strerror(read_errno) << "), actual recv timeout: "
-                     << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
-                     << " ms, nonblocking: " << (flags >= 0 && (flags & O_NONBLOCK))
-                     << ", read elapsed: " << read_elapsed_ms << " ms";
         if (opt_ret == 0 && (timeout.tv_sec > 0 || timeout.tv_usec > 0)) {
           return REDIS_ETIMEOUT;
         }

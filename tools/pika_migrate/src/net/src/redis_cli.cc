@@ -259,6 +259,13 @@ ssize_t RedisCli::BufferRead() {
         return REDIS_EREAD;
       }
     } else if (nread == 0) {  // we consider read null an error
+      LOG(WARNING) << "RedisCli peer closed connection (read returned EOF), fd: " << fd()
+                   << ", local: " << SocketEndpoint(fd(), false)
+                   << ", remote: " << SocketEndpoint(fd(), true)
+                   << ", buffered bytes: " << rbuf_offset_ << ", parser position: " << rbuf_pos_
+                   << ", stream bytes read: " << stream_bytes_read_
+                   << ", last read stream offset: " << last_read_stream_offset_
+                   << ", last read buffer offset: " << last_read_buffer_offset_;
       return REDIS_EREAD_NULL;
     }
 

@@ -97,6 +97,11 @@ class RedisSender : public net::Thread {
   std::deque<std::shared_ptr<InFlightBatch>> in_flight_batches_;
   std::unordered_set<std::string> in_flight_keys_;
   std::atomic<bool> receiver_failed_{false};
+  // Read by the sender thread for low-frequency diagnostics while the receiver
+  // is blocked waiting for a reply.
+  std::atomic<uint64_t> receiving_batch_id_{0};
+  std::atomic<size_t> receiving_reply_idx_{0};
+  std::atomic<int64_t> receiving_reply_start_us_{0};
   std::shared_ptr<InFlightBatch> failed_batch_;
   size_t failed_reply_idx_{0};
 };

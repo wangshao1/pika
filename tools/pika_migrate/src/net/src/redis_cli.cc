@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include "glog/logging.h"
 
 #include <atomic>
@@ -76,6 +77,11 @@ class RedisCli : public NetCli {
   int err_;
   uint64_t stream_bytes_read_{0};
   ssize_t last_read_bytes_{0};
+  uint64_t last_read_stream_offset_{0};
+  int32_t last_read_buffer_offset_{0};
+  uint64_t buffer_compactions_{0};
+  int32_t last_compact_from_pos_{0};
+  int32_t last_compact_remaining_{0};
 
   int GetReply();
   int GetReplyFromReader();
@@ -172,6 +178,9 @@ Status RedisCli::Recv(void* trival) {
 ssize_t RedisCli::BufferRead() {
   // memmove the remain chars to rbuf begin
   if (rbuf_pos_ > 0) {
+    ++buffer_compactions_;
+    last_compact_from_pos_ = rbuf_pos_;
+    last_compact_remaining_ = rbuf_offset_;
     if (rbuf_offset_ > 0) {
       memmove(rbuf_, rbuf_ + rbuf_pos_, rbuf_offset_);
     }
@@ -182,6 +191,8 @@ ssize_t RedisCli::BufferRead() {
   const auto read_start = std::chrono::steady_clock::now();
 
   while (true) {
+    last_read_stream_offset_ = stream_bytes_read_ - rbuf_offset_;
+    last_read_buffer_offset_ = rbuf_offset_;
     nread = read(fd(), rbuf_ + rbuf_offset_, rbuf_size_ - rbuf_offset_);
 
     if (nread == -1) {
@@ -446,6 +457,9 @@ int RedisCli::GetReplyFromReader() {
         const unsigned char* bytes = reinterpret_cast<const unsigned char*>(p - 1);
         const size_t available = static_cast<size_t>(rbuf_offset_) + 1;
         const size_t preview_len = available < 16 ? available : 16;
+        const int32_t parser_pos = rbuf_pos_ - 1;
+        const uint64_t type_stream_offset = stream_bytes_read_ - rbuf_offset_ - 1;
+        const uint64_t buffer_stream_offset = stream_bytes_read_ - rbuf_pos_ - rbuf_offset_;
         std::string preview;
         char byte_hex[4];
         char type_hex[3];
@@ -458,13 +472,26 @@ int RedisCli::GetReplyFromReader() {
         LOG(WARNING) << "RedisCli invalid RESP reply type, fd: " << fd()
                      << ", local: " << SocketEndpoint(fd(), false)
                      << ", remote: " << SocketEndpoint(fd(), true)
-                     << ", type byte: 0x" << type_hex << ", buffer pos: " << rbuf_pos_
+                     << ", type byte: 0x" << type_hex << ", parser pos before/after type: "
+                     << parser_pos << "/" << rbuf_pos_ << ", buffer read pos: " << parser_pos
+                     << ", buffer write end: " << (rbuf_pos_ + rbuf_offset_)
+                     << ", buffer capacity: " << rbuf_size_
                      << ", buffered bytes after type: " << rbuf_offset_
-                     << ", stream byte offset: " << (stream_bytes_read_ - rbuf_offset_ - 1)
+                     << ", buffer stream offset: " << buffer_stream_offset
+                     << ", stream byte offset: " << type_stream_offset
                      << ", stream bytes read: " << stream_bytes_read_
+                     << ", last read stream offset: " << last_read_stream_offset_
+                     << ", last read buffer offset: " << last_read_buffer_offset_
                      << ", last read bytes: " << last_read_bytes_
+                     << ", compactions: " << buffer_compactions_
+                     << ", last compact from pos: " << last_compact_from_pos_
+                     << ", last compact remaining bytes: " << last_compact_remaining_
                      << ", preview length: " << preview_len << ", preview hex: " << preview;
       }
+      // Preserve the complete diagnostic above, then stop immediately so the
+      // corrupted parser state cannot consume further replies or obscure the
+      // reproduction evidence.
+      std::abort();
       return REDIS_EPARSE_TYPE;
   }
 

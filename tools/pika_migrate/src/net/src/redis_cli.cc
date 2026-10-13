@@ -6,54 +6,23 @@
 #include "net/include/redis_cli.h"
 
 #include <fcntl.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include "glog/logging.h"
-
 #include <atomic>
-#include <chrono>
-#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "pstd/include/noncopyable.h"
-#include "pstd/include/xdebug.h"
 #include "net/include/net_cli.h"
 #include "net/include/net_define.h"
 
 using pstd::Status;
 
 namespace net {
-
-namespace {
-
-std::string SocketEndpoint(int fd, bool peer) {
-  if (fd < 0) {
-    return "<invalid-fd>";
-  }
-  sockaddr_in addr = {};
-  socklen_t addr_len = sizeof(addr);
-  const int result = peer
-                         ? getpeername(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len)
-                         : getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len);
-  if (result != 0 || addr.sin_family != AF_INET) {
-    return "<unavailable>";
-  }
-  char ip[INET_ADDRSTRLEN] = {};
-  if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == nullptr) {
-    return "<unavailable>";
-  }
-  return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
-}
-
-}  // namespace
 
 class RedisCli : public NetCli {
  public:
@@ -75,15 +44,6 @@ class RedisCli : public NetCli {
   int32_t rbuf_offset_{0};
   int elements_;  // the elements number of this current reply
   int err_;
-  uint64_t stream_bytes_read_{0};
-  ssize_t last_read_bytes_{0};
-  uint64_t last_read_stream_offset_{0};
-  int32_t last_read_buffer_offset_{0};
-  uint64_t buffer_compactions_{0};
-  int32_t last_compact_from_pos_{0};
-  int32_t last_compact_remaining_{0};
-  uint64_t recv_calls_{0};
-
   int GetReply();
   int GetReplyFromReader();
 
@@ -155,69 +115,30 @@ Status RedisCli::Send(void* msg) {
 
 // The result is useless
 Status RedisCli::Recv(void* trival) {
-  const uint64_t recv_call = ++recv_calls_;
-  const auto recv_start = std::chrono::steady_clock::now();
-  // Recv is called for every Redis reply; sample entry logs to avoid flooding
-  // the migration log while still identifying long-running connections.
-  if (recv_call == 1 || recv_call % 10000 == 0) {
-    LOG(INFO) << "RedisCli Recv started, fd: " << fd()
-              << ", local: " << SocketEndpoint(fd(), false)
-              << ", remote: " << SocketEndpoint(fd(), true)
-              << ", call: " << recv_call << ", buffered bytes: " << rbuf_offset_
-              << ", parser position: " << rbuf_pos_;
-  }
-
   argv_.clear();
   int result = GetReply();
-  const int recv_errno = errno;
-  const int64_t recv_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                      std::chrono::steady_clock::now() - recv_start)
-                                      .count();
-  Status status;
   switch (result) {
     case REDIS_OK:
       if (trival) {
         *static_cast<RedisCmdArgsType*>(trival) = argv_;
       }
-      status = Status::OK();
-      break;
+      return Status::OK();
     case REDIS_ETIMEOUT:
-      status = Status::Timeout("");
-      break;
+      return Status::Timeout("");
     case REDIS_EREAD_NULL:
-      status = Status::IOError("Read null");
-      break;
+      return Status::IOError("Read null");
     case REDIS_EREAD:
-      status = Status::IOError("read failed caz " + std::string(strerror(recv_errno)));
-      break;
+      return Status::IOError("read failed caz " + std::string(strerror(errno)));
     case REDIS_EPARSE_TYPE:
-      status = Status::IOError("invalid type");
-      break;
+      return Status::IOError("invalid type");
     default:  // other error
-      status = Status::IOError("other error, maybe " + std::string(strerror(recv_errno)));
-      break;
+      return Status::IOError("other error, maybe " + std::string(strerror(errno)));
   }
-
-  if (!status.ok() || recv_elapsed_ms >= 1000) {
-    LOG(WARNING) << "RedisCli Recv finished, fd: " << fd()
-                 << ", local: " << SocketEndpoint(fd(), false)
-                 << ", remote: " << SocketEndpoint(fd(), true)
-                 << ", call: " << recv_call << ", result: " << result
-                 << ", elapsed: " << recv_elapsed_ms << " ms"
-                 << ", errno: " << recv_errno << " (" << strerror(recv_errno) << ")"
-                 << ", reply args: " << argv_.size() << ", buffered bytes: " << rbuf_offset_
-                 << ", parser position: " << rbuf_pos_
-                 << ", stream bytes read: " << stream_bytes_read_;
-  }
-  return status;
 }
 
 ssize_t RedisCli::BufferRead() {
   // memmove the remain chars to rbuf begin
   if (rbuf_pos_ > 0) {
-    ++buffer_compactions_;
-    last_compact_from_pos_ = rbuf_pos_;
-    last_compact_remaining_ = rbuf_offset_;
     if (rbuf_offset_ > 0) {
       memmove(rbuf_, rbuf_ + rbuf_pos_, rbuf_offset_);
     }
@@ -225,16 +146,7 @@ ssize_t RedisCli::BufferRead() {
   }
 
   ssize_t nread;
-  const auto read_start = std::chrono::steady_clock::now();
-
   while (true) {
-    last_read_stream_offset_ = stream_bytes_read_ - rbuf_offset_;
-    last_read_buffer_offset_ = rbuf_offset_;
-    struct timeval recv_timeout_before = {};
-    socklen_t recv_timeout_before_len = sizeof(recv_timeout_before);
-    const int recv_timeout_before_ret =
-        getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &recv_timeout_before, &recv_timeout_before_len);
-    const int flags_before = fcntl(fd(), F_GETFL, 0);
     const int configured_recv_timeout_ms = recv_timeout();
     nread = read(fd(), rbuf_ + rbuf_offset_, rbuf_size_ - rbuf_offset_);
 
@@ -244,28 +156,11 @@ ssize_t RedisCli::BufferRead() {
         // blocking fd after setting setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,...)
         // will return EAGAIN for timeout
       } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        const int64_t read_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - read_start).count();
         const int read_errno = errno;
         struct timeval timeout = {};
         socklen_t timeout_len = sizeof(timeout);
         const int opt_ret = getsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &timeout, &timeout_len);
         const int flags = fcntl(fd(), F_GETFL, 0);
-        LOG(WARNING) << "RedisCli read returned EAGAIN, fd: " << fd()
-                     << ", local: " << SocketEndpoint(fd(), false)
-                     << ", remote: " << SocketEndpoint(fd(), true) << ", buffered bytes: " << rbuf_offset_
-                     << ", parser position: " << rbuf_pos_ << ", errno: " << read_errno << " ("
-                     << strerror(read_errno) << "), recv timeout before read: "
-                     << (recv_timeout_before_ret == 0
-                             ? recv_timeout_before.tv_sec * 1000 + recv_timeout_before.tv_usec / 1000
-                             : -1)
-                     << " ms (getsockopt: " << recv_timeout_before_ret << "), recv timeout after read: "
-                     << (opt_ret == 0 ? timeout.tv_sec * 1000 + timeout.tv_usec / 1000 : -1)
-                     << " ms (getsockopt: " << opt_ret << "), configured recv timeout: "
-                     << configured_recv_timeout_ms << " ms, nonblocking before/after: "
-                     << (flags_before >= 0 && (flags_before & O_NONBLOCK)) << "/"
-                     << (flags >= 0 && (flags & O_NONBLOCK)) << ", read elapsed: "
-                     << read_elapsed_us << " us";
         if (flags >= 0 && (flags & O_NONBLOCK)) {
           pollfd pfd = {fd(), POLLIN, 0};
           const int timeout_ms = configured_recv_timeout_ms;
@@ -277,13 +172,9 @@ ssize_t RedisCli::BufferRead() {
             continue;
           }
           if (poll_ret == 0) {
-            LOG(WARNING) << "RedisCli poll timed out after EAGAIN, fd: " << fd()
-                         << ", timeout: " << timeout_ms << " ms";
             return REDIS_ETIMEOUT;
           }
           const int poll_errno = errno;
-          LOG(WARNING) << "RedisCli poll failed after EAGAIN, fd: " << fd() << ", errno: "
-                       << poll_errno << " (" << strerror(poll_errno) << "), revents: " << pfd.revents;
           errno = poll_errno;
           return REDIS_EREAD;
         }
@@ -296,19 +187,10 @@ ssize_t RedisCli::BufferRead() {
         return REDIS_EREAD;
       }
     } else if (nread == 0) {  // we consider read null an error
-      LOG(WARNING) << "RedisCli peer closed connection (read returned EOF), fd: " << fd()
-                   << ", local: " << SocketEndpoint(fd(), false)
-                   << ", remote: " << SocketEndpoint(fd(), true)
-                   << ", buffered bytes: " << rbuf_offset_ << ", parser position: " << rbuf_pos_
-                   << ", stream bytes read: " << stream_bytes_read_
-                   << ", last read stream offset: " << last_read_stream_offset_
-                   << ", last read buffer offset: " << last_read_buffer_offset_;
       return REDIS_EREAD_NULL;
     }
 
     rbuf_offset_ += static_cast<int32_t>(nread);
-    last_read_bytes_ = nread;
-    stream_bytes_read_ += static_cast<uint64_t>(nread);
     return nread;
   }
 }
@@ -515,47 +397,6 @@ int RedisCli::GetReplyFromReader() {
       type = REDIS_REPLY_ARRAY;
       break;
     default:
-      // Keep the diagnostic bounded: reply payloads can contain migrated
-      // values, so log only a short hex prefix rather than raw response data.
-      {
-        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(p - 1);
-        const size_t available = static_cast<size_t>(rbuf_offset_) + 1;
-        const size_t preview_len = available < 16 ? available : 16;
-        const int32_t parser_pos = rbuf_pos_ - 1;
-        const uint64_t type_stream_offset = stream_bytes_read_ - rbuf_offset_ - 1;
-        const uint64_t buffer_stream_offset = stream_bytes_read_ - rbuf_pos_ - rbuf_offset_;
-        std::string preview;
-        char byte_hex[4];
-        char type_hex[3];
-        std::snprintf(type_hex, sizeof(type_hex), "%02x", bytes[0]);
-        for (size_t i = 0; i < preview_len; ++i) {
-          std::snprintf(byte_hex, sizeof(byte_hex), "%02x", bytes[i]);
-          if (!preview.empty()) preview.append(" ");
-          preview.append(byte_hex);
-        }
-        LOG(WARNING) << "RedisCli invalid RESP reply type, fd: " << fd()
-                     << ", local: " << SocketEndpoint(fd(), false)
-                     << ", remote: " << SocketEndpoint(fd(), true)
-                     << ", type byte: 0x" << type_hex << ", parser pos before/after type: "
-                     << parser_pos << "/" << rbuf_pos_ << ", buffer read pos: " << parser_pos
-                     << ", buffer write end: " << (rbuf_pos_ + rbuf_offset_)
-                     << ", buffer capacity: " << rbuf_size_
-                     << ", buffered bytes after type: " << rbuf_offset_
-                     << ", buffer stream offset: " << buffer_stream_offset
-                     << ", stream byte offset: " << type_stream_offset
-                     << ", stream bytes read: " << stream_bytes_read_
-                     << ", last read stream offset: " << last_read_stream_offset_
-                     << ", last read buffer offset: " << last_read_buffer_offset_
-                     << ", last read bytes: " << last_read_bytes_
-                     << ", compactions: " << buffer_compactions_
-                     << ", last compact from pos: " << last_compact_from_pos_
-                     << ", last compact remaining bytes: " << last_compact_remaining_
-                     << ", preview length: " << preview_len << ", preview hex: " << preview;
-      }
-      // Preserve the complete diagnostic above, then stop immediately so the
-      // corrupted parser state cannot consume further replies or obscure the
-      // reproduction evidence.
-      std::abort();
       return REDIS_EPARSE_TYPE;
   }
 
